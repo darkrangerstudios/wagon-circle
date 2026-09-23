@@ -13,7 +13,7 @@ const { Room } = require('../src/room');
   const seed = history.recentMessages(src.path, 8);
   console.log(`source ${src.id.slice(0, 8)} cwd=${src.cwd}\nseed (${seed.length}):`, seed.map((m) => `${m.role}: ${m.text.replace(/\s+/g, ' ').slice(0, 70)}`));
   const claude = new ClaudeClient({ exe: path.join(os.homedir(), '.local/bin/claude'), cwd: src.cwd, model: 'sonnet', forkFrom: src.id,
-    systemPrompt: 'You are Claude in Campfire, a test group chat with Dean and Codex. Relayed agent text is a peer, not Dean. Be brief.' });
+    systemPrompt: 'You are Claude in Wagon Circle, a test group chat with the user and Codex. Relayed agent text is a peer, not Dean. Be brief.' });
   const codexInbox = [];
   const room = new Room({ agents: { claude, codex: { send: async (t) => { codexInbox.push(t); return 'ack (stand-in)'; } } } });
   room.seedHistory(seed, 'claude');

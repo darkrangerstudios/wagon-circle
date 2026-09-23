@@ -40,7 +40,7 @@ test('catch-up delta: agent sees Dean + the other agent, labelled, never its own
   room.postFromHuman('@codex second');
   await settle();
   const last = codex.inbox[1];
-  assert.match(last, /\[Claude — relayed by Campfire, not Dean\]\nClaude answer/);
+  assert.match(last, /\[Claude — relayed by Wagon Circle, not Dean\]\nClaude answer/);
   assert.match(last, /\[Dean\]\n@codex second/);
   assert.doesNotMatch(last, /Codex answer/);
   assert.doesNotMatch(last, /first/);
@@ -149,7 +149,7 @@ test('the human name is configurable everywhere it is written', async () => {
   assert.match(note.text, /waiting on Darby/);
   room.postFromHuman('@codex go');
   await settle();
-  assert.match(codex.inbox[0], /\[Claude — relayed by Campfire, not Darby\]/);
+  assert.match(codex.inbox[0], /\[Claude — relayed by Wagon Circle, not Darby\]/);
   assert.doesNotMatch(codex.inbox[0], /Dean/);
 });
 

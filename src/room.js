@@ -3,7 +3,7 @@
 const { EventEmitter } = require('events');
 
 const AGENTS = ['claude', 'codex'];
-const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Campfire' };
+const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
 
 // @claude, @codex, @both / @all. Ignores e-mail-like text (x@codex.com) by requiring a non-word char before '@'.
 function mentions(text) {
@@ -18,8 +18,8 @@ function mentions(text) {
 function label(entry, human) {
   if (entry.kind === 'history') return `[${entry.from === 'human' ? 'User' : LABEL[entry.from]} — earlier in the forked ${entry.source || 'Codex'} conversation]`;
   if (entry.from === 'human') return `[${human}]`;
-  if (entry.from === 'system') return '[Campfire notice]';
-  return `[${LABEL[entry.from]} — relayed by Campfire, not ${human}]`;
+  if (entry.from === 'system') return '[Wagon Circle notice]';
+  return `[${LABEL[entry.from]} — relayed by Wagon Circle, not ${human}]`;
 }
 
 class Room extends EventEmitter {
@@ -29,7 +29,6 @@ class Room extends EventEmitter {
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: false, codex: false };
     this.hopsLeft = hopCap; this.capNoted = false; this.halted = false;
-    for (const e of this.state.transcript) if (e.from === 'dean') e.from = 'human'; // rooms saved before 0.1.1
   }
 
   _append(from, text, extra = {}) {

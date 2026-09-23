@@ -1,11 +1,11 @@
 {
-  "name": "campfire",
-  "displayName": "Campfire",
-  "description": "One room for you, Claude and Codex. Both agents run as private stdio child processes: no daemon, no network ports.",
-  "version": "0.1.2",
+  "name": "wagon-circle",
+  "displayName": "Wagon Circle",
+  "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
+  "version": "0.2.0",
   "publisher": "darkrangerstudios",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -14,49 +14,49 @@
   "contributes": {
     "commands": [
       {
-        "command": "campfire.newRoom",
-        "title": "Campfire: New Room"
+        "command": "wagonCircle.newRoom",
+        "title": "Wagon Circle: New Room"
       },
       {
-        "command": "campfire.joinExisting",
-        "title": "Campfire: Join Existing Conversations (fork)"
+        "command": "wagonCircle.joinExisting",
+        "title": "Wagon Circle: Join Existing Conversations (fork)"
       },
       {
-        "command": "campfire.openRoom",
-        "title": "Campfire: Reopen a Room"
+        "command": "wagonCircle.openRoom",
+        "title": "Wagon Circle: Reopen a Room"
       }
     ],
     "configuration": {
-      "title": "Campfire",
+      "title": "Wagon Circle",
       "properties": {
-        "campfire.userName": {
+        "wagonCircle.userName": {
           "type": "string",
           "default": "",
           "description": "Your name as the agents see it and as the room labels your messages. Empty = first name from git config user.name, else your login name."
         },
-        "campfire.claudeModel": {
+        "wagonCircle.claudeModel": {
           "type": "string",
           "default": "sonnet",
           "description": "Model alias or id passed to claude --model."
         },
-        "campfire.claudePath": {
+        "wagonCircle.claudePath": {
           "type": "string",
           "default": "",
           "description": "Path to the claude CLI. Empty = ~/.local/bin/claude, then PATH."
         },
-        "campfire.codexPath": {
+        "wagonCircle.codexPath": {
           "type": "string",
           "default": "",
           "description": "Path to the codex CLI. Empty = ~/.local/bin/codex, then the standalone install, then PATH."
         },
-        "campfire.hopCap": {
+        "wagonCircle.hopCap": {
           "type": "number",
           "default": 4,
           "minimum": 0,
           "maximum": 20,
           "description": "Max agent-to-agent hand-offs per message you send."
         },
-        "campfire.cwd": {
+        "wagonCircle.cwd": {
           "type": "string",
           "default": "",
           "description": "Working folder both agents may read. Empty = first workspace folder."
@@ -66,5 +66,11 @@
   },
   "scripts": {
     "test": "node --test test/room.test.js"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/darkrangerstudios/wagon-circle"
+  },
+  "homepage": "https://darkrangerstudios.github.io/wagon-circle/",
+  "author": "Dean Buttry"
 }

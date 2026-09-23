@@ -1,9 +1,9 @@
-// Campfire webview. Agent output is untrusted: everything renders through textContent, never innerHTML.
+// Wagon Circle webview. Agent output is untrusted: everything renders through textContent, never innerHTML.
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('input');
-  const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Campfire' };
+  const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
   const drafts = {}; let busy = {}; let cost = 0; let usage = null;
   const act = {}; const since = {}; let ticker = null;
 
@@ -80,7 +80,7 @@
         const pill = el('span', `pill${w.usedPercent >= 100 ? ' full' : w.usedPercent >= 80 ? ' warn' : ''}`, `Codex ${span(w, k)} ${Math.round(w.usedPercent)}%`);
         pill.title = `resets ${when(w.resetsAt)}`; box.appendChild(pill);
       }
-      if (q.resetCredits != null) { const p = el('span', 'pill dim', `${q.resetCredits} reset credit${q.resetCredits === 1 ? '' : 's'} (Campfire never spends them)`); box.appendChild(p); }
+      if (q.resetCredits != null) { const p = el('span', 'pill dim', `${q.resetCredits} reset credit${q.resetCredits === 1 ? '' : 's'} (Wagon Circle never spends them)`); box.appendChild(p); }
     }
     const c = el('span', 'pill dim'); c.id = 'cost'; box.appendChild(c); renderWho();
   }

@@ -1,6 +1,6 @@
 'use strict';
 // A/B: does a persistent session + deltas avoid re-sending context every turn?
-// A = Campfire: one long-lived `claude -p` stream-json session, each turn sends only the new message.
+// A = Wagon Circle: one long-lived `claude -p` stream-json session, each turn sends only the new message.
 // B = naive: a fresh `claude -p` process per turn with the whole transcript pasted in.
 // Usage: node test/token-ab.js <scratchCwd>
 const os = require('os'), path = require('path');
@@ -45,7 +45,7 @@ function runB() {
 (async () => {
   const a = await runA();
   const b = runB();
-  for (const [name, rows] of [['A  Campfire (persistent session, deltas)', a], ['B  naive (new process, full transcript)', b]]) {
+  for (const [name, rows] of [['A  Wagon Circle (persistent session, deltas)', a], ['B  naive (new process, full transcript)', b]]) {
     console.log(`\n${name}`);
     rows.forEach((r, i) => console.log(`  turn ${i + 1}: sent ${String(r.sent).padStart(4)} chars | ${fmt(r.u)} | "${r.reply.slice(0, 40)}"`));
     const fresh = rows.reduce((s, r) => s + r.u.input + r.u.cacheWrite, 0), read = rows.reduce((s, r) => s + r.u.cacheRead, 0);
