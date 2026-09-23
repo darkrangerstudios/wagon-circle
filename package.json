@@ -2,7 +2,7 @@
   "name": "wagon-circle",
   "displayName": "Wagon Circle",
   "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -36,13 +36,13 @@
         },
         "wagonCircle.claudeModel": {
           "type": "string",
-          "default": "sonnet",
+          "default": "claude-sonnet-5",
           "description": "Model alias or id passed to claude --model."
         },
         "wagonCircle.claudePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the claude CLI. Empty = ~/.local/bin/claude, then PATH."
+          "description": "Path to the claude CLI. Empty = the newest one found (the VS Code Claude extension's bundled CLI or ~/.local/bin/claude)."
         },
         "wagonCircle.codexPath": {
           "type": "string",
@@ -51,7 +51,7 @@
         },
         "wagonCircle.hopCap": {
           "type": "number",
-          "default": 4,
+          "default": 2,
           "minimum": 0,
           "maximum": 20,
           "description": "Max agent-to-agent hand-offs per message you send."
@@ -60,6 +60,30 @@
           "type": "string",
           "default": "",
           "description": "Working folder both agents may read. Empty = first workspace folder."
+        },
+        "wagonCircle.defaultTarget": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "both"
+          ],
+          "default": "claude",
+          "description": "Who answers a message with no @mention. Change per room with /default."
+        },
+        "wagonCircle.bothMode": {
+          "type": "string",
+          "enum": [
+            "sequential",
+            "parallel"
+          ],
+          "default": "sequential",
+          "description": "How @both works: sequential = take turns, the second sees the first answer; parallel = answer at once. Change per room with /both."
+        },
+        "wagonCircle.ideContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach what you are looking at in VS Code (active file, selection or visible lines, open tabs, problems) to each message. Toggle per room with the \ud83d\udccd chip."
         }
       }
     }

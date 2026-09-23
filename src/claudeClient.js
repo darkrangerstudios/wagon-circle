@@ -18,8 +18,8 @@ function describeTool(name, input = {}) {
 }
 
 class ClaudeClient {
-  constructor({ exe, cwd, model, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], log = () => {} }) {
-    Object.assign(this, { exe, cwd, model, systemPrompt, sessionId, forkFrom, addDirs, log });
+  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], log = () => {}, onNotice = () => {} }) {
+    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, log, onNotice });
     this.proc = null; this.waiter = null; this.totalCostUsd = 0;
   }
 
@@ -28,6 +28,8 @@ class ClaudeClient {
       '--include-partial-messages', '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.join(','),
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--append-system-prompt', this.systemPrompt];
     if (this.model) a.push('--model', this.model);
+    if (this.effort) a.push('--effort', this.effort);
+    if (this.fast) a.push('--settings', JSON.stringify({ fastMode: true })); // Opus fast mode; billed to usage credits
     for (const d of this.addDirs) a.push('--add-dir', d); // lets Read open attachments stored outside cwd
     if (this.sessionId) a.push('--resume', this.sessionId);
     else if (this.forkFrom) a.push('--resume', this.forkFrom, '--fork-session');
@@ -38,14 +40,16 @@ class ClaudeClient {
     const proc = spawn(this.exe, this._args(), { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc = proc;
     proc.stderr.on('data', (d) => this.log(`claude stderr: ${String(d).slice(0, 400)}`));
-    proc.on('error', (e) => this._settle(e));
-    proc.on('exit', (code, sig) => { if (this.proc === proc) this.proc = null; this._settle(new Error(`claude exited (${code ?? sig})`)); });
-    readline.createInterface({ input: proc.stdout }).on('line', (line) => this._onLine(line));
+    // Events from a process we already replaced (model/effort switch) must not touch the new one's reply.
+    proc.on('error', (e) => { if (this.proc === proc) this._settle(e); });
+    proc.on('exit', (code, sig) => { if (this.proc !== proc) return; this.proc = null; this._settle(new Error(`claude exited (${code ?? sig})`)); });
+    readline.createInterface({ input: proc.stdout }).on('line', (line) => { if (this.proc === proc) this._onLine(line); });
   }
 
   _settle(err, text) {
     const w = this.waiter; if (!w) return;
     this.waiter = null;
+    if (this.restartPending) { this.restartPending = false; this.stop(); }
     if (err) w.reject(err); else w.resolve(text);
   }
 
@@ -53,6 +57,7 @@ class ClaudeClient {
     let m;
     try { m = JSON.parse(line); } catch { return; }
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; }
+    if (m.type === 'system' && m.subtype === 'notification' && m.text) this.onNotice(m.text); // e.g. fast mode out of credits
     const w = this.waiter; if (!w) return;
     const ev = m.type === 'stream_event' ? m.event : null;
     if (ev && ev.type === 'content_block_start' && ev.content_block) {
@@ -86,6 +91,16 @@ class ClaudeClient {
       this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: toClaudeContent(text, attachments) } }) + '\n');
     });
   }
+
+  // Model and effort are launch flags: restart on the same session (now, or after the current reply).
+  setOptions({ model, effort, fast }) {
+    if (model !== undefined) this.model = model;
+    if (effort !== undefined) this.effort = effort;
+    if (fast !== undefined) this.fast = fast;
+    if (this.waiter) this.restartPending = true; else this.stop();
+  }
+
+  compact() { return this.send('/compact'); }
 
   // Claude has no mid-turn cancel over stdio; stopping kills the process and the next send resumes the session.
   interrupt() { if (this.proc) { this.proc.kill(); } }

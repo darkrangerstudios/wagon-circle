@@ -19,22 +19,43 @@ test('mentions: names, both/all, ignores emails', () => {
   assert.deepStrictEqual(mentions('no mention'), []);
 });
 
-test('no mention goes to last targets (initially both)', async () => {
+test('no mention goes to the default agent, not both', async () => {
   const claude = fake('hi'), codex = fake('yo');
   const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
-  assert.deepStrictEqual(room.postFromHuman('hello'), ['claude', 'codex']);
+  assert.deepStrictEqual(room.postFromHuman('hello'), ['claude']);
   await settle();
-  room.postFromHuman('@claude just you');
+  room.postFromHuman('@codex just you');
   await settle();
-  room.postFromHuman('and again');
+  room.postFromHuman('and again'); // back to the default, not sticky
   await settle();
-  assert.strictEqual(claude.inbox.length, 3);
+  assert.strictEqual(claude.inbox.length, 2);
   assert.strictEqual(codex.inbox.length, 1);
+  const both = new Room({ humanName: 'Dean', agents: { claude: fake('a'), codex: fake('b') }, defaultTarget: 'both' });
+  assert.deepStrictEqual(both.postFromHuman('hi'), ['claude', 'codex']);
+});
+
+test('@both takes turns: the second agent sees the first answer, in mention order', async () => {
+  const claude = fake('Claude says use a lock'), codex = fake('Agreed');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@codex then @claude: how do we stop duplicate work?');
+  await settle();
+  assert.strictEqual(codex.inbox.length, 1);
+  assert.doesNotMatch(codex.inbox[0], /use a lock/);
+  assert.match(claude.inbox[0], /\[Codex — relayed by Wagon Circle, not Dean\]\nAgreed/); // Codex went first
+});
+
+test('parallel mode answers independently', async () => {
+  const claude = fake('A'), codex = fake('B');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
+  room.postFromHuman('@both go');
+  await settle();
+  assert.doesNotMatch(claude.inbox[0], /relayed/);
+  assert.doesNotMatch(codex.inbox[0], /relayed/);
 });
 
 test('catch-up delta: agent sees Dean + the other agent, labelled, never its own words', async () => {
   const claude = fake('Claude answer'), codex = fake('Codex answer');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
   room.postFromHuman('@both first');
   await settle();
   room.postFromHuman('@codex second');
@@ -164,4 +185,51 @@ test('activity passes through and tool steps are kept on the finished message', 
   const msg = room.state.transcript.find((e) => e.from === 'claude');
   assert.deepStrictEqual(msg.steps, ['reading room.js']);
   assert.ok(typeof statuses[0].since === 'number');
+});
+
+test('IDE context rides with the message to every agent that reads it', async () => {
+  const claude = fake('ok'), codex = fake('ok');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@claude why is this slow?', [], { summary: 'room.js · L40–52 selected', text: 'Active file: src/room.js\nSelected lines 40-52' });
+  await settle();
+  assert.match(claude.inbox[0], /\(IDE context from Dean's editor\)\nActive file: src\/room\.js/);
+  room.postFromHuman('@codex thoughts?');
+  await settle();
+  assert.match(codex.inbox[0], /Selected lines 40-52/); // catch-up carries it too
+});
+
+test('runaway from the 2026-09-23 transcript: talking ABOUT mentions must not hand off', async () => {
+  // Both agents discuss the tags in backticks and quotes, as they did in Dean's live test.
+  const claude = fake('So the `@both` tag seems to persist. Codex said "@claude should confirm" earlier.');
+  const codex = fake('That supports `@both` carrying forward.\n```\n@claude\n```');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@both interesting, does it fire to both again?');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.strictEqual(claude.inbox.length, 1);
+  assert.strictEqual(codex.inbox.length, 1);
+});
+
+test('agents cannot use @both, and each agent gets at most 2 turns per human message', async () => {
+  const claude = fake('@codex your turn @both'), codex = fake('@claude back to you');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, hopCap: 10 });
+  room.postFromHuman('@claude start');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.strictEqual(claude.inbox.length, 2); // its answer + one reply to a hand-off
+  assert.strictEqual(codex.inbox.length, 2);  // never more than 2, however high the hop cap
+  assert.ok(room.state.transcript.some((e) => e.from === 'system' && /2 turns/.test(e.text)));
+});
+
+test('default hop cap of 2 keeps a normal exchange short', async () => {
+  const claude = fake('@codex your turn'), codex = fake('@claude back to you');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, hopCap: 2 });
+  room.postFromHuman('@claude start');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.strictEqual(claude.inbox.length + codex.inbox.length, 3); // answer, hand-off, hand-back; then waits on Dean
+});
+
+test('handoffs ignores code, quotes and @both', () => {
+  const { handoffs } = require('../src/room');
+  assert.deepStrictEqual(handoffs('Can you check this, @codex?', 'claude'), ['codex']);
+  assert.deepStrictEqual(handoffs('the `@codex` tag and "@codex" and @both', 'claude'), []);
+  assert.deepStrictEqual(handoffs('```\n@codex\n```', 'claude'), []);
 });

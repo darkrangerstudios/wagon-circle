@@ -2,7 +2,7 @@
 
 > Circle the wagons: one room for you, Claude and Codex, with nothing exposed.
 
-**Prototype 0.3.0.** Site: https://darkrangerstudios.github.io/wagon-circle/
+**Prototype 0.4.0.** Site: https://darkrangerstudios.github.io/wagon-circle/
 
 One VS Code room where you, Claude and Codex talk in a single timeline.
 
@@ -15,6 +15,11 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 - **Joining existing conversations** works on both sides, and each side is optional. A Codex thread is forked (`thread/fork`) and a Claude session is forked (`--resume <id> --fork-session`), so each agent keeps its own full memory and the originals are never written to. Each side's last 8 exchanges are read from disk, with no model call, and given to the *other* agent as labelled history: `thread/turns/list` for Codex, `~/.claude/projects/**/<session>.jsonl` for Claude, keeping only text you typed and text Claude said. Forking a Claude session sets the room's working folder to that session's folder, because `--resume` only finds sessions there.
 - **Attachments.** Paste a screenshot, drag files in (hold Shift while dropping onto a VS Code panel), or use 📎. Files are copied into the room's own folder. Images reach Claude as image blocks and Codex as local image inputs. Text files (`.md`, code, JSON, CSV…) up to 200 KB are inlined; larger files and PDFs are passed as a path the agent opens with its read-only tools (Claude gets `--add-dir` for the attachment folder). An agent that missed a message gets its files in its next catch-up. Limits: 5 MB per image, 25 MB per file.
 - **Reopening** resumes the room's own Codex fork and Claude session.
+- **Routing that doesn't run away.** An untagged message goes to your default agent (`/default`), never to "whoever spoke last". `@both` takes turns in mention order (`/both parallel` to answer at once). An agent wakes the other only with an explicit `@name` in plain prose: mentions inside code or quotes don't count, and agents can't use `@both`. Each agent gets at most 2 replies per message from you, and hand-offs are capped (default 2). The agents are told these rules, so they don't speculate about routing.
+- **Model, effort and fast mode per vendor.** Composer chips open pickers with the models this machine can actually run. Claude: Opus 5.5, Sonnet 5, Fable 5.1, Haiku 4.5, gated by the Claude Code version; changes restart Claude on the same session, so it keeps its memory. Codex: the live `model/list`, with each model's own effort levels. Fast mode: Claude's Opus fast mode (`--settings {"fastMode":true}`, billed to usage credits) and Codex's priority tier. The same controls are slash commands, grouped by platform, with autocomplete (`/` and `@`).
+- **Newest Claude CLI automatically.** Wagon Circle uses the newest Claude Code it finds, including the one bundled with the VS Code Claude extension, because older CLIs refuse newer models.
+- **IDE context.** Your active file, selection (or visible lines), open tabs and Problems ride along with each message. The 📍 chip shows what will be sent; click it to turn it off.
+- **Diffs.** Unified diffs in replies, and Codex's per-turn diff, render as file cards with +/− counts. **Open in diff editor** applies the patch in memory and shows it in VS Code's diff view; nothing is written to disk.
 - **Live status.** Each agent shows what it is doing right now, with a timer: waiting, thinking (with its thinking text, collapsible), each tool step such as "reading room.js" or "running rg …", then writing. Finished replies keep a collapsed list of their steps.
 
 ## Safety defaults
@@ -30,9 +35,10 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 Then, from the Command Palette, run **Wagon Circle: New Room**, **Wagon Circle: Join Existing Conversations (fork)** or **Wagon Circle: Reopen a Room**. Logs appear in Output → Wagon Circle.
 
 ## Tests
-- `npm test` runs the router unit tests with fake agents (13 router, 2 Codex activity replay and 4 attachment tests).
+- `npm test` runs the router unit tests with fake agents (34 tests: router, hand-off and turn limits, commands, diffs, IDE context, attachments, Codex activity replay).
 - `node test/live-claude-fork.js <claudeSessionId>` forks a saved Claude session into a room with a recording stand-in for Codex. It makes one small Claude turn and no Codex turn.
 - `node test/token-ab.js <scratchCwd>` compares a persistent session sending deltas against a fresh process with the full transcript every turn. Measured 2026-09-23 over 4 turns on Sonnet: 4,801 vs 19,102 fresh tokens, $0.036 vs $0.086. Cache lifetime matches normal sessions because these are the same CLIs: Claude Code writes Anthropic's 1-hour tier (logged as `ephemeral_1h`), and Codex on GPT-5.6-or-later models keeps prefixes 30 minutes after last use.
+- `node test/live-three-way.js <repoCwd> <imagePath>` runs real Claude and real Codex in one room: `@both` turn-taking, an image to Codex, and Codex's token and cache usage.
 - `node test/live-smoke.js <codexThreadId> <scratchCwd>` runs a real private Codex server and a real Claude session. It forks the given thread and makes one small Claude turn plus one Codex turn, so it spends a little quota.
 
 ## Customization

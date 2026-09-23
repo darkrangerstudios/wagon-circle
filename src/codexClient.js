@@ -127,19 +127,27 @@ class CodexClient extends EventEmitter {
     return out;
   }
 
+  async listModels() {
+    try { const r = await this.request('model/list', { limit: 50 }, 20000); return (r.data || []).filter((m) => !m.hidden); } catch (e) { this.log(`model/list: ${e.message}`); return []; }
+  }
+
+  compact(threadId) { return this.request('thread/compact/start', { threadId }, 600000); }
+
   async rateLimits() {
     try { return await this.request('account/rateLimits/read', {}, 20000); } catch (e) { this.log(`rateLimits: ${e.message}`); return null; }
   }
 
   // Run one turn; resolves with the agent's text. onDelta streams partial text.
-  runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}, attachments = []) {
+  runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}, attachments = [], opts = {}) {
     return new Promise((resolve, reject) => {
       let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map();
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
       const onNote = (method, p) => {
         if (p.threadId && p.threadId !== threadId) return;
         if (turnId && p.turnId && p.turnId !== turnId) return;
-        if (method === 'item/started') {
+        if (method === 'turn/diff/updated' && p.diff) {
+          onActivity({ phase: 'diff', diff: p.diff });
+        } else if (method === 'item/started') {
           const a = describeItem(p.item); if (a) onActivity(a);
         } else if (method === 'item/reasoning/summaryTextDelta') {
           thinking.set(p.itemId, (thinking.get(p.itemId) || '') + p.delta);
@@ -161,7 +169,7 @@ class CodexClient extends EventEmitter {
       const onExit = (err) => { cleanup(); reject(err); };
       const cleanup = () => { this.off('notification', onNote); this.off('exit', onExit); };
       this.on('notification', onNote); this.once('exit', onExit);
-      this.request('turn/start', { threadId, input: toCodexInput(text, attachments) })
+      this.request('turn/start', { threadId, input: toCodexInput(text, attachments), ...(opts.model ? { model: opts.model } : {}), ...(opts.effort ? { effort: opts.effort } : {}), ...(opts.fast ? { serviceTierForTurn: 'priority' } : {}) })
         .then((r) => { turnId = r && r.turn && r.turn.id; this.currentTurn = { threadId, turnId }; })
         .catch((e) => { cleanup(); reject(e); });
     });
