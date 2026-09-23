@@ -1,6 +1,17 @@
 // Wagon Circle webview. Agent output is untrusted: everything renders through textContent, never innerHTML.
 (function () {
   const vscode = acquireVsCodeApi();
+  // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
+  // If the page was built by a different version, say so instead of rendering a broken layout.
+  const EXPECT = '0.4.1';
+  if (document.body.dataset.wc !== EXPECT) {
+    document.body.textContent = '';
+    const box = document.createElement('div');
+    box.style.cssText = 'margin:40px auto;max-width:520px;padding:18px 20px;border:1px solid var(--vscode-focusBorder);border-radius:12px;font-family:var(--vscode-font-family);line-height:1.5';
+    box.textContent = `Wagon Circle was updated (page built by ${document.body.dataset.wc || 'an older version'}, files are ${EXPECT}). Run "Developer: Reload Window" from the Command Palette, then reopen the room.`;
+    document.body.appendChild(box);
+    return;
+  }
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('input');
   const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
@@ -90,7 +101,7 @@
     }
     if (entry.from === 'human') {
       const row = el('article', `row human${entry.kind === 'history' ? ' history' : ''}`);
-      row.appendChild(el('div', 'who', entry.kind === 'history' ? 'earlier · User' : `${NAMES.human} · ${time}`));
+      row.appendChild(el('div', 'who', entry.kind === 'history' ? 'earlier · User' : entry.kind === 'steer' ? `${NAMES.human} · ↪ steering ${entry.steer.map((n) => NAMES[n]).join(' and ')} · ${time}` : `${NAMES.human} · ${time}`));
       const b = el('div', 'bubble'); b.appendChild(body(entry.text)); row.appendChild(b);
       if (entry.attachments && entry.attachments.length) row.appendChild(files(entry.attachments));
       if (entry.ide) row.appendChild(el('div', 'idechip', `📍 ${entry.ide.summary}`));
@@ -141,8 +152,11 @@
     for (const n of ['claude', 'codex']) if (busy[n]) {
       w.appendChild(el('span', `w ${n}`, `${NAMES[n]} · ${act[n] ? act[n].label : 'starting'} · ${secs(Date.now() - (since[n] || Date.now()))}`));
     }
-    const any = busy.claude || busy.codex;
-    $('stop').hidden = !any; $('send').hidden = !!any && !input.value.trim() && !pending.length;
+    const any = busy.claude || busy.codex, typed = !!(input.value.trim() || pending.length);
+    $('stop').hidden = !any; $('send').hidden = !!any && !typed;
+    const steering = any && typed && !input.value.trim().startsWith('/');
+    $('send').textContent = steering ? '↪' : '↑';
+    $('send').title = steering ? `Steer ${['claude', 'codex'].filter((n) => busy[n]).map((n) => NAMES[n]).join(' and ')} now (Enter) · ${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter queues it instead` : 'Send (Enter)';
     if (any && !ticker) ticker = setInterval(renderWho, 1000);
     if (!any && ticker) { clearInterval(ticker); ticker = null; }
   }
@@ -245,10 +259,12 @@
   });
 
   // ---------- sending ----------
-  function send() {
+  // While an agent is working, Enter steers it; Cmd/Ctrl+Enter queues the message as an ordinary one instead.
+  function send(queue) {
     const t = input.value.trim(); if (!t && !pending.length) return;
+    const steer = !queue && (busy.claude || busy.codex);
     if (t.startsWith('/')) cmd(t);
-    else { vscode.postMessage({ type: 'send', text: t, attachmentIds: pending.map((a) => a.id), ide: meta.ideContext !== false }); pending = []; renderTray(); }
+    else { vscode.postMessage({ type: steer ? 'steer' : 'send', text: t, attachmentIds: pending.map((a) => a.id), ide: meta.ideContext !== false }); pending = []; renderTray(); }
     input.value = ''; grow(); closeMenu(); input.focus();
   }
   function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
@@ -305,10 +321,10 @@
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !complete)) { e.preventDefault(); return accept(); }
     }
     if (e.key === 'Escape') closePop();
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(e.metaKey || e.ctrlKey); }
   });
   input.addEventListener('paste', (e) => { const fl = e.clipboardData && e.clipboardData.files; if (fl && fl.length) { e.preventDefault(); readAndAttach(fl); } });
-  $('send').addEventListener('click', send);
+  $('send').addEventListener('click', (e) => send(e.metaKey || e.ctrlKey));
   $('stop').addEventListener('click', () => cmd('/stop'));
   $('attach').addEventListener('click', () => vscode.postMessage({ type: 'pickFiles' }));
   $('ide').addEventListener('click', () => vscode.postMessage({ type: 'toggleIde', on: meta.ideContext === false }));

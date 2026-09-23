@@ -20,7 +20,7 @@ function describeTool(name, input = {}) {
 class ClaudeClient {
   constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], log = () => {}, onNotice = () => {} }) {
     Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, log, onNotice });
-    this.proc = null; this.waiter = null; this.totalCostUsd = 0;
+    this.proc = null; this.waiter = null; this.totalCostUsd = 0; this.steerQueue = []; this.reqId = 0;
   }
 
   _args() {
@@ -74,10 +74,19 @@ class ClaudeClient {
       const text = m.message.content.filter((c) => c.type === 'text').map((c) => c.text).join('');
       if (text) { w.blocks.push(text); w.partial = ''; w.onDelta(w.blocks.join('\n\n')); }
     } else if (m.type === 'result') {
+      clearTimeout(this.intTimer); this.intTimer = null; // the interrupt (if any) was honoured: disarm the kill fallback
       if (typeof m.total_cost_usd === 'number') this.totalCostUsd = m.total_cost_usd;
+      if (this.steerQueue.length) {
+        // A steer interrupted this turn: send the new instruction and keep the same reply open.
+        const next = this.steerQueue.splice(0);
+        w.onActivity({ phase: 'waiting', label: 'redirected by you' });
+        this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: toClaudeContent(next.map((x) => x.text).join('\n\n'), next.flatMap((x) => x.attachments)) } }) + '\n');
+        return;
+      }
       if (m.usage) this.lastUsage = { input: m.usage.input_tokens || 0, cacheWrite: m.usage.cache_creation_input_tokens || 0, cacheRead: m.usage.cache_read_input_tokens || 0, output: m.usage.output_tokens || 0 };
       if (m.session_id) this.sessionId = m.session_id;
-      if (m.is_error) this._settle(new Error(m.result || m.subtype || 'Claude error'));
+      if (m.is_error && m.subtype === 'error_during_execution' && this.interrupting) { const e = new Error('stopped'); e.stopped = true; this.interrupting = false; this._settle(e); }
+      else if (m.is_error) this._settle(new Error(m.result || m.subtype || 'Claude error'));
       else this._settle(null, (m.result || w.blocks.join('\n\n')).trim());
     }
   }
@@ -102,8 +111,24 @@ class ClaudeClient {
 
   compact() { return this.send('/compact'); }
 
-  // Claude has no mid-turn cancel over stdio; stopping kills the process and the next send resumes the session.
-  interrupt() { if (this.proc) { this.proc.kill(); } }
+  // Clean interrupt over stream-json: the turn ends, the session and process stay alive.
+  // Falls back to killing the process if the CLI doesn't answer within 3 seconds.
+  interrupt() {
+    if (!this.proc || !this.waiter) return;
+    const proc = this.proc; this.interrupting = !this.steerQueue.length;
+    proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: `wc-int-${++this.reqId}`, request: { subtype: 'interrupt' } }) + '\n');
+    clearTimeout(this.intTimer);
+    this.intTimer = setTimeout(() => { this.intTimer = null; if (this.waiter && this.proc === proc) proc.kill(); }, 3000);
+  }
+
+  // Steer: stop the current turn at once and continue it with the new instruction (same reply, same session).
+  // Mid-turn injection exists too, but in testing Sonnet 5 ignored it; interrupt-and-redirect was reliable.
+  steer(text, attachments = []) {
+    if (!this.waiter) return false;
+    this.steerQueue.push({ text, attachments });
+    if (this.steerQueue.length === 1) this.interrupt();
+    return true;
+  }
 
   stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); this.proc = null; } }
 }

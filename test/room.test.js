@@ -233,3 +233,41 @@ test('handoffs ignores code, quotes and @both', () => {
   assert.deepStrictEqual(handoffs('the `@codex` tag and "@codex" and @both', 'claude'), []);
   assert.deepStrictEqual(handoffs('```\n@codex\n```', 'claude'), []);
 });
+
+test('steer goes into the busy agent\'s turn, once, and the other agent sees it later', async () => {
+  let release; const steered = [];
+  const claude = { send: () => new Promise((r) => { release = r; }), steer: (t) => { steered.push(t); return true; } };
+  const codex = fake('ok');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@claude refactor the parser');
+  const r = room.steerFromHuman('actually skip the tests for now');
+  assert.deepStrictEqual(r.steered, ['claude']);
+  assert.match(steered[0], /^\[Dean, steering you mid-turn: follow this now\]\nactually skip the tests/);
+  release('done');
+  await settle();
+  room.postFromHuman('@claude anything else?');
+  await settle();
+  room.postFromHuman('@codex review please');
+  await settle();
+  assert.match(codex.inbox[0], /\[Dean, to Claude mid-turn\]\nactually skip the tests/);
+});
+
+test('a steer that only names an idle agent is an ordinary message', async () => {
+  let release; const claude = { send: () => new Promise((r) => { release = r; }), steer: () => true };
+  const codex = fake('on it');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@claude long job');
+  const r = room.steerFromHuman('@codex meanwhile, check the README');
+  assert.deepStrictEqual(r.steered, []);
+  await settle();
+  assert.strictEqual(codex.inbox.length, 1);
+  release('x');
+});
+
+test('stopping shows a calm note, not a failure', async () => {
+  const claude = { send: () => { const e = new Error('stopped'); e.stopped = true; return Promise.reject(e); } };
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  room.postFromHuman('@claude go');
+  await settle();
+  assert.ok(room.state.transcript.some((e) => e.from === 'system' && e.text === 'Claude stopped.' && !e.kind));
+});

@@ -117,7 +117,7 @@ class RoomSession {
     const codex = this.codex, meta = this.meta;
     const agents = {
       claude: this.claude,
-      codex: { send: (text, onDelta, onActivity, files) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt() }
+      codex: { send: (text, onDelta, onActivity, files) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt(), steer: (text, files) => codex.steer(meta.codexThreadId, text, files) }
     };
     const labelFor = (n) => { const c = this.controls()[n]; const x = c.models.find((y) => y.id === c.model); return [x ? (x.name || x.id) : c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
     this.room = new Room({ agents, hopCap: m.hopCap, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor });
@@ -150,12 +150,14 @@ class RoomSession {
     this.panel = panel; sessions.add(this);
     panel.webview.onDidReceiveMessage((m) => {
       if (m.type === 'ready') this.postInit();
-      else if (m.type === 'send' && this.room && typeof m.text === 'string') {
+      else if ((m.type === 'send' || m.type === 'steer') && this.room && typeof m.text === 'string') {
         const files = (Array.isArray(m.attachmentIds) ? m.attachmentIds : []).map((id) => this.pendingAtts.get(id)).filter(Boolean);
         files.forEach((f) => this.pendingAtts.delete(f.id));
         const snap = m.ide && this.meta.ideContext !== false ? ideSnapshot() : null;
         const ide = snap ? { summary: ideContext.summary(snap), text: ideContext.format(snap) } : null;
-        if (m.text.trim() || files.length) this.room.postFromHuman(m.text.trim(), files, ide);
+        if (!m.text.trim() && !files.length) return;
+        if (m.type === 'steer') this.room.steerFromHuman(m.text.trim(), files, ide);
+        else this.room.postFromHuman(m.text.trim(), files, ide);
       }
       else if (m.type === 'toggleIde') { this.meta.ideContext = !!m.on; this.postMeta(); }
       else if (m.type === 'openDiff' && typeof m.diff === 'string') openDiff(m.diff, this.meta.cwd);
@@ -310,7 +312,7 @@ function panelHtml(webview, extUri) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource};">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${css}"><title>Wagon Circle</title></head>
-<body><header id="hdr"><div><div id="title"></div><div id="ids"></div></div><div id="quota"></div></header>
+<body data-wc="${require('../package.json').version}"><header id="hdr"><div><div id="title"></div><div id="ids"></div></div><div id="quota"></div></header>
 <main id="log" aria-live="polite"></main>
 <footer><div class="dock">
 <div id="menu" role="listbox" hidden></div><div id="pop" class="pop" hidden></div>

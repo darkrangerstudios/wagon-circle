@@ -26,8 +26,11 @@ function handoffs(text, from) {
   return mentions(prose.replace(/@(both|all)\b/gi, ' ')).filter((n) => n !== from);
 }
 
+const knows = (e, name) => (Array.isArray(e.knownBy) ? e.knownBy.includes(name) : e.knownBy === name);
+
 function label(entry, human) {
   if (entry.kind === 'history') return `[${entry.from === 'human' ? 'User' : LABEL[entry.from]} — earlier in the forked ${entry.source || 'Codex'} conversation]`;
+  if (entry.from === 'human' && entry.kind === 'steer') return `[${human}, to ${entry.steer.map((n) => LABEL[n]).join(' and ')} mid-turn]`;
   if (entry.from === 'human') return `[${human}]`;
   if (entry.from === 'system') return '[Wagon Circle notice]';
   return `[${LABEL[entry.from]} — relayed by Wagon Circle, not ${human}]`;
@@ -75,6 +78,20 @@ class Room extends EventEmitter {
     return targets;
   }
 
+  // Steer: send a message INTO a running turn. Goes to the busy agents it @mentions, or to every busy agent
+  // if it mentions none. If it only mentions idle agents (or nobody is busy), it is an ordinary message.
+  steerFromHuman(text, attachments = [], ide = null) {
+    const busyNow = AGENTS.filter((a) => this.busy[a] && this.agents[a] && this.agents[a].steer);
+    const named = mentions(text);
+    const targets = named.length ? named.filter((a) => busyNow.includes(a)) : busyNow;
+    if (!targets.length) return { steered: [], targets: this.postFromHuman(text, attachments, ide) };
+    this._append('human', text, { kind: 'steer', steer: targets, knownBy: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
+    const files = attachments.map((a) => a.name);
+    const body = `[${this.human}, steering you mid-turn: follow this now]\n${text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${ide ? `\n(IDE context from ${this.human}'s editor)\n${ide.text}` : ''}`;
+    for (const t of targets) Promise.resolve(this.agents[t].steer(body, attachments)).catch((e) => this.note(`Couldn't steer ${LABEL[t]}: ${e.message}`));
+    return { steered: targets };
+  }
+
   // One after another: each agent's delivery includes the previous agent's answer.
   async _inTurn(targets) {
     for (const t of targets) { if (this.halted) return; await this.deliver(t); }
@@ -82,7 +99,7 @@ class Room extends EventEmitter {
 
   // Everything this agent missed: labelled text plus the files attached to those messages.
   payloadFor(name) {
-    const fresh = this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && e.knownBy !== name && e.kind !== 'error');
+    const fresh = this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && !knows(e, name) && e.kind !== 'error');
     const text = fresh.map((e) => {
       const files = (e.attachments || []).map((a) => a.name);
       return `${label(e, this.human)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${e.ide ? `\n(IDE context from ${this.human}'s editor)\n${e.ide.text}` : ''}`;
@@ -110,7 +127,8 @@ class Room extends EventEmitter {
       const entry = this._append(name, reply || '(no reply)', { took: Date.now() - started, ...(model ? { model } : {}), ...(steps.length ? { steps } : {}), ...(diff ? { diff } : {}) });
       this._relay(name, entry.text);
     } catch (e) {
-      this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
+      if (e.stopped) this.note(`${LABEL[name]} stopped.`);
+      else this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
     } finally {
       this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
       if (this.pending[name]) { this.pending[name] = false; this.deliver(name); }

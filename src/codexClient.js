@@ -163,6 +163,7 @@ class CodexClient extends EventEmitter {
           cleanup();
           const status = p.turn.status; const reply = [...messages.values()].join('\n\n').trim();
           if (status === 'completed') resolve(reply);
+          else if (status === 'interrupted') { const e = new Error('stopped'); e.stopped = true; reject(e); }
           else reject(new Error((p.turn.error && p.turn.error.message) || lastError || `turn ${status}`));
         }
       };
@@ -173,6 +174,14 @@ class CodexClient extends EventEmitter {
         .then((r) => { turnId = r && r.turn && r.turn.id; this.currentTurn = { threadId, turnId }; })
         .catch((e) => { cleanup(); reject(e); });
     });
+  }
+
+  // Steer: add input to the running turn (Codex's native turn/steer). The same turn keeps going.
+  async steer(threadId, text, attachments = []) {
+    const t = this.currentTurn;
+    if (!t || !t.turnId || t.threadId !== threadId) return false;
+    await this.request('turn/steer', { threadId, expectedTurnId: t.turnId, input: toCodexInput(text, attachments) }, 20000);
+    return true;
   }
 
   async interrupt() {

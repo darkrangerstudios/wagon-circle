@@ -2,7 +2,7 @@
 
 > Circle the wagons: one room for you, Claude and Codex, with nothing exposed.
 
-**Prototype 0.4.0.** Site: https://darkrangerstudios.github.io/wagon-circle/
+**Prototype 0.4.1.** Site: https://darkrangerstudios.github.io/wagon-circle/
 
 One VS Code room where you, Claude and Codex talk in a single timeline.
 
@@ -20,6 +20,9 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 - **Newest Claude CLI automatically.** Wagon Circle uses the newest Claude Code it finds, including the one bundled with the VS Code Claude extension, because older CLIs refuse newer models.
 - **IDE context.** Your active file, selection (or visible lines), open tabs and Problems ride along with each message. The 📍 chip shows what will be sent; click it to turn it off.
 - **Diffs.** Unified diffs in replies, and Codex's per-turn diff, render as file cards with +/− counts. **Open in diff editor** applies the patch in memory and shows it in VS Code's diff view; nothing is written to disk.
+- **Steer.** While an agent is working, the send button becomes ↪: Enter steers it mid-turn (Cmd/Ctrl+Enter queues the message instead). Codex uses its native `turn/steer`, so your input joins the running turn. Claude is interrupted cleanly over stream-json and continued with your instruction as the same reply; plain mid-turn injection exists too, but Sonnet 5 ignored it in testing. A steer goes to the busy agents it @mentions, or all busy agents; the other agent sees it later, labelled as a mid-turn message.
+- **Clean Stop.** Stop sends Claude a proper interrupt (the session and process stay alive) and interrupts Codex's turn; the room shows "Claude stopped." rather than an error.
+- **Version guard.** If the extension code and the page files come from different versions (the window wasn't reloaded after an update), the room says so instead of rendering a broken layout.
 - **Live status.** Each agent shows what it is doing right now, with a timer: waiting, thinking (with its thinking text, collapsible), each tool step such as "reading room.js" or "running rg …", then writing. Finished replies keep a collapsed list of their steps.
 
 ## Safety defaults
@@ -35,7 +38,7 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 Then, from the Command Palette, run **Wagon Circle: New Room**, **Wagon Circle: Join Existing Conversations (fork)** or **Wagon Circle: Reopen a Room**. Logs appear in Output → Wagon Circle.
 
 ## Tests
-- `npm test` runs the router unit tests with fake agents (34 tests: router, hand-off and turn limits, commands, diffs, IDE context, attachments, Codex activity replay).
+- `npm test` runs the router unit tests with fake agents (38 tests: router, hand-off and turn limits, commands, diffs, IDE context, attachments, Codex activity replay).
 - `node test/live-claude-fork.js <claudeSessionId>` forks a saved Claude session into a room with a recording stand-in for Codex. It makes one small Claude turn and no Codex turn.
 - `node test/token-ab.js <scratchCwd>` compares a persistent session sending deltas against a fresh process with the full transcript every turn. Measured 2026-09-23 over 4 turns on Sonnet: 4,801 vs 19,102 fresh tokens, $0.036 vs $0.086. Cache lifetime matches normal sessions because these are the same CLIs: Claude Code writes Anthropic's 1-hour tier (logged as `ephemeral_1h`), and Codex on GPT-5.6-or-later models keeps prefixes 30 minutes after last use.
 - `node test/live-three-way.js <repoCwd> <imagePath>` runs real Claude and real Codex in one room: `@both` turn-taking, an image to Codex, and Codex's token and cache usage.
