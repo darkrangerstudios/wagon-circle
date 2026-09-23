@@ -2,6 +2,7 @@
 // Persistent Claude Code session over stdio (stream-json in, stream-json out). No ports.
 const { spawn } = require('child_process');
 const readline = require('readline');
+const { toClaudeContent } = require('./attachments');
 
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
 
@@ -17,8 +18,8 @@ function describeTool(name, input = {}) {
 }
 
 class ClaudeClient {
-  constructor({ exe, cwd, model, systemPrompt, sessionId = null, forkFrom = null, log = () => {} }) {
-    Object.assign(this, { exe, cwd, model, systemPrompt, sessionId, forkFrom, log });
+  constructor({ exe, cwd, model, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], log = () => {} }) {
+    Object.assign(this, { exe, cwd, model, systemPrompt, sessionId, forkFrom, addDirs, log });
     this.proc = null; this.waiter = null; this.totalCostUsd = 0;
   }
 
@@ -27,6 +28,7 @@ class ClaudeClient {
       '--include-partial-messages', '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.join(','),
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--append-system-prompt', this.systemPrompt];
     if (this.model) a.push('--model', this.model);
+    for (const d of this.addDirs) a.push('--add-dir', d); // lets Read open attachments stored outside cwd
     if (this.sessionId) a.push('--resume', this.sessionId);
     else if (this.forkFrom) a.push('--resume', this.forkFrom, '--fork-session');
     return a;
@@ -75,13 +77,13 @@ class ClaudeClient {
     }
   }
 
-  send(text, onDelta = () => {}, onActivity = () => {}) {
+  send(text, onDelta = () => {}, onActivity = () => {}, attachments = []) {
     if (this.waiter) return Promise.reject(new Error('Claude is already answering'));
     if (!this.proc) this._spawn();
     return new Promise((resolve, reject) => {
       this.waiter = { resolve, reject, onDelta, onActivity, partial: '', blocks: [], thinking: '' };
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
-      this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }) + '\n');
+      this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: toClaudeContent(text, attachments) } }) + '\n');
     });
   }
 

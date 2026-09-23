@@ -9,6 +9,7 @@ const { CodexClient } = require('./codexClient');
 const { ClaudeClient } = require('./claudeClient');
 const { Room, AGENTS } = require('./room');
 const claudeHistory = require('./claudeHistory');
+const attachments = require('./attachments');
 
 let output;
 const log = (s) => output && output.appendLine(`[${new Date().toISOString()}] ${s}`);
@@ -53,6 +54,8 @@ class RoomSession {
   constructor(context, meta, state) {
     this.context = context; this.meta = meta; this.state = state; this.quota = null;
     this.file = path.join(context.globalStorageUri.fsPath, 'rooms', `${meta.id}.json`);
+    this.attDir = path.join(context.globalStorageUri.fsPath, 'rooms', meta.id, 'attachments');
+    this.pendingAtts = new Map();
   }
 
   save() {
@@ -89,12 +92,12 @@ class RoomSession {
       this.meta.claudeForkedFrom = claudeFrom.id;
       try { claudeSeed = claudeHistory.recentMessages(claudeFrom.path, 8); } catch (e) { log(`claude history read failed: ${e.message}`); claudeSeed = []; }
     }
-    this.claude = new ClaudeClient({ exe: s.claudeExe, cwd: this.meta.cwd, model: s.claudeModel, systemPrompt: roomPrompt('claude', 'codex', human), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeSeed ? claudeFrom.id : null, log });
+    this.claude = new ClaudeClient({ exe: s.claudeExe, cwd: this.meta.cwd, model: s.claudeModel, systemPrompt: roomPrompt('claude', 'codex', human), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeSeed ? claudeFrom.id : null, addDirs: [this.attDir], log });
 
     const codex = this.codex, meta = this.meta;
     const agents = {
       claude: this.claude,
-      codex: { send: (text, onDelta, onActivity) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt() }
+      codex: { send: (text, onDelta, onActivity, files) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt() }
     };
     this.room = new Room({ agents, hopCap: s.hopCap, state: this.state, humanName: human });
     if (seed) {
@@ -105,7 +108,7 @@ class RoomSession {
       this.room.seedHistory(claudeSeed, 'claude');
       this.room.note(`Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; ${claudeSeed.length} recent messages loaded for Codex. The original session is untouched.`);
     }
-    this.room.on('message', (entry) => this.post({ type: 'message', entry }));
+    this.room.on('message', (entry) => this.post({ type: 'message', entry: this.view(entry) }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
     this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
     this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null }));
@@ -125,14 +128,38 @@ class RoomSession {
   attach(panel) {
     this.panel = panel;
     panel.webview.onDidReceiveMessage((m) => {
-      if (m.type === 'ready') this.post({ type: 'init', meta: this.meta, transcript: this.room ? this.room.state.transcript : [], busy: this.room ? this.room.busy : {}, quota: this.quota, cost: this.claude ? this.claude.totalCostUsd : 0 });
-      else if (m.type === 'send' && this.room && typeof m.text === 'string' && m.text.trim()) this.room.postFromHuman(m.text.trim());
+      if (m.type === 'ready') this.postInit();
+      else if (m.type === 'send' && this.room && typeof m.text === 'string') {
+        const files = (Array.isArray(m.attachmentIds) ? m.attachmentIds : []).map((id) => this.pendingAtts.get(id)).filter(Boolean);
+        files.forEach((f) => this.pendingAtts.delete(f.id));
+        if (m.text.trim() || files.length) this.room.postFromHuman(m.text.trim(), files);
+      }
+      else if (m.type === 'attachData' && typeof m.data === 'string') this.addAttachment({ name: m.name, data: m.data });
+      else if (m.type === 'attachUris' && Array.isArray(m.uris)) m.uris.forEach((u) => { try { this.addAttachment({ name: path.basename(vscode.Uri.parse(u).fsPath), fromPath: vscode.Uri.parse(u).fsPath }); } catch (e) { this.post({ type: 'attachError', text: e.message }); } });
+      else if (m.type === 'pickFiles') vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach' }).then((uris) => (uris || []).forEach((u) => this.addAttachment({ name: path.basename(u.fsPath), fromPath: u.fsPath })));
+      else if (m.type === 'unattach') { const a = this.pendingAtts.get(m.id); if (a) { this.pendingAtts.delete(m.id); fs.rm(a.path, () => {}); } }
       else if (m.type === 'stop' && this.room) this.room.stopAll();
     });
     panel.onDidDispose(() => this.dispose());
   }
 
   post(msg) { if (this.panel) this.panel.webview.postMessage(msg); }
+
+  postInit() {
+    this.post({ type: 'init', meta: this.meta, transcript: this.room ? this.room.state.transcript.map((e) => this.view(e)) : [], busy: this.room ? this.room.busy : {}, quota: this.quota, cost: this.claude ? this.claude.totalCostUsd : 0 });
+  }
+
+  // Webview copy of an attachment: image thumbnails get a webview-safe URL.
+  viewAtt(a) { return { ...a, src: a.kind === 'image' && this.panel ? this.panel.webview.asWebviewUri(vscode.Uri.file(a.path)).toString() : null }; }
+  view(entry) { return entry.attachments ? { ...entry, attachments: entry.attachments.map((a) => this.viewAtt(a)) } : entry; }
+
+  addAttachment(spec) {
+    try {
+      const a = attachments.store(this.attDir, spec);
+      this.pendingAtts.set(a.id, a);
+      this.post({ type: 'attached', att: this.viewAtt(a) });
+    } catch (e) { this.post({ type: 'attachError', text: e.message }); }
+  }
 
   dispose() { this.save(); if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null; }
 }
@@ -147,19 +174,20 @@ function panelHtml(webview, extUri) {
 <body><header id="hdr"><div id="title"></div><div id="ids"></div><div id="quota"></div></header>
 <main id="log" aria-live="polite"></main>
 <footer><div id="chips"><button data-m="@claude">@claude</button><button data-m="@codex">@codex</button><button data-m="@both">@both</button><span id="who"></span><button id="stop" title="Stop both agents and halt hand-offs">Stop</button></div>
-<div id="composer"><textarea id="input" rows="3" placeholder="Message the room. Enter sends, Shift+Enter for a new line."></textarea><button id="send">Send</button></div></footer>
+<div id="tray" hidden></div>
+<div id="composer"><button id="attach" title="Attach files (or paste a screenshot, or Shift-drag files here)" aria-label="Attach files">📎</button><textarea id="input" rows="3" placeholder="Message the room. Enter sends · paste or 📎 to attach"></textarea><button id="send">Send</button></div></footer>
 <script nonce="${nonce}" src="${js}"></script></body></html>`;
 }
 
 async function openSession(context, session, opts) {
   const panel = vscode.window.createWebviewPanel('wagonCircle', `Wagon Circle: ${session.meta.name}`, vscode.ViewColumn.Active, {
-    enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
+    enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media'), vscode.Uri.joinPath(context.globalStorageUri, 'rooms')]
   });
   panel.webview.html = panelHtml(panel.webview, context.extensionUri);
   session.attach(panel);
   try {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Circle: starting Codex and Claude…' }, () => session.boot(opts));
-    session.post({ type: 'init', meta: session.meta, transcript: session.room.state.transcript, busy: session.room.busy, quota: session.quota, cost: 0 });
+    session.postInit();
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
     vscode.window.showErrorMessage(`Wagon Circle could not start: ${e.message}`);

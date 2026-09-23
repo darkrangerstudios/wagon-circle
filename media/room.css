@@ -51,6 +51,18 @@ button:disabled { opacity: .4; cursor: default; }
 #send { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
 #send:hover { background: var(--vscode-button-hoverBackground); }
 #composer { display: flex; gap: 8px; align-items: stretch; }
+#attach { font-size: 1.1em; padding: 0 10px; }
+#tray { padding: 2px 0; }
+.files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; align-items: flex-start; }
+#tray .files { margin-top: 0; }
+#tray .file img { max-height: 56px; max-width: 90px; }
+#tray .file.kind-image { flex-direction: row; align-items: center; }
+.file { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font-size: .85em; max-width: 100%; background: var(--vscode-editor-background); }
+.file img { max-height: 140px; max-width: 220px; border-radius: 4px; display: block; }
+.file.kind-image { flex-direction: column; align-items: flex-start; }
+.file .fname { color: var(--muted); overflow-wrap: anywhere; }
+.file .x { padding: 0 6px; line-height: 1.2; }
+body.dropping main { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -8px; }
 textarea { flex: 1; resize: vertical; min-height: 44px; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--line)); border-radius: 4px; padding: 6px 8px; }
 textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 @media (prefers-reduced-motion: reduce) { .typing::before, .act::before { animation: none; } }

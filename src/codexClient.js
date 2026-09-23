@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const readline = require('readline');
+const { toCodexInput } = require('./attachments');
 
 // Methods the room must never call, whatever a future caller asks for.
 const FORBIDDEN = new Set(['account/rateLimitResetCredit/consume', 'account/logout', 'account/login/start', 'thread/delete']);
@@ -131,7 +132,7 @@ class CodexClient extends EventEmitter {
   }
 
   // Run one turn; resolves with the agent's text. onDelta streams partial text.
-  runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}) {
+  runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}, attachments = []) {
     return new Promise((resolve, reject) => {
       let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map();
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
@@ -160,7 +161,7 @@ class CodexClient extends EventEmitter {
       const onExit = (err) => { cleanup(); reject(err); };
       const cleanup = () => { this.off('notification', onNote); this.off('exit', onExit); };
       this.on('notification', onNote); this.once('exit', onExit);
-      this.request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }] })
+      this.request('turn/start', { threadId, input: toCodexInput(text, attachments) })
         .then((r) => { turnId = r && r.turn && r.turn.id; this.currentTurn = { threadId, turnId }; })
         .catch((e) => { cleanup(); reject(e); });
     });

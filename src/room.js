@@ -46,19 +46,24 @@ class Room extends EventEmitter {
 
   note(text) { return this._append('system', text); }
 
-  postFromHuman(text) {
+  postFromHuman(text, attachments = []) {
     const addressed = mentions(text);
     const targets = addressed.length ? addressed : this.state.lastTargets;
     this.state.lastTargets = targets;
     this.hopsLeft = this.hopCap; this.capNoted = false; this.halted = false;
-    this._append('human', text);
+    this._append('human', text, attachments.length ? { attachments } : {});
     for (const t of targets) this.deliver(t);
     return targets;
   }
 
+  // Everything this agent missed: labelled text plus the files attached to those messages.
   payloadFor(name) {
     const fresh = this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && e.knownBy !== name && e.kind !== 'error');
-    return fresh.map((e) => `${label(e, this.human)}\n${e.text}`).join('\n\n');
+    const text = fresh.map((e) => {
+      const files = (e.attachments || []).map((a) => a.name);
+      return `${label(e, this.human)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}`;
+    }).join('\n\n');
+    return { text, attachments: fresh.flatMap((e) => e.attachments || []) };
   }
 
   async deliver(name) {
@@ -66,12 +71,12 @@ class Room extends EventEmitter {
     if (this.busy[name]) { this.pending[name] = true; return; }
     const payload = this.payloadFor(name);
     this.state.cursors[name] = this.state.transcript.length;
-    if (!payload) return;
+    if (!payload.text) return;
     this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
     const steps = [];
     const onActivity = (a) => { if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); };
     try {
-      const reply = await this.agents[name].send(payload, (partial) => this.emit('draft', { name, text: partial }), onActivity);
+      const reply = await this.agents[name].send(payload.text, (partial) => this.emit('draft', { name, text: partial }), onActivity, payload.attachments);
       const entry = this._append(name, reply || '(no reply)', steps.length ? { steps } : {});
       this._relay(name, entry.text);
     } catch (e) {

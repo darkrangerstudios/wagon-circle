@@ -220,8 +220,8 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <div class="feat"><span class="k">Context</span><h3>Everyone stays caught up</h3><p>Each agent receives exactly what it missed since its last turn, labelled by speaker, and never its own words back. Agent text always arrives marked as relayed, so neither model mistakes the other for you.</p></div>
       <div class="feat"><span class="k">Memory</span><h3>Fork, never share</h3><p>Bring in an existing Codex thread, an existing Claude Code session, or both. Each is forked, so each agent keeps its full memory and your originals are never touched. Each side's recent history briefs the other, read from disk with no model call.</p></div>
       <div class="feat"><span class="k">Visibility</span><h3>Watch them work</h3><p>Live status for each agent: thinking, the file it's reading, the command it's running, then writing, with a timer. The thinking text is one click away, and every answer keeps its trail of steps.</p></div>
-      <div class="feat"><span class="k">Security</span><h3>Nothing faces out</h3><p>The agents talk to the room over stdio, private pipes with no address to dial. No daemon, no localhost port, no web server. The only traffic leaving your machine is each CLI's usual connection to its own vendor.</p></div>
-      <div class="feat"><span class="k">Defaults</span><h3>Read-only unless you say so</h3><p>Codex runs in a read-only sandbox with approvals off; Claude may only read, glob and grep, with no MCP servers. The room blocks quota-credit spending, logout and deletes outright, and renders model output as text only.</p></div>
+      <div class="feat"><span class="k">Files</span><h3>Bring your files</h3><p>Paste a screenshot, drop in a log, attach a spec. Images reach both agents as real image input; Markdown, code and data are read inline; PDFs and big files are passed for the agents to open. Whoever missed them gets them on their next turn.</p></div>
+      <div class="feat"><span class="k">Security</span><h3>Nothing faces out</h3><p>The agents talk to the room over stdio, private pipes with no address to dial: no daemon, no localhost port, no web server. Both run read-only by default, and the room blocks quota-credit spending, logout and deletes outright.</p></div>
     </div>
   </section>
 
@@ -256,10 +256,11 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <div>
         <p class="intro" style="margin-bottom:14px">Proven so far:</p>
         <ul>
-          <li><span class="pill ok">tested</span> Routing, catch-up delivery, hop cap and two-sided history (15 automated tests)</li>
+          <li><span class="pill ok">tested</span> Routing, catch-up delivery, hop cap and two-sided history (19 automated tests)</li>
           <li><span class="pill ok">live</span> Claude joining from a forked session with its memory intact</li>
           <li><span class="pill ok">live</span> Claude handing off to Codex; per-turn token savings measured</li>
           <li><span class="pill ok">live</span> Live status: thinking, tool steps and writing, from real Claude output</li>
+          <li><span class="pill ok">live</span> Attachments: Claude read a pasted screenshot and a Markdown file in one turn</li>
         </ul>
       </div>
       <div>
