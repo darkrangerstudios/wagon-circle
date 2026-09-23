@@ -5,6 +5,17 @@ const readline = require('readline');
 
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
 
+const clip = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+const base = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
+
+// A human-readable line for a tool call, e.g. "reading room.js".
+function describeTool(name, input = {}) {
+  if (name === 'Read') return `reading ${base(input.file_path)}`;
+  if (name === 'Grep') return `searching for "${clip(input.pattern, 40)}"`;
+  if (name === 'Glob') return `listing ${clip(input.pattern, 40)}`;
+  return `using ${name}`;
+}
+
 class ClaudeClient {
   constructor({ exe, cwd, model, systemPrompt, sessionId = null, forkFrom = null, log = () => {} }) {
     Object.assign(this, { exe, cwd, model, systemPrompt, sessionId, forkFrom, log });
@@ -41,9 +52,18 @@ class ClaudeClient {
     try { m = JSON.parse(line); } catch { return; }
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; }
     const w = this.waiter; if (!w) return;
-    if (m.type === 'stream_event' && m.event && m.event.type === 'content_block_delta' && m.event.delta && m.event.delta.type === 'text_delta') {
-      w.partial += m.event.delta.text; w.onDelta(w.partial);
+    const ev = m.type === 'stream_event' ? m.event : null;
+    if (ev && ev.type === 'content_block_start' && ev.content_block) {
+      const t = ev.content_block.type;
+      if (t === 'thinking') w.onActivity({ phase: 'thinking', label: 'thinking' });
+      else if (t === 'tool_use') w.onActivity({ phase: 'tool', label: `using ${ev.content_block.name}` });
+      else if (t === 'text') w.onActivity({ phase: 'writing', label: 'writing' });
+    } else if (ev && ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'thinking_delta') {
+      w.thinking += ev.delta.thinking || ''; w.onActivity({ phase: 'thinking', label: 'thinking', thinking: w.thinking });
+    } else if (ev && ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
+      w.partial += ev.delta.text; w.onDelta(w.blocks.concat(w.partial ? [w.partial] : []).join('\n\n'));
     } else if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
+      for (const c of m.message.content) if (c.type === 'tool_use') w.onActivity({ phase: 'tool', label: describeTool(c.name, c.input), step: true });
       const text = m.message.content.filter((c) => c.type === 'text').map((c) => c.text).join('');
       if (text) { w.blocks.push(text); w.partial = ''; w.onDelta(w.blocks.join('\n\n')); }
     } else if (m.type === 'result') {
@@ -55,11 +75,12 @@ class ClaudeClient {
     }
   }
 
-  send(text, onDelta = () => {}) {
+  send(text, onDelta = () => {}, onActivity = () => {}) {
     if (this.waiter) return Promise.reject(new Error('Claude is already answering'));
     if (!this.proc) this._spawn();
     return new Promise((resolve, reject) => {
-      this.waiter = { resolve, reject, onDelta, partial: '', blocks: [] };
+      this.waiter = { resolve, reject, onDelta, onActivity, partial: '', blocks: [], thinking: '' };
+      onActivity({ phase: 'waiting', label: 'waiting for the model' });
       this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }) + '\n');
     });
   }
@@ -70,4 +91,4 @@ class ClaudeClient {
   stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); this.proc = null; } }
 }
 
-module.exports = { ClaudeClient, READ_ONLY_TOOLS };
+module.exports = { ClaudeClient, READ_ONLY_TOOLS, describeTool };

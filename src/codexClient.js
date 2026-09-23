@@ -7,6 +7,27 @@ const readline = require('readline');
 // Methods the room must never call, whatever a future caller asks for.
 const FORBIDDEN = new Set(['account/rateLimitResetCredit/consume', 'account/logout', 'account/login/start', 'thread/delete']);
 
+const clip = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+const base = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
+
+// A human-readable activity for a Codex thread item, or null for items that aren't steps.
+function describeItem(item) {
+  switch (item && item.type) {
+    case 'reasoning': return { phase: 'thinking', label: 'thinking' };
+    case 'agentMessage': return { phase: 'writing', label: 'writing' };
+    case 'commandExecution': return { phase: 'tool', label: `running ${clip(item.command, 50)}`, step: true };
+    case 'fileChange': return { phase: 'tool', label: `editing ${(item.changes || []).map((c) => base(c.path)).slice(0, 3).join(', ') || 'files'}`, step: true };
+    case 'mcpToolCall': return { phase: 'tool', label: `using ${item.server}.${item.tool}`, step: true };
+    case 'dynamicToolCall': return { phase: 'tool', label: `using ${item.tool}`, step: true };
+    case 'webSearch': return { phase: 'tool', label: `searching ${clip(item.query || 'the web', 40)}`, step: true };
+    case 'imageView': return { phase: 'tool', label: `viewing ${base(item.path)}`, step: true };
+    case 'plan': return { phase: 'thinking', label: 'planning' };
+    case 'contextCompaction': return { phase: 'thinking', label: 'compacting context' };
+    case 'collabAgentToolCall': case 'subAgentActivity': return { phase: 'tool', label: 'working with a sub-agent', step: true };
+    default: return null;
+  }
+}
+
 class CodexClient extends EventEmitter {
   constructor({ exe, cwd, log = () => {} }) {
     super();
@@ -110,13 +131,19 @@ class CodexClient extends EventEmitter {
   }
 
   // Run one turn; resolves with the agent's text. onDelta streams partial text.
-  runTurn(threadId, text, onDelta = () => {}) {
+  runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}) {
     return new Promise((resolve, reject) => {
-      let turnId = null; const messages = new Map(); let lastError = null;
+      let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map();
+      onActivity({ phase: 'waiting', label: 'waiting for the model' });
       const onNote = (method, p) => {
         if (p.threadId && p.threadId !== threadId) return;
         if (turnId && p.turnId && p.turnId !== turnId) return;
-        if (method === 'item/agentMessage/delta') {
+        if (method === 'item/started') {
+          const a = describeItem(p.item); if (a) onActivity(a);
+        } else if (method === 'item/reasoning/summaryTextDelta') {
+          thinking.set(p.itemId, (thinking.get(p.itemId) || '') + p.delta);
+          onActivity({ phase: 'thinking', label: 'thinking', thinking: [...thinking.values()].join('\n\n') });
+        } else if (method === 'item/agentMessage/delta') {
           messages.set(p.itemId, (messages.get(p.itemId) || '') + p.delta);
           onDelta([...messages.values()].join('\n\n'));
         } else if (method === 'item/completed' && p.item && p.item.type === 'agentMessage') {
@@ -147,4 +174,4 @@ class CodexClient extends EventEmitter {
   stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); } }
 }
 
-module.exports = { CodexClient, FORBIDDEN };
+module.exports = { CodexClient, FORBIDDEN, describeItem };

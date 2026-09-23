@@ -152,3 +152,16 @@ test('the human name is configurable everywhere it is written', async () => {
   assert.match(codex.inbox[0], /\[Claude — relayed by Campfire, not Darby\]/);
   assert.doesNotMatch(codex.inbox[0], /Dean/);
 });
+
+test('activity passes through and tool steps are kept on the finished message', async () => {
+  const claude = { send: (t, onDelta, onActivity) => { onActivity({ phase: 'thinking', label: 'thinking', thinking: 'hmm' }); onActivity({ phase: 'tool', label: 'reading room.js', step: true }); onActivity({ phase: 'writing', label: 'writing' }); return Promise.resolve('done'); } };
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  const seen = []; room.on('activity', (a) => seen.push(`${a.name}:${a.phase}:${a.label}`));
+  const statuses = []; room.on('status', (s) => statuses.push(s));
+  room.postFromHuman('@claude go');
+  await settle();
+  assert.deepStrictEqual(seen, ['claude:thinking:thinking', 'claude:tool:reading room.js', 'claude:writing:writing']);
+  const msg = room.state.transcript.find((e) => e.from === 'claude');
+  assert.deepStrictEqual(msg.steps, ['reading room.js']);
+  assert.ok(typeof statuses[0].since === 'number');
+});

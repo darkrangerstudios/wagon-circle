@@ -68,10 +68,12 @@ class Room extends EventEmitter {
     const payload = this.payloadFor(name);
     this.state.cursors[name] = this.state.transcript.length;
     if (!payload) return;
-    this.busy[name] = true; this.emit('status', { name, busy: true });
+    this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
+    const steps = [];
+    const onActivity = (a) => { if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); };
     try {
-      const reply = await this.agents[name].send(payload, (partial) => this.emit('draft', { name, text: partial }));
-      const entry = this._append(name, reply || '(no reply)');
+      const reply = await this.agents[name].send(payload, (partial) => this.emit('draft', { name, text: partial }), onActivity);
+      const entry = this._append(name, reply || '(no reply)', steps.length ? { steps } : {});
       this._relay(name, entry.text);
     } catch (e) {
       this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });

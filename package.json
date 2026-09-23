@@ -2,7 +2,7 @@
   "name": "campfire",
   "displayName": "Campfire",
   "description": "One room for you, Claude and Codex. Both agents run as private stdio child processes: no daemon, no network ports.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "UNLICENSED",

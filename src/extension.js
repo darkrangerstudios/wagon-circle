@@ -94,7 +94,7 @@ class RoomSession {
     const codex = this.codex, meta = this.meta;
     const agents = {
       claude: this.claude,
-      codex: { send: (text, onDelta) => codex.runTurn(meta.codexThreadId, text, onDelta).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt() }
+      codex: { send: (text, onDelta, onActivity) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt() }
     };
     this.room = new Room({ agents, hopCap: s.hopCap, state: this.state, humanName: human });
     if (seed) {
@@ -107,6 +107,7 @@ class RoomSession {
     }
     this.room.on('message', (entry) => this.post({ type: 'message', entry }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
+    this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
     this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null }));
     this.room.on('changed', () => this.save());
     this.save();
