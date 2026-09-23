@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('input');
-  const NAMES = { dean: 'Dean', claude: 'Claude', codex: 'Codex', system: 'Campfire' };
+  const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Campfire' };
   const drafts = {}; let busy = {}; let cost = 0;
 
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -18,7 +18,7 @@
   function bubble(entry) {
     const b = el('article', `msg from-${entry.from}${entry.kind ? ' kind-' + entry.kind : ''}`);
     const meta = el('div', 'meta');
-    meta.appendChild(el('span', 'who', entry.kind === 'history' ? `${NAMES[entry.from] === 'Dean' ? 'User' : NAMES[entry.from]} · earlier` : NAMES[entry.from]));
+    meta.appendChild(el('span', 'who', entry.kind === 'history' ? `${entry.from === 'human' ? 'User' : NAMES[entry.from]} · earlier` : NAMES[entry.from]));
     if (entry.ts) meta.appendChild(el('span', 'ts', new Date(entry.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })));
     b.appendChild(meta); b.appendChild(body(entry.text));
     return b;
@@ -60,6 +60,7 @@
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'init') {
       log.textContent = ''; Object.keys(drafts).forEach((k) => delete drafts[k]);
+      NAMES.human = m.meta.humanName || 'You';
       $('title').textContent = m.meta.name;
       $('ids').textContent = [m.meta.codexThreadId && `codex ${m.meta.codexThreadId.slice(0, 8)}`, m.meta.forkedFrom && `fork of ${m.meta.forkedFrom.slice(0, 8)}`, m.meta.cwd].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(bubble(e)));

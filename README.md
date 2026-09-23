@@ -1,14 +1,14 @@
-# Campfire (prototype 0.1.0)
+# Campfire (prototype 0.1.1)
 
-One VS Code room where Dean, Claude and Codex talk in a single timeline.
+One VS Code room where you, Claude and Codex talk in a single timeline.
 
 **Question this prototype answers:** can one room carry a useful three-way conversation under safe relay rules (mention routing, a hop cap, fork-not-share threads)? The answer decides whether this becomes a real extension, and later a .dmg/.exe.
 
 ## How it works
 - **Both agents are private child processes on stdio.** Codex runs as `codex app-server`, speaking newline-delimited JSON-RPC. Claude runs as `claude -p --input-format stream-json --output-format stream-json`. There is no daemon, no network port and no web server, and closing the room ends both processes.
-- **Routing.** `@claude`, `@codex` and `@both` deliver immediately. A message with no mention goes to whoever you addressed last (both, at the start). An agent that writes `@other` hands off, capped at `campfire.hopCap` hand-offs (default 4) per Dean message.
-- **Catch-up delivery.** Each agent receives everything said since its last turn, labelled by speaker. It never gets its own words echoed back. Agent text is always labelled "relayed by Campfire, not Dean"; only `[Dean]` carries authority.
-- **Joining a Codex thread** forks it (`thread/fork`); the original is never written to. The last 8 turns are read locally with `thread/turns/list`, which makes no model call, and seeded to Claude as history.
+- **Routing.** `@claude`, `@codex` and `@both` deliver immediately. A message with no mention goes to whoever you addressed last (both, at the start). An agent that writes `@other` hands off, capped at `campfire.hopCap` hand-offs (default 4) per message you send.
+- **Catch-up delivery.** Each agent receives everything said since its last turn, labelled by speaker. It never gets its own words echoed back. Agent text is always labelled "relayed by Campfire, not <you>"; only messages labelled with your name carry authority. Your name comes from `campfire.userName`, else the first name in `git config user.name`.
+- **Joining existing conversations** works on both sides, and each side is optional. A Codex thread is forked (`thread/fork`) and a Claude session is forked (`--resume <id> --fork-session`), so each agent keeps its own full memory and the originals are never written to. Each side's last 8 exchanges are read from disk, with no model call, and given to the *other* agent as labelled history: `thread/turns/list` for Codex, `~/.claude/projects/**/<session>.jsonl` for Claude, keeping only text you typed and text Claude said. Forking a Claude session sets the room's working folder to that session's folder, because `--resume` only finds sessions there.
 - **Reopening** resumes the room's own Codex fork and Claude session.
 
 ## Safety defaults
@@ -21,11 +21,15 @@ One VS Code room where Dean, Claude and Codex talk in a single timeline.
 ```
 "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --extensionDevelopmentPath="$HOME/code/campfire" --new-window
 ```
-Then, from the Command Palette, run **Campfire: New Room**, **Campfire: Join a Codex Thread (fork)** or **Campfire: Reopen a Room**. Logs appear in Output → Campfire.
+Then, from the Command Palette, run **Campfire: New Room**, **Campfire: Join Existing Conversations (fork)** or **Campfire: Reopen a Room**. Logs appear in Output → Campfire.
 
 ## Tests
-- `npm test` runs the router unit tests with fake agents (9 tests).
+- `npm test` runs the router unit tests with fake agents (12 tests).
+- `node test/live-claude-fork.js <claudeSessionId>` forks a saved Claude session into a room with a recording stand-in for Codex. It makes one small Claude turn and no Codex turn.
 - `node test/live-smoke.js <codexThreadId> <scratchCwd>` runs a real private Codex server and a real Claude session. It forks the given thread and makes one small Claude turn plus one Codex turn, so it spends a little quota.
+
+## Customization
+Today: `campfire.userName`, `claudeModel`, `claudePath`, `codexPath`, `hopCap` and `cwd`. Planned for sharing: see the `campfire-room-prototype` plan (step 6).
 
 ## Deliberately left out
 - Live mirroring into the ChatGPT app or the Codex panel, which would need the shared daemon; see `_pipeline/CODEX_DAEMON_RELAY_HANDOFF.md` in Ranger Gems.

@@ -28,7 +28,7 @@ const prompt = (self, other) => `You are ${self} in Campfire, a test group chat 
   let deltas = 0; room.on('draft', (d) => { if (d.text) deltas++; });
   room.on('message', (e) => say(`${e.from}${e.kind ? '/' + e.kind : ''}: ${e.text.replace(/\s+/g, ' ').slice(0, 220)}`));
   room.seedHistory(hist, 'codex');
-  room.postFromDean('@claude Smoke test. In one line: what code word appears in the earlier forked Codex history? Then hand the same question to @codex.');
+  room.postFromHuman('@claude Smoke test. In one line: what code word appears in the earlier forked Codex history? Then hand the same question to @codex.');
   const idle = () => !room.busy.claude && !room.busy.codex;
   await new Promise((r) => setTimeout(r, 1000));
   while (!idle()) await new Promise((r) => setTimeout(r, 500));

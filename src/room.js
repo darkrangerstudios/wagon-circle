@@ -3,7 +3,7 @@
 const { EventEmitter } = require('events');
 
 const AGENTS = ['claude', 'codex'];
-const LABEL = { dean: 'Dean', claude: 'Claude', codex: 'Codex', system: 'Campfire' };
+const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Campfire' };
 
 // @claude, @codex, @both / @all. Ignores e-mail-like text (x@codex.com) by requiring a non-word char before '@'.
 function mentions(text) {
@@ -15,20 +15,21 @@ function mentions(text) {
   return [...found];
 }
 
-function label(entry) {
-  if (entry.kind === 'history') return `[${entry.from === 'codex' ? 'Codex' : 'User'} — earlier in the forked Codex thread]`;
-  if (entry.from === 'dean') return '[Dean]';
+function label(entry, human) {
+  if (entry.kind === 'history') return `[${entry.from === 'human' ? 'User' : LABEL[entry.from]} — earlier in the forked ${entry.source || 'Codex'} conversation]`;
+  if (entry.from === 'human') return `[${human}]`;
   if (entry.from === 'system') return '[Campfire notice]';
-  return `[${LABEL[entry.from]} — relayed by Campfire, not Dean]`;
+  return `[${LABEL[entry.from]} — relayed by Campfire, not ${human}]`;
 }
 
 class Room extends EventEmitter {
-  constructor({ agents, hopCap = 4, state = null }) {
+  constructor({ agents, hopCap = 4, state = null, humanName = 'You' }) {
     super();
-    this.agents = agents; this.hopCap = hopCap;
+    this.agents = agents; this.hopCap = hopCap; this.human = humanName;
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: false, codex: false };
     this.hopsLeft = hopCap; this.capNoted = false; this.halted = false;
+    for (const e of this.state.transcript) if (e.from === 'dean') e.from = 'human'; // rooms saved before 0.1.1
   }
 
   _append(from, text, extra = {}) {
@@ -38,28 +39,27 @@ class Room extends EventEmitter {
     return entry;
   }
 
-  // Seed history an agent already has (e.g. a forked Codex thread) so only the others receive it.
+  // Seed history one agent already has (its forked thread or session) so only the other agent receives it.
+  // items: [{role: 'user'|'codex'|'claude', text}]; alreadyKnownBy: 'codex' | 'claude'.
   seedHistory(items, alreadyKnownBy) {
-    for (const it of items) this._append(it.role === 'codex' ? 'codex' : 'dean', it.text, { kind: 'history' });
-    if (alreadyKnownBy) this.state.cursors[alreadyKnownBy] = this.state.transcript.length;
-    this.emit('changed', this.state);
+    for (const it of items) this._append(AGENTS.includes(it.role) ? it.role : 'human', it.text, { kind: 'history', source: LABEL[alreadyKnownBy], knownBy: alreadyKnownBy });
   }
 
   note(text) { return this._append('system', text); }
 
-  postFromDean(text) {
+  postFromHuman(text) {
     const addressed = mentions(text);
     const targets = addressed.length ? addressed : this.state.lastTargets;
     this.state.lastTargets = targets;
     this.hopsLeft = this.hopCap; this.capNoted = false; this.halted = false;
-    this._append('dean', text);
+    this._append('human', text);
     for (const t of targets) this.deliver(t);
     return targets;
   }
 
   payloadFor(name) {
-    const fresh = this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && e.kind !== 'error');
-    return fresh.map((e) => `${label(e)}\n${e.text}`).join('\n\n');
+    const fresh = this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && e.knownBy !== name && e.kind !== 'error');
+    return fresh.map((e) => `${label(e, this.human)}\n${e.text}`).join('\n\n');
   }
 
   async deliver(name) {
@@ -85,7 +85,7 @@ class Room extends EventEmitter {
     for (const to of mentions(text).filter((n) => n !== from)) {
       if (this.halted) return;
       if (this.hopsLeft <= 0) {
-        if (!this.capNoted) { this.capNoted = true; this.note(`Hop cap (${this.hopCap}) reached. ${LABEL[from]} asked for ${LABEL[to]}; waiting on Dean.`); }
+        if (!this.capNoted) { this.capNoted = true; this.note(`Hop cap (${this.hopCap}) reached. ${LABEL[from]} asked for ${LABEL[to]}; waiting on ${this.human}.`); }
         continue;
       }
       this.hopsLeft -= 1;
@@ -96,7 +96,7 @@ class Room extends EventEmitter {
   stopAll() {
     this.halted = true; this.pending = { claude: false, codex: false };
     for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
-    this.note('Stopped by Dean.');
+    this.note(`Stopped by ${this.human}.`);
   }
 }
 
