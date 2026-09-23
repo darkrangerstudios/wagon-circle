@@ -1,0 +1,30 @@
+{
+  "name": "campfire",
+  "displayName": "Campfire",
+  "description": "One room for Dean, Claude and Codex. Both agents run as private stdio child processes: no daemon, no network ports.",
+  "version": "0.1.0",
+  "publisher": "darkrangerstudios",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "campfire.newRoom", "title": "Campfire: New Room" },
+      { "command": "campfire.joinCodexThread", "title": "Campfire: Join a Codex Thread (fork)" },
+      { "command": "campfire.openRoom", "title": "Campfire: Reopen a Room" }
+    ],
+    "configuration": {
+      "title": "Campfire",
+      "properties": {
+        "campfire.claudeModel": { "type": "string", "default": "sonnet", "description": "Model alias or id passed to claude --model." },
+        "campfire.claudePath": { "type": "string", "default": "", "description": "Path to the claude CLI. Empty = ~/.local/bin/claude, then PATH." },
+        "campfire.codexPath": { "type": "string", "default": "", "description": "Path to the codex CLI. Empty = ~/.local/bin/codex, then the standalone install, then PATH." },
+        "campfire.hopCap": { "type": "number", "default": 4, "minimum": 0, "maximum": 20, "description": "Max agent-to-agent hand-offs per Dean message." },
+        "campfire.cwd": { "type": "string", "default": "", "description": "Working folder both agents may read. Empty = first workspace folder." }
+      }
+    }
+  },
+  "scripts": { "test": "node --test test/room.test.js" }
+}

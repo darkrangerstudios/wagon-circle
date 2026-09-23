@@ -1,0 +1,48 @@
+:root {
+  --claude: #d97757;
+  --codex: #3fa68a;
+  --dean: var(--vscode-button-background);
+  --line: var(--vscode-panel-border, rgba(128,128,128,.3));
+  --muted: var(--vscode-descriptionForeground);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; }
+#title { font-weight: 600; font-size: 1.1em; }
+#ids { color: var(--muted); font-size: .85em; font-family: var(--vscode-editor-font-family); overflow-wrap: anywhere; }
+#quota { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { font-size: .8em; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); }
+.pill.warn { border-color: var(--vscode-editorWarning-foreground); color: var(--vscode-editorWarning-foreground); }
+.pill.full { border-color: var(--vscode-editorError-foreground); color: var(--vscode-editorError-foreground); }
+.pill.dim, .dim { color: var(--muted); }
+.pill:empty { display: none; }
+main { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: min(760px, 88%); padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); border-left: 3px solid var(--line); background: var(--vscode-sideBar-background, transparent); }
+.msg .meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+.msg .who { font-weight: 600; font-size: .9em; }
+.msg .ts { color: var(--muted); font-size: .8em; }
+.msg .text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.msg pre.code { white-space: pre; overflow-x: auto; margin: 6px 0; padding: 8px; border-radius: 6px; font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.12)); }
+.from-dean { align-self: flex-end; border-left-color: var(--dean); }
+.from-claude { border-left-color: var(--claude); } .from-claude .who { color: var(--claude); }
+.from-codex { border-left-color: var(--codex); } .from-codex .who { color: var(--codex); }
+.from-system { align-self: center; max-width: 90%; background: transparent; border-style: dashed; color: var(--muted); font-size: .9em; }
+.kind-error { border-color: var(--vscode-editorError-foreground); color: var(--vscode-editorError-foreground); }
+.kind-history { opacity: .7; border-style: dotted; }
+.draft { opacity: .85; } .draft .who::after { content: ' · typing'; font-weight: 400; color: var(--muted); }
+footer { border-top: 1px solid var(--line); padding: 8px 16px 12px; display: grid; gap: 8px; }
+#chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#who { flex: 1; display: flex; gap: 10px; color: var(--muted); font-size: .85em; }
+.typing::before { content: '●'; margin-right: 4px; animation: pulse 1.2s infinite; }
+.t-claude::before { color: var(--claude); } .t-codex::before { color: var(--codex); }
+@keyframes pulse { 50% { opacity: .2; } }
+button { font: inherit; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 0; border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+button:disabled { opacity: .4; cursor: default; }
+#send { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+#send:hover { background: var(--vscode-button-hoverBackground); }
+#composer { display: flex; gap: 8px; align-items: stretch; }
+textarea { flex: 1; resize: vertical; min-height: 44px; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--line)); border-radius: 4px; padding: 6px 8px; }
+textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
+@media (prefers-reduced-motion: reduce) { .typing::before { animation: none; } }
