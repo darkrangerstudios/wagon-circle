@@ -4,7 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('input');
   const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Campfire' };
-  const drafts = {}; let busy = {}; let cost = 0;
+  const drafts = {}; let busy = {}; let cost = 0; let usage = null;
 
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
@@ -39,7 +39,9 @@
     const w = $('who'); w.textContent = '';
     for (const n of ['claude', 'codex']) if (busy[n]) w.appendChild(el('span', `typing t-${n}`, `${NAMES[n]} is thinking`));
     $('stop').disabled = !busy.claude && !busy.codex;
-    const c = $('cost'); if (c) c.textContent = cost ? `Claude $${cost.toFixed(3)}` : '';
+    const k = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    const c = $('cost'); if (c) c.textContent = cost ? `Claude $${cost.toFixed(3)}${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}` : '';
+    if (c) c.title = 'New tokens are billed at full price; cached tokens are re-read at a fraction of it.';
   }
 
   function when(sec) { return sec ? new Date(sec * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '?'; }
@@ -67,7 +69,7 @@
       busy = m.busy || {}; cost = m.cost || 0; renderQuota(m.quota); log.scrollTop = log.scrollHeight;
     } else if (m.type === 'message') { setDraft(m.entry.from, null); add(bubble(m.entry)); }
     else if (m.type === 'draft') setDraft(m.name, m.text);
-    else if (m.type === 'status') { busy[m.name] = m.busy; if (typeof m.cost === 'number') cost = m.cost; renderWho(); }
+    else if (m.type === 'status') { busy[m.name] = m.busy; if (typeof m.cost === 'number') cost = m.cost; if (m.usage) usage = m.usage; renderWho(); }
     else if (m.type === 'quota') renderQuota(m.quota);
     else if (m.type === 'notice') add(bubble({ from: 'system', kind: 'error', text: m.text, ts: Date.now() }));
   });

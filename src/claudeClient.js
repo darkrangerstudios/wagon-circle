@@ -48,6 +48,7 @@ class ClaudeClient {
       if (text) { w.blocks.push(text); w.partial = ''; w.onDelta(w.blocks.join('\n\n')); }
     } else if (m.type === 'result') {
       if (typeof m.total_cost_usd === 'number') this.totalCostUsd = m.total_cost_usd;
+      if (m.usage) this.lastUsage = { input: m.usage.input_tokens || 0, cacheWrite: m.usage.cache_creation_input_tokens || 0, cacheRead: m.usage.cache_read_input_tokens || 0, output: m.usage.output_tokens || 0 };
       if (m.session_id) this.sessionId = m.session_id;
       if (m.is_error) this._settle(new Error(m.result || m.subtype || 'Claude error'));
       else this._settle(null, (m.result || w.blocks.join('\n\n')).trim());

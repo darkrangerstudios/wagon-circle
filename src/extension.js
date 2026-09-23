@@ -107,7 +107,7 @@ class RoomSession {
     }
     this.room.on('message', (entry) => this.post({ type: 'message', entry }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
-    this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd }));
+    this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null }));
     this.room.on('changed', () => this.save());
     this.save();
     this.refreshQuota();
