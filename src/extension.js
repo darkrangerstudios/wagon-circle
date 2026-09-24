@@ -13,6 +13,7 @@ const attachments = require('./attachments');
 const commands = require('./commands');
 const diffs = require('./diffs');
 const ideContext = require('./ideContext');
+const claudeUsage = require('./claudeUsage');
 const { findClaude, atLeast } = require('./claudeBinary');
 
 let claudeBin = null; // resolved once per window: newest Claude Code CLI on the machine
@@ -134,8 +135,22 @@ class RoomSession {
     this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
     this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null }));
     this.room.on('changed', () => this.save());
+    this.room.on('message', (e) => { if (e.from === 'claude' || (e.from === 'system' && /^Claude/.test(e.text))) this.refreshClaudeUsage(); });
+    this.claudeExe = s.claude.path;
     this.save();
     this.refreshQuota();
+    this.refreshClaudeUsage(true);
+  }
+
+  // Claude plan usage via headless `/usage` (no model call, free). Throttled; refreshed after Claude replies.
+  async refreshClaudeUsage(force) {
+    if (!force && this.usageAt && Date.now() - this.usageAt < 45000) return;
+    this.usageAt = Date.now();
+    const u = await claudeUsage.fetch(this.claudeExe, this.meta.cwd);
+    if (!u) return;
+    this.claudeUsage = u;
+    this.post({ type: 'claudeUsage', usage: u });
+    this.postMeta();
   }
 
   async refreshQuota() {
@@ -184,7 +199,7 @@ class RoomSession {
     const codexModels = (this.codexModels || []).map((x) => ({ id: x.id, name: x.displayName, efforts: x.supportedReasoningEfforts.map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
     return {
       claude: { cli: v ? v.join('.') : '?', model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast, efforts: commands.CLAUDE_EFFORTS,
-        models: commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), fastOk: !!x.fast && atLeast(v, '2.1.205') })) },
+        models: commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') })) },
       codex: { model: m.codexModel || (codexModels[0] && codexModels[0].id) || null, effort: m.codexEffort || null, fast: !!m.codexFast, models: codexModels }
     };
   }
@@ -217,6 +232,9 @@ class RoomSession {
       case '/codex fast': m.codexFast = arg === 'on'; say(m.codexFast ? 'Codex fast mode on (priority tier): faster, uses more of your Codex quota.' : 'Codex fast mode off.'); break;
       case '/claude model': case '/claude effort': {
         const key = spec.cmd.endsWith('model') ? 'model' : 'effort';
+        const cat = commands.CLAUDE_CATALOG.find((x) => x.id === arg);
+        const blocked = key === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, cat.name);
+        if (blocked) { say(`${cat.name} isn't available right now: ${blocked}. Staying on ${m.claudeModel}.`); break; }
         if (key === 'model' && m.claudeFast && !this.claudeFastOk(arg)) { m.claudeFast = false; this.claude.setOptions({ fast: false }); say('Fast mode is Opus-only, so it is now off.'); }
         m[key === 'model' ? 'claudeModel' : 'claudeEffort'] = arg; this.claude.setOptions({ [key]: arg });
         say(`Claude ${key} set to ${arg}. It restarts on the same session${room.busy.claude ? ' after its current reply' : ''}, so it keeps its memory.`); break;
@@ -243,6 +261,7 @@ class RoomSession {
 
   postInit() {
     this.post({ type: 'ide', summary: ideContext.summary(ideSnapshot()) });
+    if (this.claudeUsage) this.post({ type: 'claudeUsage', usage: this.claudeUsage });
     this.post({ type: 'init', meta: this.meta, commands: this.cmdSpecs(), controls: this.room ? this.controls() : null, transcript: this.room ? this.room.state.transcript.map((e) => this.view(e)) : [], busy: this.room ? this.room.busy : {}, quota: this.quota, cost: this.claude ? this.claude.totalCostUsd : 0 });
   }
 

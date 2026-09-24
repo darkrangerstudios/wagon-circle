@@ -140,7 +140,7 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .mitem.sel { background: var(--vscode-list-activeSelectionBackground, var(--bubble)); color: var(--vscode-list-activeSelectionForeground, inherit); }
 .mlabel { font-family: var(--mono); white-space: nowrap; }
 .mdesc { color: var(--muted); font-size: .86em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pop { padding: 14px; max-width: 420px; right: auto; display: grid; gap: 12px; }
+.pop { padding: 14px; max-width: 420px; right: auto; display: grid; gap: 12px; max-height: 70vh; overflow-y: auto; }
 .pop h4 { margin: 0; display: flex; justify-content: space-between; align-items: baseline; font-size: 1em; }
 .pop h4 small { color: var(--muted); font-weight: 400; font-size: .8em; }
 .pop .lbl { font-size: .74em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 4px; }

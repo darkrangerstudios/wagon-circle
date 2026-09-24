@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.4.1';
+  const EXPECT = '0.4.2';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -16,7 +16,7 @@
   const log = $('log'), input = $('input');
   const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
   const GLYPH = { claude: '✳', codex: '>_' };
-  let busy = {}, cost = 0, usage = null, quota = null, meta = {}, specs = [], controls = null, ideSummary = null;
+  let busy = {}, cost = 0, usage = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
   const drafts = {}, act = {}, since = {};           // in-progress replies per agent
   const menu = { items: [], sel: 0, open: false };
@@ -181,6 +181,11 @@
       const p = el('span', `pill${w.usedPercent >= 100 ? ' full' : w.usedPercent >= 80 ? ' warn' : ''}`, `Codex ${span(w, fb)} ${Math.round(w.usedPercent)}%`);
       if (w.resetsAt) p.title = `Resets ${new Date(w.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`; box.appendChild(p);
     }
+    const cp = (label, v) => { if (!v) return; const p = el('span', `pill${v.pct >= 100 ? ' full' : v.pct >= 80 ? ' warn' : ''}`, `${label} ${Math.round(v.pct)}%`); if (v.resets) p.title = `Resets ${v.resets}`; box.appendChild(p); };
+    if (cusage) {
+      cp('Claude session', cusage.session); cp('Claude week', cusage.week);
+      for (const [name, v] of Object.entries(cusage.models || {})) if (v.pct >= 80) cp(`${name} week`, v);
+    }
     if (cost) {
       const p = el('span', 'pill', `Claude ≈$${cost.toFixed(2)} at API rates${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}`);
       p.title = 'Billed to your Claude plan, not charged. This is what the same tokens would cost on the API.'; box.appendChild(p);
@@ -197,8 +202,10 @@
     const models = el('div'); models.appendChild(el('div', 'lbl', 'Model'));
     for (const m of c.models) {
       const b = el('button', `opt${m.id === c.model ? ' on' : ''}`); const l = el('span', null, m.name || m.id);
-      if (m.note || m.available === false) l.appendChild(el('small', null, `  ${m.available === false ? `needs Claude Code ${m.minCli}+` : m.note}`));
-      b.appendChild(l); b.disabled = m.available === false;
+      const why = m.available === false ? `needs Claude Code ${m.minCli}+` : m.blocked || m.note;
+      if (why) l.appendChild(el('small', null, `  ${why}`));
+      b.appendChild(l); b.disabled = m.available === false || !!m.blocked;
+      if (m.blocked) b.title = m.blocked;
       b.addEventListener('click', () => { cmd(`/${name} model ${m.id}`); closePop(); }); models.appendChild(b);
     }
     pop.appendChild(models);
@@ -251,6 +258,7 @@
       renderWho(); renderQuota();
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
+    else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
     else if (m.type === 'meta') { meta = m.meta; specs = m.commands || specs; controls = m.controls || controls; renderChips(); }
     else if (m.type === 'ide') { ideSummary = m.summary; renderChips(); }
     else if (m.type === 'attached') { pending.push(m.att); renderTray(); }

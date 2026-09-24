@@ -6,7 +6,7 @@
 const CLAUDE_CATALOG = [
   { id: 'claude-opus-5-5', name: 'Opus 5.5', minCli: '2.1.280', fast: true, note: 'Most capable' },
   { id: 'claude-sonnet-5', name: 'Sonnet 5', minCli: '2.1.0', note: 'Fast and capable' },
-  { id: 'claude-fable-5-1', name: 'Fable 5.1', minCli: '2.1.251', note: 'Needs usage credits' },
+  { id: 'claude-fable-5-1', name: 'Fable 5.1', minCli: '2.1.251', note: 'Has its own weekly limit' },
   { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', minCli: '2.1.0', note: 'Quickest, cheapest' }
 ];
 const CLAUDE_MODELS = [...CLAUDE_CATALOG.map((m) => m.id), 'sonnet', 'opus', 'haiku'];
