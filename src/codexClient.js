@@ -8,6 +8,12 @@ const { toCodexInput } = require('./attachments');
 // Methods the room must never call, whatever a future caller asks for.
 const FORBIDDEN = new Set(['account/rateLimitResetCredit/consume', 'account/logout', 'account/login/start', 'thread/delete']);
 
+// These overrides belong only to the private room process, never the user's saved config.
+const DISABLED_FEATURES = ['apps', 'plugins', 'remote_plugin', 'hooks', 'multi_agent', 'skill_mcp_dependency_install'];
+const roomConfig = () => ({ features: Object.fromEntries(DISABLED_FEATURES.map(k => [k, false])), web_search: 'disabled' });
+const permissionError = (reason = 'this thread has not passed the permission checks') => Object.assign(new Error(`Codex room permissions could not be verified: ${reason}. Update the CLI or check managed settings; no room turn was started.`), { roomPermission: true });
+const record = x => !!x && typeof x === 'object' && !Array.isArray(x);
+
 const clip = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const base = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
 
@@ -35,11 +41,12 @@ class CodexClient extends EventEmitter {
   constructor({ exe, cwd, tools = [], log = () => {} }) {
     super();
     this.exe = exe; this.cwd = cwd; this.log = log; this.tools = tools;
+    this.verifiedThreads = new Set(); this.permissionEpoch = 0;
     this.nextId = 0; this.pending = new Map(); this.proc = null;
   }
 
   async start() {
-    this.proc = spawn(this.exe, ['app-server'], { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.proc = spawn(this.exe, ['app-server', ...DISABLED_FEATURES.flatMap(k => ['-c', `features.${k}=false`]), '-c', 'web_search="disabled"'], { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc.on('error', (e) => this._fail(e));
     this.proc.on('exit', (code, sig) => this._fail(new Error(`codex app-server exited (${code ?? sig})`)));
     this.proc.stderr.on('data', (d) => this.log(`codex stderr: ${String(d).slice(0, 400)}`));
@@ -49,6 +56,7 @@ class CodexClient extends EventEmitter {
   }
 
   _fail(err) {
+    this.permissionEpoch++; this.verifiedThreads.clear();
     for (const { reject } of this.pending.values()) reject(err);
     this.pending.clear();
     if (this.proc) { this.proc = null; this.emit('exit', err); }
@@ -108,19 +116,59 @@ class CodexClient extends EventEmitter {
     return r.data || [];
   }
 
-  async startThread(developerInstructions) {
-    const r = await this.request('thread/start', { ...this.safety(developerInstructions), ephemeral: false, ...(this.tools.length ? { dynamicTools: this.tools.map((t) => ({ type: 'function', ...t })) } : {}) });
-    return r.thread;
+  async _attach(method, params) {
+    // An empty mcp_servers table MERGES with inherited config. Disable each inherited server explicitly.
+    // Read config before every attachment so new project/user entries cannot slip into a resumed thread.
+    const epoch = ++this.permissionEpoch; this.verifiedThreads.clear();
+    let stage = 'configuration read';
+    try {
+      const { config } = await this.request('config/read', { cwd: this.cwd, includeLayers: false }, 20000);
+      if (!record(config) || !record(config.features) || !record(config.mcp_servers) ||
+          config.web_search !== 'disabled' || DISABLED_FEATURES.some(k => config.features[k] !== false)) throw permissionError('disabled features or web search could not be confirmed');
+      const overrides = { ...roomConfig(), mcp_servers: Object.fromEntries(Object.keys(config.mcp_servers).map(k => [k, { enabled: false }])) };
+      stage = method;
+      const r = await this.request(method, { ...params, cwd: this.cwd, approvalPolicy: 'never', sandbox: 'read-only', config: overrides }, 600000);
+      if (!r.thread || typeof r.thread.id !== 'string' || !r.thread.id || r.approvalPolicy !== 'never' ||
+          r.sandbox?.type !== 'readOnly' || r.sandbox.networkAccess !== false) throw permissionError('the thread did not return the required read-only sandbox and approval policy');
+      stage = 'MCP inventory check';
+      await this._verifyInventory(r.thread.id);
+      if (epoch !== this.permissionEpoch) throw permissionError('the process or attachment was stopped or replaced');
+      this.verifiedThreads.add(r.thread.id);
+      return r.thread;
+    } catch (e) {
+      this.stop();
+      // Config and CLI failures can contain personal paths/settings. Do not forward their raw payload.
+      throw e.roomPermission ? e : permissionError(`${stage} failed`);
+    }
   }
 
-  async forkThread(threadId, developerInstructions) {
-    const r = await this.request('thread/fork', { threadId, excludeTurns: true, ephemeral: false, ...this.safety(developerInstructions) }, 600000);
-    return r.thread;
+  async _verifyInventory(threadId) {
+    let cursor = null; const seen = new Set();
+    do {
+      const r = await this.request('mcpServerStatus/list', { threadId, limit: 100, cursor, detail: 'full' }, 20000);
+      if (!r || !Array.isArray(r.data) || !(r.nextCursor === null || typeof r.nextCursor === 'string')) throw permissionError('the CLI did not return a supported MCP inventory');
+      for (const server of r.data) {
+        // Zero tools alone is not enough: a server still starting may expose tools later.
+        if (!server || server.runtimeStatus !== 'disabled' || !record(server.tools) || Object.keys(server.tools).length ||
+            !Array.isArray(server.resources) || server.resources.length ||
+            !Array.isArray(server.resourceTemplates) || server.resourceTemplates.length) throw permissionError('an external MCP server is not confirmed disabled');
+      }
+      cursor = r.nextCursor;
+      if (cursor !== null && (!cursor || seen.has(cursor) || seen.size >= 100)) throw permissionError('MCP inventory pagination could not be completed');
+      seen.add(cursor);
+    } while (cursor !== null);
   }
 
-  async resumeThread(threadId) {
-    const r = await this.request('thread/resume', { threadId, excludeTurns: true, approvalPolicy: 'never', sandbox: 'read-only' }, 600000);
-    return r.thread;
+  startThread(developerInstructions) {
+    return this._attach('thread/start', { ...this.safety(developerInstructions), ephemeral: false, ...(this.tools.length ? { dynamicTools: this.tools.map((t) => ({ type: 'function', ...t })) } : {}) });
+  }
+
+  forkThread(threadId, developerInstructions) {
+    return this._attach('thread/fork', { threadId, excludeTurns: true, ephemeral: false, ...this.safety(developerInstructions) });
+  }
+
+  resumeThread(threadId) {
+    return this._attach('thread/resume', { threadId, excludeTurns: true });
   }
 
   async setName(threadId, name) {
@@ -146,7 +194,7 @@ class CodexClient extends EventEmitter {
     try { const r = await this.request('model/list', { limit: 50 }, 20000); return (r.data || []).filter((m) => !m.hidden); } catch (e) { this.log(`model/list: ${e.message}`); return []; }
   }
 
-  compact(threadId) { return this.request('thread/compact/start', { threadId }, 600000); }
+  compact(threadId) { if (!this.verifiedThreads.has(threadId)) return Promise.reject(permissionError()); return this.request('thread/compact/start', { threadId }, 600000); }
 
   async rateLimits() {
     try { return await this.request('account/rateLimits/read', {}, 20000); } catch (e) { this.log(`rateLimits: ${e.message}`); return null; }
@@ -154,6 +202,7 @@ class CodexClient extends EventEmitter {
 
   // Run one turn; resolves with the agent's text. onDelta streams partial text.
   runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}, attachments = [], opts = {}) {
+    if (!this.verifiedThreads.has(threadId)) return Promise.reject(permissionError());
     return new Promise((resolve, reject) => {
       let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map();
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
@@ -218,7 +267,7 @@ class CodexClient extends EventEmitter {
     try { await this.request('turn/interrupt', { threadId: t.threadId, turnId: t.turnId }, 10000); } catch (e) { this.log(`interrupt: ${e.message}`); }
   }
 
-  stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); } }
+  stop() { this.permissionEpoch++; this.verifiedThreads.clear(); if (this.proc) { this.proc.stdin.end(); this.proc.kill(); } }
 }
 
 module.exports = { CodexClient, FORBIDDEN, describeItem };

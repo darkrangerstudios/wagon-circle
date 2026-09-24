@@ -47,6 +47,7 @@ test('Claude: steering is refused once Stop is under way', () => {
 
 function codexWithFakeRpc() {
   const c = new CodexClient({ exe: 'unused', cwd: __dirname }); const calls = []; let started;
+  c.verifiedThreads.add('th'); // transport replay; permissions have their own suite
   c.request = (method, args) => { calls.push({ method, args }); return method === 'turn/start' ? new Promise((r) => { started = r; }) : Promise.resolve({}); };
   return { c, calls, start: (id) => started({ turn: { id } }) };
 }

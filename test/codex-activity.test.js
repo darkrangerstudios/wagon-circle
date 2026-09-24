@@ -13,6 +13,7 @@ test('describeItem maps Codex items to readable steps', () => {
 
 test('runTurn streams activity, reasoning summary and reply from notifications', async () => {
   const c = new CodexClient({ exe: 'none', cwd: '/tmp' });
+  c.verifiedThreads.add('TH'); // transport replay; permissions have their own suite
   c.request = async (method) => (method === 'turn/start' ? { turn: { id: 'T1' } } : {});
   const acts = []; let draft = '';
   const done = c.runTurn('TH', 'hi', (d) => { draft = d; }, (a) => acts.push(a));

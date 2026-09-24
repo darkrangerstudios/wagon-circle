@@ -280,7 +280,7 @@
     pop.appendChild(grid); mark();
     function read() { return Object.fromEntries(Object.entries(fields).map(([k2, i]) => [k2, Number(i.value)])); }
     pop.appendChild(el('small', 'note', 'Token and dollar limits are not offered: usage arrives only after a turn. Presets never change the model, fast mode or permissions.'));
-    pop.appendChild(el('small', 'note', 'Permissions: read-only for both agents. Tasks cover review and investigation; editing files, running tests or shell commands is not available in this version.'));
+    pop.appendChild(el('small', 'note', 'Permissions: read-only for both agents. Tasks cover review and investigation. Claude has no shell access; Codex can use its read-only sandbox for local inspection. Editing and development workflows are not supported in this version.'));
     const acts = el('div', 'actions');
     if (task && !['completed', 'stopped'].includes(task.status)) { const a = el('button', 'primary', 'Apply to this task'); a.addEventListener('click', () => { vscode.postMessage({ type: 'taskLimits', limits: read() }); closePop(); }); acts.appendChild(a); }
     const sv = el('button', 'link', 'Save as my defaults'); sv.title = 'New tasks start with these; tasks already running keep theirs';
@@ -322,7 +322,7 @@
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
     const perm = el('div'); perm.appendChild(el('div', 'lbl', 'What it can do here'));
-    perm.appendChild(el('small', 'note', name === 'claude' ? 'Read-only: Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers.' : 'Read-only sandbox: it can read and search the room folder, plus the room tools when its thread has them. No edits; every approval request is declined. No web or other MCP servers.'));
+    perm.appendChild(el('small', 'note', name === 'claude' ? 'Read-only: Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers.' : 'Read-only sandbox for local inspection, plus the room tools when its thread has them. Read access is not confined to the room folder. Every approval request is declined. Web search, connected apps and external MCP tools are disabled and checked before the thread is used.'));
     pop.appendChild(perm);
     const ws = el('div'); ws.appendChild(el('div', 'lbl', `Working session${c.session ? ` · ${String(c.session).slice(0, 8)}` : ''}${c.typed ? '' : ' · no typed requests'}`));
     const wseg = el('div', 'seg');

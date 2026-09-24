@@ -55,6 +55,7 @@ test('Claude: a refused call is an MCP error result; a call with no reply open i
 
 function codex() {
   const writes = []; const c = new CodexClient({ exe: 'unused', cwd: __dirname, tools: toolSpecs(['claude']) });
+  c.verifiedThreads.add('th'); // transport replay: attachment verification is covered in codex-permissions.test.js
   c.proc = { stdin: { write(s) { writes.push(JSON.parse(s)); } } };
   const call = (id, threadId) => c._onLine(JSON.stringify({ id, method: 'item/tool/call', params: { threadId, turnId: 't1', callId: 'c', tool: 'request_assistance', arguments: { to: 'claude', purpose: 'test', question: 'q' }, namespace: null } }));
   return { c, writes, call };
@@ -62,9 +63,18 @@ function codex() {
 
 test('Codex: new threads carry the tools; a tool call reaches the running turn on that thread only', async () => {
   const { c, writes, call } = codex(); const sent = [];
-  c.request = (method, params) => { sent.push({ method, params }); return method === 'thread/start' ? Promise.resolve({ thread: { id: 'th' } }) : new Promise(() => {}); };
+  c.request = (method, params) => {
+    sent.push({ method, params });
+    if (method === 'config/read') return Promise.resolve({ config: {
+      features: Object.fromEntries(['apps', 'plugins', 'remote_plugin', 'hooks', 'multi_agent', 'skill_mcp_dependency_install'].map(k => [k, false])),
+      web_search: 'disabled', mcp_servers: {},
+    } });
+    if (method === 'mcpServerStatus/list') return Promise.resolve({ data: [], nextCursor: null });
+    if (method === 'thread/start') return Promise.resolve({ thread: { id: 'th' }, approvalPolicy: 'never', sandbox: { type: 'readOnly', networkAccess: false } });
+    return new Promise(() => {});
+  };
   await c.startThread('brief');
-  assert.deepStrictEqual(sent[0].params.dynamicTools.map((t) => [t.type, t.name]), [['function', 'request_assistance'], ['function', 'read_session_history'], ['function', 'finish_task']]);
+  assert.deepStrictEqual(sent.find(x => x.method === 'thread/start').params.dynamicTools.map((t) => [t.type, t.name]), [['function', 'request_assistance'], ['function', 'read_session_history'], ['function', 'finish_task']]);
   c.runTurn('th', 'go', () => {}, () => {}, [], { onTool: (name, args) => ({ ok: true, text: `accepted for ${args.to}` }) });
   call(7, 'th'); await tick(); await tick();
   assert.deepStrictEqual(writes.find((w) => w.id === 7).result, { contentItems: [{ type: 'inputText', text: 'accepted for claude' }], success: true });
