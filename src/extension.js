@@ -597,6 +597,8 @@ function activate(context) {
     for (const p of r.providers) log(`setup: ${line(p)} [${p.executable}]`);
     const msg = `Wagon Wheel on ${r.executionHost}: ${r.providers.map(line).join('; ')}. ${r.note}`;
     const bad = r.providers.filter((p) => p.installation !== 'available' || p.authentication !== 'present');
+    // The walkthrough step completes only on a passing check, not on running the command.
+    vscode.commands.executeCommand('setContext', 'wagonWheel.setupOk', !bad.length && r.providers.length > 0);
     if (!bad.length) vscode.window.showInformationMessage(msg);
     else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide)); }
   }));

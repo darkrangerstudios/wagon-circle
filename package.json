@@ -146,7 +146,7 @@
               "markdown": "walkthrough/setup.md"
             },
             "completionEvents": [
-              "onCommand:wagonWheel.checkSetup"
+              "onContext:wagonWheel.setupOk"
             ]
           },
           {
