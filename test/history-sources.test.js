@@ -67,3 +67,40 @@ test('Include earlier history is the human\'s toggle: off reads only what is sai
   assert.match((await h.read('codex', { source: 'claude' })).text, /No text passages/); // w1 (t=3) is earlier
   assert.strictEqual(h.describe().all.claude, false);
 });
+
+// Codex final review of 7791b28, findings 1 and 3.
+test('a replaced reader session loses the grant; the human must share again (sync is not consent)', async () => {
+  const { h, setWork } = rig();
+  h.share('claude', true);
+  assert.strictEqual((await h.read('codex', { source: 'claude' })).ok, true);
+  setWork({ claude: { sessionId: 'cl-work' }, codex: { sessionId: 'cx-replacement' } });
+  const r = await h.read('codex', { source: 'claude' });
+  assert.strictEqual(r.ok, false); assert.doesNotMatch(r.text, /Claude working note/);
+  h.share('claude', true); // renewed consent covers the new reader session
+  assert.match((await h.read('codex', { source: 'claude' })).text, /Claude working note/);
+});
+
+test('a fresh session getting its first id keeps the grant it was given', async () => {
+  const saved = {}; let work = { claude: { sessionId: 'cl-work' }, codex: { sessionId: null } };
+  const h = new HistorySources({ saved, working: () => work, makeReader: ({ sessionId }) => async () => ({ messages: pages[sessionId] || [], cursor: null }) });
+  h.share('claude', true);
+  work = { claude: { sessionId: 'cl-work' }, codex: { sessionId: 'cx-first' } };
+  assert.match((await h.read('codex', { source: 'claude' })).text, /Claude working note/);
+});
+
+test('continuation cursors stay valid across reads of an unchanged source', async () => {
+  const long = 'PRIVATE-' + 'x'.repeat(13000);
+  const h = new HistorySources({ saved: {}, working: () => ({ claude: { sessionId: 'a' }, codex: { sessionId: 'b' } }), makeReader: () => async () => ({ messages: [{ id: 'm', role: 'user', text: long, timestamp: 1 }], cursor: null }) });
+  h.share('claude', true);
+  const first = await h.read('codex', { source: 'claude' });
+  const cursor = first.text.match(/cursor "([^"]+)"/)[1];
+  const second = await h.read('codex', { source: 'claude', cursor });
+  assert.strictEqual(second.ok, true); assert.match(second.text, /from char 12000/);
+});
+
+test('rooms saved before grants keep their shares, granted to the sessions they have now', async () => {
+  const saved = { seq: 1, sources: [{ id: 'h1', provider: 'codex', sessionId: 'th-old', title: 'x' }], share: { claude: true }, from: {} };
+  const h = new HistorySources({ saved, working: () => ({ claude: { sessionId: 'cl-work' }, codex: { sessionId: 'cx' } }), makeReader: ({ sessionId }) => async () => ({ messages: pages[sessionId] || [], cursor: null }) });
+  assert.strictEqual((await h.read('codex', { source: 'claude' })).ok, true);
+  assert.strictEqual((await h.read('claude', { source: 'h1' })).ok, true);
+});

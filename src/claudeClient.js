@@ -65,6 +65,7 @@ class ClaudeClient {
     else if (msg.method === 'tools/call') {
       const w = this.waiter, p = msg.params || {};
       let r; try { r = w && w.onTool ? await w.onTool(p.name, p.arguments || {}) : { ok: false, text: 'Not available: no reply is open.' }; } catch (e) { r = { ok: false, text: `Failed: ${e.message}` }; }
+      if (w && this.waiter !== w) r = { ok: false, text: 'Not delivered: that reply already ended.' }; // Stopped or finished while the tool ran
       result = { content: [{ type: 'text', text: String(r.text || '') }], ...(r.ok ? {} : { isError: true }) };
     }
     if (this.proc !== proc) return; // answered by a process we already replaced

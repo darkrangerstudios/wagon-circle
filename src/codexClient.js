@@ -82,7 +82,10 @@ class CodexClient extends EventEmitter {
     const p = m.params || {}; const t = this.currentTurn;
     let r;
     if (!t || !t.onTool || t.threadId !== p.threadId) r = { ok: false, text: 'Not available: no turn is open on this thread.' };
-    else { try { r = await t.onTool(p.tool, p.arguments || {}); } catch (e) { r = { ok: false, text: `Failed: ${e.message}` }; } }
+    else {
+      try { r = await t.onTool(p.tool, p.arguments || {}); } catch (e) { r = { ok: false, text: `Failed: ${e.message}` }; }
+      if (this.currentTurn !== t || t.cancelled) r = { ok: false, text: 'Not delivered: that turn already ended.' }; // Stopped or finished while the tool ran
+    }
     try { this._write({ id: m.id, result: { contentItems: [{ type: 'inputText', text: String(r.text || '') }], success: !!r.ok } }); } catch (e) { this.log(`tool reply: ${e.message}`); }
   }
 

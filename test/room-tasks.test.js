@@ -214,3 +214,69 @@ test('read_session_history goes to the host reader with the real requester and n
   denied.postFromHuman('go'); await settle();
   assert.ok(denied.state.transcript.some((e) => /not available/.test(e.text)));
 });
+
+// Codex final review of 7791b28, findings 4, 5 and 6.
+test('finish_task from an old task\'s turn cannot complete a newer task', () => {
+  const q = new Room({ agents: { claude: typed('x'), codex: typed('y') } }); q.run = 1;
+  const t1 = q.tasks.start({ objective: 'old', originId: 1, lead: 'claude', run: 1 });
+  const oldctx = { run: 1, taskId: t1.id, generation: t1.generation };
+  q.tasks.finish('claude', 'old complete', oldctx);
+  q.run = 2; const t2 = q.tasks.start({ objective: 'new', originId: 2, lead: 'claude', run: 2 });
+  const r = q._onTool('claude', 'finish_task', { summary: 'late' }, oldctx);
+  assert.strictEqual(r.ok, false); assert.strictEqual(t2.status, 'active');
+  assert.strictEqual(q._onTool('claude', 'finish_task', { summary: 'no task at start' }, { run: 1, taskId: null, generation: 0 }).ok, false);
+  assert.strictEqual(q._onTool('claude', 'finish_task', { summary: 'mine' }, { run: 2, taskId: null, generation: 0 }).ok, true);
+});
+
+test('a history read that resolves after Stop is not delivered', async () => {
+  let release;
+  const r = new Room({ agents: { claude: typed('x'), codex: typed('y') }, readHistory: () => new Promise((res) => { release = res; }) }); r.run = 1;
+  const pending = r._onTool('claude', 'read_session_history', { source: 'h1' }, { run: 1, taskId: null, generation: 0 });
+  r.stopAll(); release({ ok: true, text: 'PRIVATE-LATE' });
+  const out = await pending;
+  assert.strictEqual(out.ok, false); assert.doesNotMatch(out.text, /PRIVATE/);
+});
+
+test('work stopped by the time limit is redelivered once after more time and Resume; the request is answered once', async () => {
+  let t = 0; const now = () => t; let codexCalls = 0, hang = true;
+  const claude = typed(async (text, n, tool) => { if (n === 1) { await tool(...ask('codex', 'long check')); return 'asked'; } return 'merged'; });
+  const codex = { typed: true, send: (text) => { codexCalls += 1; if (hang) return new Promise((res, rej) => { codex.stopIt = () => { const e = new Error('stopped'); e.stopped = true; rej(e); }; }); return Promise.resolve(`checked: ${/long check/.test(text)}`); }, interrupt() { codex.stopIt(); } };
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, now });
+  room.tasks.setDefaults({ minutes: 1 });
+  room.postFromHuman('review'); await settle();
+  t = 61e3; room.tick(); await settle();
+  const task = room.tasks.get('t1');
+  assert.deepStrictEqual([task.status, task.requests[0].status, room.held.has('codex')], ['exhausted', 'open', true]);
+  hang = false;
+  room.setTaskLimits({ minutes: 5 }); room.resumeTask(); await settle();
+  assert.strictEqual(codexCalls, 2);
+  assert.strictEqual(task.requests[0].status, 'answered');
+  assert.ok(claude.inbox.some((x) => /answer to your request r1/.test(x) && /checked: true/.test(x)));
+});
+
+test('a human Stop still cancels for good: nothing is held or redelivered', async () => {
+  const codex = { typed: true, send: () => new Promise((res, rej) => { codex.stopIt = () => { const e = new Error('stopped'); e.stopped = true; rej(e); }; }), interrupt() { codex.stopIt(); } };
+  const claude = typed(async (text, n, tool) => { await tool(...ask('codex', 'x')); return 'asked'; });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('review'); await settle();
+  room.stopAll(); await settle();
+  assert.strictEqual(room.held.size, 0);
+  assert.strictEqual(room.tasks.get('t1').requests[0].status, 'cancelled');
+});
+
+test('reload reopens a request that was cut off mid-delivery and holds it for the human', async () => {
+  const claude = typed(async (text, n, tool) => { if (n === 1) await tool(...ask('codex', 'check F')); return 'asked'; });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: () => new Promise(() => {}) } } });
+  room.postFromHuman('review'); await settle();
+  assert.strictEqual(room.tasks.get('t1').requests[0].status, 'delivered');
+  const saved = JSON.parse(JSON.stringify(room.state));
+  const codex = typed('F ok');
+  const again = new Room({ humanName: 'Dean', state: saved, agents: { claude: typed('merged'), codex } });
+  assert.strictEqual(again.tasks.get('t1').requests[0].status, 'open');
+  assert.ok(again.held.has('codex'));
+  assert.ok(again.state.transcript.some((e) => /Reopened with r1 for Codex/.test(e.text)));
+  await settle(); assert.strictEqual(codex.inbox.length, 0, 'nothing starts on its own');
+  again.resumeTask(); await settle();
+  assert.match(codex.inbox[0], /check F/);
+  assert.strictEqual(again.tasks.get('t1').requests[0].status, 'answered');
+});

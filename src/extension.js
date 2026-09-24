@@ -76,7 +76,8 @@ class RoomSession {
     fs.writeFileSync(this.file, JSON.stringify({ meta: this.meta, state: this.room ? this.room.state : this.state }, null, 1));
   }
 
-  async boot({ forkFrom = null, claudeFrom = null } = {}) {
+  // shareSeed: { codex, claude } — the human agreed to give the OTHER agent that side's recent messages.
+  async boot({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
     const s = settings();
     this.meta.humanName = s.userName;
     const human = s.userName;
@@ -102,7 +103,8 @@ class RoomSession {
       // app-server takes typed tools only on thread/start, so a forked thread keeps the prose hand-off rule.
       const t = await this.codex.forkThread(forkFrom.id, roomPrompt('codex', 'claude', human));
       this.meta.codexThreadId = t.id; this.meta.forkedFrom = forkFrom.id; this.meta.codexTyped = false;
-      try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; }
+      if (shareSeed.codex) { try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; } }
+      else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). Codex keeps its memory; nothing from it was shared with Claude. The original thread is untouched.`];
     } else {
       const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
       this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
@@ -111,12 +113,13 @@ class RoomSession {
     this.codexModels = await this.codex.listModels();
 
     // A forked Claude session keeps its full memory (--resume --fork-session); Codex gets its recent text, read from disk.
-    let claudeSeed = null;
-    if (claudeFrom && !this.meta.claudeSessionId) {
+    let claudeSeed = null; const claudeFork = claudeFrom && !this.meta.claudeSessionId ? claudeFrom.id : null;
+    if (claudeFork) {
       this.meta.claudeForkedFrom = claudeFrom.id;
-      try { claudeSeed = claudeHistory.recentMessages(claudeFrom.path, 8); } catch (e) { log(`claude history read failed: ${e.message}`); claudeSeed = []; }
+      if (shareSeed.claude) { try { claudeSeed = claudeHistory.recentMessages(claudeFrom.path, 8); } catch (e) { log(`claude history read failed: ${e.message}`); claudeSeed = []; } }
+      else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; nothing from it was shared with Codex. The original session is untouched.`];
     }
-    this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true), tools: toolSpecs(['codex']), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeSeed ? claudeFrom.id : null, addDirs: [this.attDir], log });
+    this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true), tools: toolSpecs(['codex']), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeFork, addDirs: [this.attDir], log });
 
     const codex = this.codex, meta = this.meta;
     const agents = {
@@ -130,6 +133,7 @@ class RoomSession {
       makeReader: ({ provider, sessionId, file }) => provider === 'codex' ? codexHistoryReader(this.codex)
         : async (args) => { const f = file || claudeHistory.fileFor(sessionId); if (!f) throw new Error('that Claude session has no saved file yet'); return claudeHistoryReader(f, claudeHistory.ROOT)(args); } });
     this.room = new Room({ agents, hopCap: m.hopCap, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args) });
+    for (const t of this.pendingNotes || []) this.room.note(t); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
     if (seed) {
       this.room.seedHistory(seed, 'codex');
@@ -549,11 +553,20 @@ function activate(context) {
       { title: 'Wagon Circle (2/2): Claude side', placeHolder: 'Fork a Claude session into the room? The original is never written to.', matchOnDetail: true });
     if (!cl) return;
     if (!cx.t && !cl.s) { vscode.commands.executeCommand('wagonCircle.newRoom'); return; }
+    // Sharing a conversation's recent messages with the OTHER agent is its own choice, off by default.
+    const shareSeed = {};
+    for (const [side, picked, other] of [['codex', cx.t, 'Claude'], ['claude', cl.s, 'Codex']]) {
+      if (!picked) continue;
+      const q = await vscode.window.showQuickPick([{ label: 'Keep it private', description: `${other} does not see it`, share: false }, { label: `Share its last 8 exchanges with ${other}`, description: 'read from disk, no model call', share: true }],
+        { title: `The ${side === 'codex' ? 'Codex thread' : 'Claude session'} you picked is forked for ${side === 'codex' ? 'Codex' : 'Claude'}. Show its recent messages to ${other} too?` });
+      if (!q) return;
+      shareSeed[side] = q.share;
+    }
     const name = `with ${[cx.t && cx.label, cl.s && cl.label].filter(Boolean).map((l) => l.slice(0, 30)).join(' + ')}`;
     const meta = newMeta(name);
     // claude --resume only finds a session from its own project folder, so a forked Claude session sets the room's folder.
     if (cl.s) meta.cwd = cl.s.cwd;
-    await openSession(context, new RoomSession(context, meta, null), { forkFrom: cx.t || null, claudeFrom: cl.s || null });
+    await openSession(context, new RoomSession(context, meta, null), { forkFrom: cx.t || null, claudeFrom: cl.s || null, shareSeed });
   }));
 
   // First-run check (setup.js): CLI versions and sign-in on this host. No model calls, no installs, no logins.

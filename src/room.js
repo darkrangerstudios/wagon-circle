@@ -73,6 +73,21 @@ class Room extends EventEmitter {
     this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
     this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
     this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
+    this._reconcile();
+  }
+
+  // After a reload no turn is running, so a request marked delivered was cut off with its turn: reopen it, make its
+  // entry deliverable again and hold the recipient until the human continues. Nothing starts on its own.
+  _reconcile() {
+    const cut = this.tasks._requests().filter((r) => r.status === 'delivered');
+    if (!cut.length) return;
+    for (const r of cut) {
+      const e = this.state.transcript.find((x) => x.kind === 'request' && x.request === r.id);
+      if (e) { unmarkKnown(e, r.to); const at = this.state.transcript.indexOf(e); this.state.cursors[r.to] = Math.min(this.state.cursors[r.to], at); }
+      r.status = 'open'; this.held.add(r.to);
+    }
+    this.run = Math.max(this.run, this.cancelledThrough + 1); // the recovered work gets a live run of its own
+    this.note(`Reopened with ${cut.map((r) => `${r.id} for ${LABEL[r.to]}`).join(', ')} unanswered. Resume the task (or message the agent) to continue.`);
   }
 
   _taskChanged() { this.emit('task', this.tasks.summary()); this.emit('changed', this.state); }
@@ -103,7 +118,7 @@ class Room extends EventEmitter {
     const entry = this._append('human', text, { to: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
     this.lastHuman = { id: entry.id, text };
     if (this.tasks.noteHuman(text)) this._taskChanged();
-    if (this.tasks.mode === 'work' && !this.tasks.active()) { this.tasks.start({ objective: text, originId: entry.id, lead: targets[0] }); this._taskChanged(); }
+    if (this.tasks.mode === 'work' && !this.tasks.active()) { this.tasks.start({ objective: text, originId: entry.id, lead: targets[0], run }); this._taskChanged(); }
     if (targets.length > 1 && this.bothMode === 'sequential') this._inTurn(targets, run);
     else for (const t of targets) this.deliver(t, run);
     return targets;
@@ -208,15 +223,12 @@ class Room extends EventEmitter {
     } catch (e) {
       if (e.stopped) {
         this.note(`${LABEL[name]} stopped.`);
-        if (this._live(run)) this.tasks.reopen(name); // interrupted by a task limit, not by Stop: keep the request
+        // Interrupted by a task limit, not by the human's Stop: the turn's input is undelivered again and waits
+        // (held) until the human adds allowance and resumes. A human Stop cancels it for good.
+        if (this._live(run)) { this._undeliver(name, fresh, turnStart); this.held.add(name); this._taskChanged(); }
       } else {
         // The agent may never have received it: make it deliverable again (a repeat beats a silent loss).
-        // Steers accepted during the failed turn may have died with it too.
-        const steered = this.state.transcript.slice(turnStart).filter((x) => x.kind === 'steer' && x.steer.includes(name));
-        for (const x of fresh.concat(steered)) unmarkKnown(x, name);
-        const at = this.state.transcript.indexOf(fresh[0]);
-        if (at >= 0) this.state.cursors[name] = Math.min(this.state.cursors[name], at);
-        this.tasks.reopen(name);
+        this._undeliver(name, fresh, turnStart);
         this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
       }
     } finally {
@@ -224,6 +236,16 @@ class Room extends EventEmitter {
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
     }
+  }
+
+  // A turn that did not complete: its input (and steers accepted during it) becomes deliverable again, and the
+  // requests it carried go back to open under their original ids.
+  _undeliver(name, fresh, turnStart) {
+    const steered = this.state.transcript.slice(turnStart).filter((x) => x.kind === 'steer' && x.steer.includes(name));
+    for (const x of fresh.concat(steered)) unmarkKnown(x, name);
+    const at = this.state.transcript.indexOf(fresh[0]);
+    if (at >= 0) this.state.cursors[name] = Math.min(this.state.cursors[name], at);
+    this.tasks.reopen(name);
   }
 
   // Task work that may not start now waits, undelivered, until the human resumes or adds allowance.
@@ -253,13 +275,16 @@ class Room extends EventEmitter {
       return r;
     }
     if (tool === 'finish_task') {
-      const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary);
+      const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary, ctx);
       if (r.ok) { this.note(`Task ${t.id} finished by ${LABEL[name]}: ${t.summary || ''}`); this._taskChanged(); }
       return r;
     }
     if (tool === 'read_session_history') {
       if (!this.readHistory) return { ok: false, text: 'Session history sharing is not available in this room.' };
-      return Promise.resolve(this.readHistory(name, args || {})).catch((e) => ({ ok: false, text: `Not available: ${e.message}` }));
+      // Re-checked after the read: a result that lands after Stop (or after the turn's task moved on) is dropped.
+      const stale = () => !this._live(ctx.run) || (ctx.taskId && (!this.tasks.get(ctx.taskId) || this.tasks.get(ctx.taskId).generation !== ctx.generation));
+      return Promise.resolve(this.readHistory(name, args || {})).catch((e) => ({ ok: false, text: `Not available: ${e.message}` }))
+        .then((r) => (stale() ? { ok: false, text: `Not delivered: ${this.human} pressed Stop.` } : r));
     }
     return { ok: false, text: `Unknown tool ${tool}.` };
   }
@@ -267,8 +292,9 @@ class Room extends EventEmitter {
   pauseTask() { if (this.tasks.pause('human')) { this.note(`Task paused by ${this.human}. Running turns finish; nothing new starts.`); this._taskChanged(); } }
 
   resumeTask() {
-    if (!this.tasks.resume('human')) return;
-    this.heldNoted = null; this.note(`Task resumed by ${this.human}.`); this._taskChanged();
+    const resumed = this.tasks.resume('human');
+    if (!resumed && !this.held.size) return;
+    this.heldNoted = null; if (resumed) this.note(`Task resumed by ${this.human}.`); this._taskChanged();
     const held = [...this.held]; this.held.clear();
     for (const n of held) this.deliver(n, this.run);
   }

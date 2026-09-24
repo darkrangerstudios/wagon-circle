@@ -19,9 +19,13 @@ class HistorySources {
   constructor({ saved, makeReader, working, now = Date.now }) {
     this.saved = saved; this.makeReader = makeReader; this.working = working; this.now = now;
     saved.from = saved.from || {};
+    // Consent is given to the readers' sessions as they are when the human shares (epochs), not to their labels.
+    const legacy = !saved.grants; // saved before grants existed: its shares were given to the sessions of that time
+    saved.epoch = saved.epoch || {}; saved.grants = saved.grants || {};
     saved.seq = saved.seq || 0; saved.sources = saved.sources || []; saved.share = saved.share || { claude: false, codex: false };
-    this.history = new SessionHistory(); this.bound = {};
+    this.history = new SessionHistory(); this.bound = {}; this.policy = {};
     this.sync();
+    if (legacy) { for (const a of AGENTS) if (saved.share[a]) this._grant(a); for (const x of saved.sources) this._grant(x.id); this.sync(); }
   }
 
   // Bind what changed; a new binding generation revokes every earlier grant and cursor for that label.
@@ -31,14 +35,33 @@ class HistorySources {
       const sid = (w[a] && w[a].sessionId) || `none:${a}`;
       if (this.bound[a] !== sid) {
         if (this.bound[a] !== undefined && this.saved.share[a]) { this.saved.share[a] = false; delete this.saved.from[a]; } // a new session starts private
+        // A real session replaced by another real one is a new reader: grants given to the old one do not carry
+        // over. A fresh session getting its first id (none -> id) is the same reader.
+        if (this.bound[a] !== undefined && !String(this.bound[a]).startsWith('none:')) this.saved.epoch[a] = (this.saved.epoch[a] || 0) + 1;
+        this.policy = {}; // bind() revokes this label as a reader everywhere: re-apply every policy below
         this.history.bind(a, { provider: a, sessionId: sid, readPage: w[a] && w[a].sessionId ? this.makeReader({ provider: a, ...w[a] }) : async () => { throw new Error(`${NAME[a]} has no working session yet`); } });
         this.bound[a] = sid;
       }
     }
-    for (const s of this.saved.sources) if (this.bound[s.id] !== s.sessionId) { this.history.bind(s.id, { provider: s.provider, sessionId: s.sessionId, readPage: this.makeReader(s) }); this.bound[s.id] = s.sessionId; }
+    for (const s of this.saved.sources) if (this.bound[s.id] !== s.sessionId) { this.policy = {}; this.history.bind(s.id, { provider: s.provider, sessionId: s.sessionId, readPage: this.makeReader(s) }); this.bound[s.id] = s.sessionId; }
     const after = (id) => (Number.isFinite(this.saved.from[id]) ? this.saved.from[id] : null);
-    for (const a of AGENTS) this.history.configure(a, { enabled: !!this.saved.share[a], readers: AGENTS.filter((x) => x !== a), after: after(a) });
-    for (const s of this.saved.sources) this.history.configure(s.id, { enabled: true, readers: [...AGENTS], after: after(s.id) });
+    // Readers whose session is still the one the human granted.
+    const granted = (id) => AGENTS.filter((r) => r !== id && this.saved.grants[id] && this.saved.grants[id][r] === (this.saved.epoch[r] || 0));
+    for (const a of AGENTS) this._configure(a, { enabled: !!this.saved.share[a], readers: granted(a), after: after(a) });
+    for (const s of this.saved.sources) this._configure(s.id, { enabled: true, readers: granted(s.id), after: after(s.id) });
+  }
+
+  // Reconfigure only on a real policy change: every configure bumps the policy revision and invalidates cursors.
+  _configure(id, policy) {
+    const key = JSON.stringify(policy);
+    if (this.policy[id] === key) return;
+    this.history.configure(id, policy); this.policy[id] = key;
+  }
+
+  // The human's grant: every current reader session (other than the source's own agent) may read this source.
+  _grant(id) {
+    this.sync(); // settle session changes first, so the grant goes to the sessions that exist now
+    this.saved.grants[id] = Object.fromEntries(AGENTS.filter((r) => r !== id).map((r) => [r, this.saved.epoch[r] || 0]));
   }
 
   add({ provider, sessionId, title, file = null, allHistory = true }) {
@@ -46,20 +69,20 @@ class HistorySources {
     const dup = this.saved.sources.find((s) => s.provider === provider && s.sessionId === sessionId);
     if (dup) return dup;
     const s = { id: `h${++this.saved.seq}`, provider, sessionId, title: String(title || sessionId).slice(0, 80), file };
-    this.saved.sources.push(s); this.saved.from[s.id] = allHistory ? null : this.now(); this.sync();
+    this.saved.sources.push(s); this.saved.from[s.id] = allHistory ? null : this.now(); this._grant(s.id); this.sync();
     return s;
   }
 
   remove(id) {
     const i = this.saved.sources.findIndex((s) => s.id === id); if (i < 0) return false;
-    this.saved.sources.splice(i, 1); delete this.saved.from[id];
-    this.history.configure(id, { enabled: false, readers: [] }); delete this.bound[id]; // future reads refused
+    this.saved.sources.splice(i, 1); delete this.saved.from[id]; delete this.saved.grants[id];
+    this.history.configure(id, { enabled: false, readers: [] }); delete this.bound[id]; delete this.policy[id]; // future reads refused
     return true;
   }
 
   share(agent, on, { allHistory = true } = {}) {
     this.saved.share[agent] = !!on;
-    if (on) this.saved.from[agent] = allHistory ? null : this.now();
+    if (on) { this.saved.from[agent] = allHistory ? null : this.now(); this._grant(agent); } else delete this.saved.grants[agent];
     this.sync();
   }
 
@@ -75,8 +98,9 @@ class HistorySources {
   list(requester) {
     const out = [];
     const span = (id) => (this.allHistory(id) ? 'all history' : `from ${new Date(this.saved.from[id]).toISOString().slice(0, 16).replace('T', ' ')} on`);
-    for (const a of AGENTS) if (a !== requester && this.saved.share[a]) out.push({ source: a, label: `${NAME[a]}'s working session (${span(a)})`, provider: a });
-    for (const s of this.saved.sources) out.push({ source: s.id, label: `${KIND[s.provider]} "${s.title}" (${span(s.id)})`, provider: s.provider });
+    const may = (id) => this.saved.grants[id] && this.saved.grants[id][requester] === (this.saved.epoch[requester] || 0);
+    for (const a of AGENTS) if (a !== requester && this.saved.share[a] && may(a)) out.push({ source: a, label: `${NAME[a]}'s working session (${span(a)})`, provider: a });
+    for (const s of this.saved.sources) if (may(s.id)) out.push({ source: s.id, label: `${KIND[s.provider]} "${s.title}" (${span(s.id)})`, provider: s.provider });
     return out;
   }
 

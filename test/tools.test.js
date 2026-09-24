@@ -73,3 +73,19 @@ test('Codex: other server requests are still declined', () => {
   c._onLine(JSON.stringify({ id: 9, method: 'item/commandExecution/requestApproval', params: {} }));
   assert.ok(writes.find((w) => w.id === 9).error);
 });
+
+test('a tool result that resolves after the reply ended is not handed to the model (both clients)', async () => {
+  const { c, writes, mcp } = claude(); let release;
+  const pending = c.send('go', () => {}, () => {}, [], () => new Promise((r) => { release = r; }));
+  mcp(5, 'tools/call', { name: 'read_session_history', arguments: { source: 'h1' } }); await tick();
+  c._onLine(JSON.stringify({ type: 'result', result: 'ended' })); await pending;
+  release({ ok: true, text: 'PRIVATE-LATE' }); await tick(); await tick();
+  assert.doesNotMatch(JSON.stringify(reply(writes, 'q5')), /PRIVATE/);
+  const x = codex(); let rel2;
+  x.c.request = (m) => (m === 'turn/start' ? new Promise(() => {}) : Promise.resolve({}));
+  x.c.runTurn('th', 'go', () => {}, () => {}, [], { onTool: () => new Promise((r) => { rel2 = r; }) });
+  x.call(11, 'th'); await tick();
+  x.c.currentTurn.cancelled = true; rel2({ ok: true, text: 'PRIVATE-LATE' }); await tick(); await tick();
+  const w = x.writes.find((m) => m.id === 11);
+  assert.strictEqual(w.result.success, false); assert.doesNotMatch(JSON.stringify(w), /PRIVATE/);
+});

@@ -35,8 +35,8 @@ class TaskLedger {
   usedMs(t) { return t.used.activeMs + (t.used.since != null ? this.now() - t.used.since : 0); }
   _halt(t, status) { t.used.activeMs = this.usedMs(t); t.used.since = null; t.status = status; }
 
-  start({ objective, originId, lead }) {
-    const t = { id: `t${++this.state.seq.task}`, objective: clip(objective, 200), originId, lead, status: 'active', generation: 1,
+  start({ objective, originId, lead, run = null }) {
+    const t = { id: `t${++this.state.seq.task}`, objective: clip(objective, 200), originId, lead, run, status: 'active', generation: 1,
       created: this.now(), limits: { ...this.defaults }, used: { turns: 0, activeMs: 0, since: this.now() }, requests: [], summary: null, log: [] };
     this.tasks.push(t); this._log(t, lead, `started: ${t.objective}`);
     return t;
@@ -88,7 +88,7 @@ class TaskLedger {
       return { ok: true, request: r, text: this._accepted(r) };
     }
 
-    const t = this.active() || this.start({ objective: ctx.objective, originId: ctx.originId, lead: from });
+    const t = this.active() || this.start({ objective: ctx.objective, originId: ctx.originId, lead: from, run: ctx.run });
     this.checkTime();
     if (t.status === 'paused') return deny(`Not sent: task ${t.id} is paused by the human.`);
     if (t.status === 'exhausted') return { ...deny(`Not sent: task ${t.id} has used its allowance. Wrap up with what you have.`), budget: true };
@@ -124,10 +124,13 @@ class TaskLedger {
   // A delivery failed: requests go back to open so the next delivery carries them.
   reopen(agent) { for (const r of this._requests()) if (r.to === agent && r.status === 'delivered') r.status = 'open'; }
 
-  // finish_task: a completion proposal from the lead, accepted only once every request is reconciled.
-  finish(from, summary) {
+  // finish_task: a completion proposal from the lead, accepted only once every request is reconciled. ctx pins it
+  // to the task (and generation) the calling turn started under; a turn that started before any task may finish
+  // only the task created during its own run.
+  finish(from, summary, ctx = null) {
     const t = this.active();
     if (!t) return { ok: false, text: 'No task is active.' };
+    if (ctx && (ctx.taskId ? ctx.taskId !== t.id || ctx.generation !== t.generation : t.run !== ctx.run)) return { ok: false, text: `Not finished: this turn belongs to ${ctx.taskId || 'no task'}, not task ${t.id}.` };
     if (from !== t.lead) return { ok: false, text: `Only the lead (${NAME(t.lead)}) can finish task ${t.id}.` };
     const open = t.requests.filter((r) => OPEN.has(r.status));
     if (open.length) return { ok: false, text: `Not finished: ${open.map((r) => r.id).join(', ')} ${open.length > 1 ? 'are' : 'is'} still open.` };
