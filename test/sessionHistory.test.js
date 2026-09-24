@@ -134,3 +134,21 @@ test('Codex reader uses paginated read-only thread API and excludes reasoning/to
   assert.deepEqual(result.messages.map((entry) => entry.text), ['question', 'answer']);
   assert.equal(result.cursor, 'next'); assert.equal(result.coverage, 'text-only');
 });
+
+test('Codex history pages preserve global oldest-first chronology and each question-answer pair', async () => {
+  const turns = [1, 2, 3].map((n) => ({ id: `t${n}`, startedAt: n, items: [
+    { id: `q${n}`, type: 'userMessage', content: [{ type: 'text', text: `question ${n}` }] },
+    { id: `a${n}`, type: 'agentMessage', text: `answer ${n}` },
+  ] }));
+  const calls = [];
+  const reader = codexHistoryReader({ request: async (method, args) => {
+    calls.push(args);
+    const ordered = args.sortDirection === 'asc' ? turns : [...turns].reverse();
+    return args.cursor ? { data: ordered.slice(2), nextCursor: null }
+      : { data: ordered.slice(0, 2), nextCursor: 'page2' };
+  } });
+  const first = await reader({ sessionId: 'threadId', cursor: null, limit: 2 });
+  const second = await reader({ sessionId: 'threadId', cursor: first.cursor, limit: 2 });
+  assert.deepEqual([...first.messages, ...second.messages].map((m) => m.id), ['q1', 'a1', 'q2', 'a2', 'q3', 'a3']);
+  assert.equal(calls[1].cursor, 'page2'); assert.equal(second.cursor, null);
+});

@@ -153,7 +153,7 @@ function claudeHistoryReader(file, historyRoot) {
 function codexHistoryReader(client) {
   return async ({ sessionId, cursor, limit }) => {
     const result = await client.request('thread/turns/list', { threadId: sessionId,
-      limit, cursor: cursor || null, sortDirection: 'desc', itemsView: 'full' });
+      limit, cursor: cursor || null, sortDirection: 'asc', itemsView: 'full' });
     if (!result || !Array.isArray(result.data)) throw new Error('Unsupported Codex history response');
     const messages = [];
     for (const turn of result.data) {
