@@ -36,6 +36,8 @@ function handoffs(text, from, names = AGENTS) {
 const knows = (e, name) => (Array.isArray(e.knownBy) ? e.knownBy.includes(name) : e.knownBy === name);
 const markKnown = (e, name) => { if (!knows(e, name)) e.knownBy = [].concat(e.knownBy || [], name); };
 const unmarkKnown = (e, name) => { e.knownBy = [].concat(e.knownBy || []).filter((n) => n !== name); };
+// Legacy seeds were consented only to the original two agents. Adding a participant must not broaden that.
+const mayRead = (e, name) => e.kind !== 'history' || (Array.isArray(e.recipients) ? e.recipients : AGENTS).includes(name);
 
 // Agent-facing label. `to` is the agent receiving the payload (requests and answers read differently to their parties).
 function label(entry, human, to, LABEL = module.exports.LABEL) {
@@ -130,8 +132,8 @@ class Room extends EventEmitter {
 
   // Seed history one agent already has (its forked thread or session) so only the other agent receives it.
   // items: [{role: 'user'|'codex'|'claude', text}]; alreadyKnownBy: 'codex' | 'claude'.
-  seedHistory(items, alreadyKnownBy) {
-    for (const it of items) this._append(this.names.includes(it.role) ? it.role : 'human', it.text, { kind: 'history', source: this.labels[alreadyKnownBy], knownBy: alreadyKnownBy });
+  seedHistory(items, alreadyKnownBy, recipients = AGENTS.filter((n) => n !== alreadyKnownBy)) {
+    for (const it of items) this._append(this.names.includes(it.role) ? it.role : 'human', it.text, { kind: 'history', source: this.labels[alreadyKnownBy], knownBy: alreadyKnownBy, recipients: [...recipients] });
   }
 
   note(text) { return this._append('system', text); }
@@ -185,13 +187,13 @@ class Room extends EventEmitter {
   }
 
   _fresh(name) {
-    return this.state.transcript.slice(this.state.cursors[name]).filter((e) => e.from !== name && !knows(e, name) && e.kind !== 'error');
+    return this.state.transcript.slice(this.state.cursors[name]).filter((e) => mayRead(e, name) && e.from !== name && !knows(e, name) && e.kind !== 'error');
   }
 
   // Move the cursor past everything this agent has seen, its own words and errors.
   _advance(name) {
     const tr = this.state.transcript; let c = this.state.cursors[name];
-    while (c < tr.length && (tr[c].from === name || knows(tr[c], name) || tr[c].kind === 'error')) c++;
+    while (c < tr.length && (!mayRead(tr[c], name) || tr[c].from === name || knows(tr[c], name) || tr[c].kind === 'error')) c++;
     this.state.cursors[name] = c;
   }
 

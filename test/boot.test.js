@@ -6,17 +6,24 @@ const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
 const Module = require('module');
 
-let experimentalAgents;
+let experimentalAgents, acpBehavior;
 const acpStarts = [];
-class FakeAcp { constructor(o) { this.o = o; this.capabilities = {}; } async start() { acpStarts.push(this.o); throw new Error('synthetic missing agent'); } stop() {} }
+class FakeAcp {
+  constructor(o) { this.o = o; this.capabilities = { loadSession: true }; this.calls = []; this.stops = 0; }
+  async start() { acpStarts.push(this.o); this.calls.push('start'); if (!acpBehavior) throw new Error('synthetic missing agent'); acpBehavior.client = this; if (acpBehavior.start) await acpBehavior.start(); }
+  async newSession() { this.calls.push('new'); if (acpBehavior.new) await acpBehavior.new(); this.sessionId = 'gemini-new'; }
+  async loadSession(id) { this.calls.push('load'); if (acpBehavior.load) await acpBehavior.load(); this.sessionId = id; }
+  stop() { this.stops++; }
+}
 const stubs = {
   vscode: { workspace: { getConfiguration: () => ({ get: (key) => key === 'experimentalAgents' ? experimentalAgents : undefined, inspect: (key) => key === 'experimentalAgents' && experimentalAgents !== undefined ? { workspaceValue: experimentalAgents } : undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: true },
     ConfigurationTarget: { Global: 1 }, window: {}, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) } },
 };
 class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: 'th-new' }; } async resumeThread(id) { return { id }; } async forkThread() { return { id: 'th-fork' }; }
-  async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
+  async recentMessages() { return [{ role: 'human', text: 'CODEX_SEED_PRIVATE' }]; } async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {
+  [path.join(__dirname, '../src/claudeHistory.js')]: { ROOT: os.tmpdir(), recentMessages: () => [{ role: 'human', text: 'CLAUDE_SEED_PRIVATE' }] },
   [path.join(__dirname, '../src/acpClient.js')]: { AcpClient: FakeAcp },
   [path.join(__dirname, '../src/codexClient.js')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
   [path.join(__dirname, '../src/claudeClient.js')]: { ClaudeClient: FakeClaude, READ_ONLY_TOOLS: ['Read', 'Glob', 'Grep'] },
@@ -76,4 +83,54 @@ test('experimental profiles: off by default, only known Gemini accepted once, ma
   assert.strictEqual(got.length, 1);
   assert.strictEqual(got[0].exe, 'gemini');
   assert.deepStrictEqual(got[0].args, ['--experimental-acp']);
+});
+
+
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+
+for (const phase of ['start', 'new', 'load']) test(`closing during ACP ${phase} owns and stops the pending client; late completion cannot revive boot`, async () => {
+  const entered = deferred(), release = deferred();
+  experimentalAgents = ['gemini'];
+  acpBehavior = { [phase]: async () => { entered.resolve(); await release.promise; } };
+  const meta = newMeta(`close during ${phase}`);
+  if (phase === 'load') meta.extra = { gemini: { sessionId: 'gemini-saved' } };
+  const s = new RoomSession(context(), meta, null);
+  const boot = s.boot();
+  try {
+    await entered.promise;
+    const client = acpBehavior.client;
+    s.dispose(); const stoppedAtClose = client.stops;
+    // A late boot/save must not overwrite newer data after the room has been disposed.
+    fs.writeFileSync(s.file, 'SYNTHETIC_AFTER_CLOSE');
+    release.resolve(); await boot;
+    await s.boot(); // disposal is permanent, even if a caller tries to boot this object again
+    assert.ok(stoppedAtClose > 0, 'the pending client is stopped at close, before its await resolves');
+    assert.strictEqual(s.room, undefined);
+    assert.strictEqual(s.scheduler, undefined);
+    assert.strictEqual(s.extras.length, 0);
+    assert.deepStrictEqual(client.calls, phase === 'start' ? ['start'] : ['start', phase]);
+    s.save();
+    assert.strictEqual(fs.readFileSync(s.file, 'utf8'), 'SYNTHETIC_AFTER_CLOSE');
+  } finally {
+    release.resolve(); await boot.catch(() => {}); s.dispose();
+    experimentalAgents = undefined; acpBehavior = undefined;
+  }
+});
+
+for (const side of ['codex', 'claude']) test(`Join Existing: ${side} history reaches only the named peer, and Keep private seeds nothing`, async () => {
+  experimentalAgents = ['gemini']; acpBehavior = {};
+  const opts = side === 'codex' ? { forkFrom: { id: 'source-codex' } } : { claudeFrom: { id: 'source-claude', path: '/synthetic' } };
+  const marker = side === 'codex' ? 'CODEX_SEED_PRIVATE' : 'CLAUDE_SEED_PRIVATE';
+  const peer = side === 'codex' ? 'claude' : 'codex';
+  const opened = [];
+  try {
+    for (const share of [true, false]) {
+      const s = new RoomSession(context(), newMeta('join consent'), null); opened.push(s);
+      await s.boot({ ...opts, shareSeed: { [side]: share } });
+      assert.strictEqual(s.room.payloadFor(peer).text.includes(marker), share);
+      assert.ok(!s.room.payloadFor('gemini').text.includes(marker));
+      assert.ok(!s.room.payloadFor(side).text.includes(marker));
+      if (!share) assert.ok(!JSON.stringify(s.room.state.transcript).includes(marker));
+    }
+  } finally { for (const s of opened) s.dispose(); experimentalAgents = undefined; acpBehavior = undefined; }
 });

@@ -92,10 +92,11 @@ class RoomSession {
     this.context = context; this.meta = meta; this.state = state; this.quota = null;
     this.file = path.join(context.globalStorageUri.fsPath, 'rooms', `${meta.id}.json`);
     this.attDir = path.join(context.globalStorageUri.fsPath, 'rooms', meta.id, 'attachments');
-    this.pendingAtts = new Map();
+    this.pendingAtts = new Map(); this.extraClients = new Set(); this.disposed = false;
   }
 
   save() {
+    if (this.disposed) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     this.meta.claudeSessionId = this.claude ? this.claude.sessionId : this.meta.claudeSessionId;
     fs.writeFileSync(this.file, JSON.stringify({ meta: this.meta, state: this.room ? this.room.state : this.state }, null, 1));
@@ -103,6 +104,7 @@ class RoomSession {
 
   // shareSeed: { codex, claude } — the human agreed to give the OTHER agent that side's recent messages.
   async boot({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
+    if (this.disposed) return;
     const s = settings();
     this.meta.humanName = s.userName;
     const human = s.userName;
@@ -119,24 +121,30 @@ class RoomSession {
     const xs = this.xs = s.extraAgents.map((x) => ({ id: x.id, label: x.label || x.id[0].toUpperCase() + x.id.slice(1) }));
     this.codex = new CodexClient({ exe: s.codexExe, cwd: this.meta.cwd, tools: toolSpecs(['claude', ...xs.map((x) => x.id)]), log });
     await this.codex.start();
+    if (this.disposed) return;
     this.codex.on('notification', (method) => { if (method === 'account/rateLimits/updated') this.refreshQuota(); });
     this.codex.on('exit', (e) => { log(`codex exited: ${e.message}`); this.post({ type: 'notice', text: 'Codex process exited. Reopen the room to restart it.' }); });
 
     let seed = null;
     if (this.meta.codexThreadId) {
       await this.codex.resumeThread(this.meta.codexThreadId);
+      if (this.disposed) return;
     } else if (forkFrom) {
       // app-server takes typed tools only on thread/start, so a forked thread keeps the prose hand-off rule.
       const t = await this.codex.forkThread(forkFrom.id, roomPrompt('codex', 'claude', human));
+      if (this.disposed) return;
       this.meta.codexThreadId = t.id; this.meta.forkedFrom = forkFrom.id; this.meta.codexTyped = false;
-      if (shareSeed.codex) { try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; } }
+      if (shareSeed.codex) { try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; } if (this.disposed) return; }
       else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). Codex keeps its memory; nothing from it was shared with Claude. The original thread is untouched.`];
     } else {
       const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true, this.xs));
+      if (this.disposed) return;
       this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
     }
     await this.codex.setName(this.meta.codexThreadId, `Wagon Wheel: ${this.meta.name}`);
+    if (this.disposed) return;
     this.codexModels = await this.codex.listModels();
+    if (this.disposed) return;
 
     // A forked Claude session keeps its full memory (--resume --fork-session); Codex gets its recent text, read from disk.
     let claudeSeed = null; const claudeFork = claudeFrom && !this.meta.claudeSessionId ? claudeFrom.id : null;
@@ -154,14 +162,23 @@ class RoomSession {
       const label = x.label || x.id[0].toUpperCase() + x.id.slice(1);
       const others = ['Claude', 'Codex', ...s.extraAgents.filter((y) => y.id !== x.id).map((y) => y.label || y.id)];
       const a = new AcpClient({ exe: x.command, args: Array.isArray(x.args) ? x.args : [], cwd: m.cwd, label, brief: acpPrompt(label, human, others), log });
+      this.extraClients.add(a); // own it before startup awaits, so closing the panel can always stop it
       try {
         await a.start();
+        if (this.disposed) return;
         const saved = m.extra[x.id] && m.extra[x.id].sessionId;
-        if (saved && a.capabilities.loadSession) await a.loadSession(saved);
-        else { await a.newSession(); if (saved) this.pendingNotes = [...(this.pendingNotes || []), `${label} cannot reload its earlier session, so it started a new one.`]; }
+        if (saved && a.capabilities.loadSession) { await a.loadSession(saved); if (this.disposed) return; }
+        else {
+          await a.newSession(); if (this.disposed) return;
+          if (saved) this.pendingNotes = [...(this.pendingNotes || []), `${label} cannot reload its earlier session, so it started a new one.`];
+        }
         m.extra[x.id] = { sessionId: a.sessionId, label };
         this.extras.push({ id: x.id, label, client: a });
-      } catch (e) { log(`${x.id}: ${e.message}`); a.stop(); this.pendingNotes = [...(this.pendingNotes || []), `${label} (experimental) could not start: ${e.message}`]; }
+      } catch (e) {
+        a.stop(); this.extraClients.delete(a);
+        if (this.disposed) return;
+        log(`${x.id}: ${e.message}`); this.pendingNotes = [...(this.pendingNotes || []), `${label} (experimental) could not start: ${e.message}`];
+      }
     }
     const extraList = this.extras.map((x) => ({ id: x.id, label: x.label }));
     m.participants = [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, ...extraList];
@@ -182,11 +199,11 @@ class RoomSession {
     for (const t of this.pendingNotes || []) this.room.note(t); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
     if (seed) {
-      this.room.seedHistory(seed, 'codex');
+      this.room.seedHistory(seed, 'codex', ['claude']);
       this.room.note(`Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). ${seed.length} recent messages loaded for Claude; the original thread is untouched.`);
     }
     if (claudeSeed) {
-      this.room.seedHistory(claudeSeed, 'claude');
+      this.room.seedHistory(claudeSeed, 'claude', ['codex']);
       this.room.note(`Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; ${claudeSeed.length} recent messages loaded for Codex. The original session is untouched.`);
     }
     // Rooms made before v0.4.4 briefed Codex with the old "any @mention hands off" rule; its thread keeps that brief.
@@ -280,7 +297,7 @@ class RoomSession {
     panel.onDidDispose(() => this.dispose());
   }
 
-  post(msg) { if (this.panel) this.panel.webview.postMessage(msg); }
+  post(msg) { if (!this.disposed && this.panel) this.panel.webview.postMessage(msg); }
 
   // Add a local Claude Code session or Codex thread as reference both agents can read. Local sessions only.
   async addHistorySource() {
@@ -468,7 +485,16 @@ class RoomSession {
     } catch (e) { this.post({ type: 'attachError', text: e.message }); }
   }
 
-  dispose() { sessions.delete(this); if (this.scheduler) this.scheduler.dispose(); for (const x of this.extras || []) x.client.stop(); this.save(); if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null; }
+  dispose() {
+    if (this.disposed) return;
+    // Save the closing checkpoint once; late boot/turn/usage completions may never save again.
+    try { this.save(); } finally {
+      this.disposed = true;
+      sessions.delete(this); if (this.scheduler) this.scheduler.dispose();
+      for (const client of this.extraClients) client.stop(); this.extraClients.clear();
+      if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null;
+    }
+  }
 }
 
 const MODE_TEXT = {

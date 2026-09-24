@@ -102,3 +102,19 @@ test('adding a third history reader does not inherit prior grants; rebinding rev
   assert.strictEqual((await second.read('gemini', { source: 'claude' })).ok, false);
   assert.strictEqual((await second.read('codex', { source: 'claude' })).ok, true);
 });
+
+
+for (const owner of ['claude', 'codex']) test(`seeded ${owner} history is delivered to its named core peer only, including legacy saved entries`, async () => {
+  for (const legacy of [false, true]) {
+    const claude = typed('ready'), codex = typed('ready'), gemini = typed('ready');
+    let room = new Room({ agents: { claude, codex, gemini } });
+    room.seedHistory([{ role: 'human', text: 'SYNTHETIC_PRIVATE_HISTORY_MARKER' }], owner);
+    if (legacy) delete room.state.transcript[0].recipients;
+    room = new Room({ state: JSON.parse(JSON.stringify(room.state)), agents: { claude, codex, gemini } });
+    room.postFromHuman('@all say ready'); await settle();
+    const peer = owner === 'claude' ? codex : claude;
+    assert.match(peer.inbox.join('\n'), /SYNTHETIC_PRIVATE_HISTORY_MARKER/);
+    assert.doesNotMatch(gemini.inbox.join('\n'), /SYNTHETIC_PRIVATE_HISTORY_MARKER/);
+    assert.doesNotMatch(room.agents[owner].inbox.join('\n'), /SYNTHETIC_PRIVATE_HISTORY_MARKER/);
+  }
+});
