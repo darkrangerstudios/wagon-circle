@@ -10,7 +10,8 @@ const { ClaudeClient } = require('./claudeClient');
 const { Room, AGENTS } = require('./room');
 const { toolSpecs, PRESETS } = require('./tasks');
 const { Scheduler } = require('./scheduler');
-const { roomPrompt, acpPrompt } = require('./prompts');
+const { roomPrompt, participantPrompt, acpPrompt } = require('./prompts');
+const { normalizeParticipants, SessionClaims } = require('./participants');
 const { AcpClient } = require('./acpClient');
 const { HistorySources, LOCAL_ONLY } = require('./historySources');
 const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
@@ -37,6 +38,8 @@ const { findClaude, atLeast } = require('./claudeBinary');
 const HANDOFF_RULE = 4; // version of the room's hand-off rules; older saved rooms get one notice when it changes
 let claudeBin = null; // resolved once per window: newest Claude Code CLI on the machine
 const sessions = new Set();
+const sessionClaims = new SessionClaims(); // only writers owned by this extension-host process
+const roomClaims = new Map(); // one writer per saved room in this extension host
 let lastEditor = null; // last code editor used; the room panel steals focus, so track it
 
 let output;
@@ -93,169 +96,199 @@ class RoomSession {
     this.file = path.join(context.globalStorageUri.fsPath, 'rooms', `${meta.id}.json`);
     this.attDir = path.join(context.globalStorageUri.fsPath, 'rooms', meta.id, 'attachments');
     this.pendingAtts = new Map(); this.extraClients = new Set(); this.disposed = false;
+    this.slots = Object.create(null); this.ownedClients = new Set();
   }
 
   save() {
-    if (this.disposed) return;
+    if (this.disposed || roomClaims.get(this.file) !== this) return;
+    this.syncSeats();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    this.meta.claudeSessionId = this.claude ? this.claude.sessionId : this.meta.claudeSessionId;
     fs.writeFileSync(this.file, JSON.stringify({ meta: this.meta, state: this.room ? this.room.state : this.state }, null, 1));
   }
 
-  // shareSeed: { codex, claude } — the human agreed to give the OTHER agent that side's recent messages.
-  async boot({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
+  syncSeats() {
     if (this.disposed) return;
-    const s = settings();
-    this.meta.humanName = s.userName;
-    const human = s.userName;
-    const m = this.meta;
-    if (m.claudeModel === undefined) m.claudeModel = s.claudeModel;
-    if (m.claudeEffort === undefined) m.claudeEffort = s.claudeEffort;
-    if (m.codexModel === undefined) m.codexModel = s.codexModel;
-    if (m.codexEffort === undefined) m.codexEffort = s.codexEffort;
-    if (m.ideContext === undefined) m.ideContext = c_ide();
-    this.claudeVersion = s.claude.version;
-    if (m.defaultTarget === undefined) m.defaultTarget = s.defaultTarget;
-    if (m.bothMode === undefined) m.bothMode = s.bothMode;
-    // Extra (ACP) participants from settings, known before the clients start so briefs and tool peers include them.
-    const xs = this.xs = s.extraAgents.map((x) => ({ id: x.id, label: x.label || x.id[0].toUpperCase() + x.id.slice(1) }));
-    this.codex = new CodexClient({ exe: s.codexExe, cwd: this.meta.cwd, tools: toolSpecs(['claude', ...xs.map((x) => x.id)]), log });
-    await this.codex.start();
-    if (this.disposed) return;
-    this.codex.on('notification', (method) => { if (method === 'account/rateLimits/updated') this.refreshQuota(); });
-    this.codex.on('exit', (e) => { log(`codex exited: ${e.message}`); this.post({ type: 'notice', text: 'Codex process exited. Reopen the room to restart it.' }); });
-
-    let seed = null;
-    if (this.meta.codexThreadId) {
-      await this.codex.resumeThread(this.meta.codexThreadId);
-      if (this.disposed) return;
-    } else if (forkFrom) {
-      // app-server takes typed tools only on thread/start, so a forked thread keeps the prose hand-off rule.
-      const t = await this.codex.forkThread(forkFrom.id, roomPrompt('codex', 'claude', human));
-      if (this.disposed) return;
-      this.meta.codexThreadId = t.id; this.meta.forkedFrom = forkFrom.id; this.meta.codexTyped = false;
-      if (shareSeed.codex) { try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; } if (this.disposed) return; }
-      else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). Codex keeps its memory; nothing from it was shared with Claude. The original thread is untouched.`];
-    } else {
-      const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true, this.xs));
-      if (this.disposed) return;
-      this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
-    }
-    await this.codex.setName(this.meta.codexThreadId, `Wagon Wheel: ${this.meta.name}`);
-    if (this.disposed) return;
-    this.codexModels = await this.codex.listModels();
-    if (this.disposed) return;
-
-    // A forked Claude session keeps its full memory (--resume --fork-session); Codex gets its recent text, read from disk.
-    let claudeSeed = null; const claudeFork = claudeFrom && !this.meta.claudeSessionId ? claudeFrom.id : null;
-    if (claudeFork) {
-      this.meta.claudeForkedFrom = claudeFrom.id;
-      if (shareSeed.claude) { try { claudeSeed = claudeHistory.recentMessages(claudeFrom.path, 8); } catch (e) { log(`claude history read failed: ${e.message}`); claudeSeed = []; } }
-      else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; nothing from it was shared with Codex. The original session is untouched.`];
-    }
-    this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true, xs), tools: toolSpecs(['codex', ...xs.map((x) => x.id)]), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeFork, addDirs: [this.attDir], log });
-
-    // Experimental ACP participants (wagonWheel.experimentalAgents). Continue their saved session when they can load
-    // one; otherwise start new and say so.
-    m.extra = m.extra || {}; this.extras = [];
-    for (const x of s.extraAgents) {
-      const label = x.label || x.id[0].toUpperCase() + x.id.slice(1);
-      const others = ['Claude', 'Codex', ...s.extraAgents.filter((y) => y.id !== x.id).map((y) => y.label || y.id)];
-      const a = new AcpClient({ exe: x.command, args: Array.isArray(x.args) ? x.args : [], cwd: m.cwd, label, brief: acpPrompt(label, human, others), log });
-      this.extraClients.add(a); // own it before startup awaits, so closing the panel can always stop it
-      try {
-        await a.start();
-        if (this.disposed) return;
-        const saved = m.extra[x.id] && m.extra[x.id].sessionId;
-        if (saved && a.capabilities.loadSession) { await a.loadSession(saved); if (this.disposed) return; }
-        else {
-          await a.newSession(); if (this.disposed) return;
-          if (saved) this.pendingNotes = [...(this.pendingNotes || []), `${label} cannot reload its earlier session, so it started a new one.`];
-        }
-        m.extra[x.id] = { sessionId: a.sessionId, label };
-        this.extras.push({ id: x.id, label, client: a });
-      } catch (e) {
-        a.stop(); this.extraClients.delete(a);
-        if (this.disposed) return;
-        log(`${x.id}: ${e.message}`); this.pendingNotes = [...(this.pendingNotes || []), `${label} (experimental) could not start: ${e.message}`];
+    for (const r of Object.values(this.slots)) {
+      const p = r.seat;
+      if (p.provider === 'claude' && r.client && r.client.sessionId && r.client.sessionId !== p.sessionId) this.bindId(r, r.client.sessionId);
+      // Preserve older metadata readers for the original two seat ids, without using it for routing.
+      if (p.id === p.provider) {
+        this.meta[p.provider === 'codex' ? 'codexThreadId' : 'claudeSessionId'] = p.sessionId;
+        for (const k of ['model', 'effort', 'fast']) this.meta[p.provider + k[0].toUpperCase() + k.slice(1)] = p[k];
+        if (p.provider === 'codex') { this.meta.codexTyped = p.typed; this.meta.codexTypedThreads = p.typedThreads; }
       }
     }
-    const extraList = this.extras.map((x) => ({ id: x.id, label: x.label }));
-    m.participants = [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, ...extraList];
+  }
 
-    const codex = this.codex, meta = this.meta;
-    const agents = {
-      claude: this.claude,
-      codex: { get lastTurnUsage() { return codex.lastTurnUsage; }, typed: !!meta.codexTyped, send: (text, onDelta, onActivity, files, onTool) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast, onTool }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt(), steer: (text, files) => codex.steer(meta.codexThreadId, text, files) }
-    };
+  bindId(r, id) {
+    if (!sessionClaims.claim(r.seat.provider, id, r.owner)) throw new Error('That working session is already owned by another seat or room in this extension host. Fork it instead.');
+    if (r.seat.sessionId !== id) sessionClaims.release(r.seat.provider, r.seat.sessionId, r.owner);
+    r.seat.sessionId = id;
+  }
+
+  peers(id) { return this.roster.filter((p) => p.id !== id); }
+  toolsFor(id) { const peers = this.peers(id).map((x) => x.id); return toolSpecs(peers).filter((t) => peers.length || t.name !== 'request_assistance'); }
+  brief(r, typed) { return participantPrompt(r.seat, this.peers(r.seat.id), this.meta.humanName, typed); }
+
+  async makeCodex(r, action, source, valid = () => !this.disposed) {
+    const p = r.seat, c = new CodexClient({ exe: this.options.codexExe, cwd: p.cwd, tools: this.toolsFor(p.id), log });
+    this.ownedClients.add(c); if (r.switching) r.switchClient = c;
+    let ready = false;
+    try {
+      await c.start(); if (!valid()) return null;
+      let t;
+      if (action === 'continue') t = await c.resumeThread(source);
+      else if (action === 'fork') t = await c.forkThread(source, this.brief(r, false));
+      else t = await c.startThread(this.brief(r, true));
+      if (!valid()) return null;
+      await c.setName(t.id, `Wagon Wheel: ${this.meta.name} · ${p.label}`); if (!valid()) return null;
+      const models = await c.listModels(); if (!valid()) return null;
+      c.on('notification', (method) => { if (method === 'account/rateLimits/updated' && this.room) this.refreshQuota(); });
+      c.on('exit', (e) => this.post({ type: 'notice', text: `${p.label} process exited: ${e.message}. Reopen the room to restart it.` }));
+      ready = true; return { client: c, id: t.id, models };
+    } finally { if (!ready) { c.stop(); this.ownedClients.delete(c); } }
+  }
+
+  makeClaude(r, sessionId, forkFrom) {
+    const p = r.seat;
+    const c = new ClaudeClient({ exe: this.options.claude.path, cwd: p.cwd, model: p.model, effort: p.effort, fast: !!p.fast && this.claudeFastOk(p.model),
+      onNotice: (t) => !this.disposed && this.room && this.room.note(`${p.label}: ${t}`), systemPrompt: this.brief(r, true), tools: this.toolsFor(p.id),
+      sessionId, forkFrom, addDirs: [this.attDir], log });
+    this.ownedClients.add(c); return c;
+  }
+
+  async boot(opts = {}) {
+    if (this.disposed || this.room) return;
+    if (this.booting) return this.booting;
+    if (roomClaims.has(this.file) && roomClaims.get(this.file) !== this) throw new Error('This room is already open in this extension host. Use its existing panel.');
+    roomClaims.set(this.file, this);
+    this.booting = this.bootSeats(opts);
+    try { await this.booting; }
+    catch (e) { this.disposed = true; this.scheduler?.dispose(); this.closeClients(); throw e; }
+    finally { this.booting = null; }
+  }
+
+  // A roster is fixed before creating any thread: Codex dynamic-tool peer enums are immutable on a thread.
+  async bootSeats({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
+    const s = this.options = settings(), m = this.meta;
+    m.humanName = s.userName; this.claudeVersion = s.claude.version;
+    m.seats = normalizeParticipants(m, s);
+    if (m.ideContext === undefined) m.ideContext = c_ide();
+    if (m.bothMode === undefined) m.bothMode = s.bothMode;
+    if (m.defaultTarget === undefined || (m.defaultTarget !== 'both' && !m.seats.some((p) => p.id === m.defaultTarget))) m.defaultTarget = m.seats.some((p) => p.id === s.defaultTarget) ? s.defaultTarget : m.seats[0].id;
+    const xs = s.extraAgents.filter((x) => !m.seats.some((p) => p.id === x.id)).map((x) => ({ ...x, provider: 'acp', cwd: m.cwd }));
+    this.roster = [...m.seats, ...xs];
+    // Reserve every saved binding before launching any process; duplicate seats/rooms fail without dispatch.
+    for (const p of m.seats) {
+      const r = this.slots[p.id] = { seat: p, owner: {}, client: null, models: [] };
+      this.bindId(r, p.sessionId);
+    }
+    const seeds = [];
+    for (const r of Object.values(this.slots)) {
+      const p = r.seat;
+      if (p.provider === 'codex') {
+        const join = p.id === 'codex' && !p.sessionId && forkFrom;
+        const action = p.sessionId ? 'continue' : join ? 'fork' : 'new';
+        const made = await this.makeCodex(r, action, p.sessionId || (join && join.id));
+        if (this.disposed) return;
+        r.client = made.client; r.models = made.models; this.bindId(r, made.id);
+        if (action === 'new') { p.typed = true; p.typedThreads = [...(p.typedThreads || []), made.id]; }
+        if (join) { p.typed = false; p.forkFrom = join.id; m.forkedFrom = join.id;
+          if (shareSeed.codex) { let items = []; try { items = await r.client.recentMessages(join.id, 8); } catch (e) { log(`history read failed: ${e.message}`); } if (this.disposed) return; seeds.push({ owner: p.id, readers: ['claude'], items }); }
+        }
+      } else {
+        const join = p.id === 'claude' && !p.sessionId && claudeFrom;
+        if (join) { p.forkFrom = join.id; m.claudeForkedFrom = join.id; if (shareSeed.claude) { let items = []; try { items = claudeHistory.recentMessages(join.path, 8); } catch (e) { log(`history read failed: ${e.message}`); } seeds.push({ owner: p.id, readers: ['codex'], items }); } }
+        r.client = this.makeClaude(r, p.sessionId, p.sessionId ? null : p.forkFrom); p.typed = true;
+      }
+    }
+    this.updateAliases();
+    m.extra = m.extra || {}; this.extras = [];
+    for (const x of xs) {
+      const a = new AcpClient({ exe: x.command, args: x.args, cwd: x.cwd, label: x.label, brief: acpPrompt(x.label, m.humanName, this.peers(x.id).map((p) => p.label)), log });
+      this.extraClients.add(a);
+      try {
+        await a.start(); if (this.disposed) return;
+        const old = m.extra[x.id]?.sessionId;
+        if (old && a.capabilities.loadSession) await a.loadSession(old);
+        else { await a.newSession(); if (old) this.pendingNotes = [...(this.pendingNotes || []), `${x.label} cannot reload its saved session; it started a new private session.`]; }
+        if (this.disposed) return;
+        m.extra[x.id] = { sessionId: a.sessionId, label: x.label }; this.extras.push({ ...x, client: a });
+      } catch (e) { a.stop(); this.extraClients.delete(a); if (this.disposed) return; this.pendingNotes = [...(this.pendingNotes || []), `${x.label} (experimental) could not start: ${e.message}`]; }
+    }
+    m.participants = [...m.seats, ...this.extras].map(({ id, label, provider, cwd }) => ({ id, label, provider, cwd }));
+    const agents = {};
+    for (const r of Object.values(this.slots)) {
+      const p = r.seat;
+      agents[p.id] = { get typed() { return p.typed; }, get lastTurnUsage() { return r.client.lastTurnUsage; },
+        send: (text, delta, activity, files, onTool) => (p.provider === 'codex'
+          ? r.client.runTurn(p.sessionId, text, delta, activity, files, { model: p.model, effort: p.effort, fast: p.fast, onTool })
+          : r.client.send(text, delta, activity, files, onTool)).finally(() => { this.syncSeats(); if (p.provider === 'codex') this.refreshQuota(); }),
+        interrupt: () => r.client.interrupt(), steer: (text, files) => p.provider === 'codex' ? r.client.steer(p.sessionId, text, files) : r.client.steer(text, files) };
+    }
     for (const x of this.extras) agents[x.id] = x.client;
-    const labelFor = (n) => { if (!this.controls()[n]) return null; const c = this.controls()[n]; const x = c.models.find((y) => y.id === c.model); return [x ? (x.name || x.id) : c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
-    // Local session history as callable context (read_session_history). Local sessions only.
-    this.history = new HistorySources({ saved: m.history || (m.history = {}), participants: [{ id: 'claude', label: 'Claude', provider: 'claude' }, { id: 'codex', label: 'Codex', provider: 'codex' }, ...extraList.map((x) => ({ ...x, provider: 'acp' }))],
-      working: () => ({ claude: { sessionId: this.claude.sessionId }, codex: { sessionId: m.codexThreadId }, ...Object.fromEntries(this.extras.map((x) => [x.id, { sessionId: x.client.sessionId }])) }),
-      makeReader: ({ provider, sessionId, file }) => provider === 'acp' ? async () => { throw new Error('history reading is not available for ACP agents yet'); } : provider === 'codex' ? codexHistoryReader(this.codex)
+    this.history = new HistorySources({ saved: m.history || (m.history = {}), participants: m.participants,
+      working: () => Object.fromEntries([...Object.values(this.slots).map((r) => [r.seat.id, { sessionId: r.seat.provider === 'claude' ? r.client.sessionId : r.seat.sessionId }]), ...this.extras.map((x) => [x.id, { sessionId: x.client.sessionId }])]),
+      makeReader: ({ provider, sessionId, file }) => provider === 'acp' ? async () => { throw new Error('history reading is not available for ACP agents yet'); } : provider === 'codex' ? async (args) => { if (!this.codex) throw new Error('No local Codex reader is active'); return codexHistoryReader(this.codex)(args); }
         : async (args) => { const f = file || claudeHistory.fileFor(sessionId); if (!f) throw new Error('that Claude session has no saved file yet'); return claudeHistoryReader(f, claudeHistory.ROOT)(args); } });
-    this.room = new Room({ agents, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args), labels: Object.fromEntries(extraList.map((x) => [x.id, x.label])) });
-    for (const t of this.pendingNotes || []) this.room.note(t); this.pendingNotes = null;
+    const labelFor = (id) => { const c = this.controls()[id]; if (!c) return null; const model = c.models.find((x) => x.id === c.model); return [model?.name || c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
+    this.room = new Room({ agents, state: this.state, humanName: m.humanName, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (id, args) => this.history.read(id, args), labels: Object.fromEntries(m.participants.map((p) => [p.id, p.label])) });
+    for (const note of this.pendingNotes || []) this.room.note(note); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
-    if (seed) {
-      this.room.seedHistory(seed, 'codex', ['claude']);
-      this.room.note(`Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). ${seed.length} recent messages loaded for Claude; the original thread is untouched.`);
-    }
-    if (claudeSeed) {
-      this.room.seedHistory(claudeSeed, 'claude', ['codex']);
-      this.room.note(`Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; ${claudeSeed.length} recent messages loaded for Codex. The original session is untouched.`);
-    }
-    // Rooms made before v0.4.4 briefed Codex with the old "any @mention hands off" rule; its thread keeps that brief.
-    // A new room has no saved state (this.state is null): read the room's own, which always exists.
-    if ((this.meta.handoffRule || 0) < HANDOFF_RULE) {
-      if (this.room.state.transcript.length) this.room.note(`Wagon Circle is now Wagon Wheel: relayed messages are labelled "relayed by Wagon Wheel". Agents ask each other with a typed request, tracked as a task with a turn and time allowance, instead of @mentions.${this.meta.codexTyped ? '' : ' This room\'s Codex thread predates that, so a line where Codex starts with @claude shows as a suggestion for you to send; a new room gives Codex the typed request too.'}`);
-      this.meta.handoffRule = HANDOFF_RULE;
-    }
+    for (const x of seeds) this.room.seedHistory(x.items, x.owner, x.readers.filter((id) => agents[id]));
+    if ((m.handoffRule || 0) < HANDOFF_RULE) { if (this.room.state.transcript.length) this.room.note('Wagon Circle is now Wagon Wheel. Agents request assistance through typed room tools where supported; relayed history is reference only.'); m.handoffRule = HANDOFF_RULE; }
     this.room.on('message', (entry) => this.post({ type: 'message', entry: this.view(entry) }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
     this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
-    this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null, codexUsage: this.codex.lastTurnUsage || null }));
-    this.room.on('changed', () => this.save());
-    this.room.on('task', () => this.postTask());
-    // The one host timer (scheduler.js): task time today; any future polled source registers here, not its own timer.
+    this.room.on('status', (st) => { const r = this.slots[st.name]; this.post({ type: 'status', ...st, participantUsage: r?.client.lastTurnUsage || null, participantCost: r?.client.totalCostUsd }); });
+    this.room.on('stop', () => { this.switchEpoch = (this.switchEpoch || 0) + 1; for (const r of Object.values(this.slots)) if (r.switchClient) r.switchClient.stop(); });
+    this.room.on('changed', () => this.save()); this.room.on('task', () => this.postTask());
     this.scheduler = new Scheduler({ log });
     this.scheduler.add('task-clock', { everyMs: 15000, check: async () => { this.room.tick(); return 'quiet'; } });
-    // Usage from outside the room changes too: refresh both account-wide limits and this computer's token totals.
-    // Status reads and a local file scan; no model calls.
     this.scheduler.add('usage', { everyMs: 5 * 60e3, check: async () => { await Promise.all([this.refreshQuota(), this.refreshClaudeUsage(true), this.refreshLocalUsage()]); return 'quiet'; } });
-    this.room.on('message', (e) => { if (e.from === 'claude' || (e.from === 'system' && /^Claude/.test(e.text))) this.refreshClaudeUsage(); });
-    this.claudeExe = s.claude.path;
-    this.save();
-    this.refreshQuota();
-    this.refreshClaudeUsage(true);
+    this.room.on('message', (e) => { if (this.slots[e.from]?.seat.provider === 'claude') this.refreshClaudeUsage(); });
+    this.claudeExe = s.claude.path; this.save(); this.refreshQuota(); this.refreshClaudeUsage(true);
+  }
+
+  updateAliases() {
+    this.codex = Object.values(this.slots).find((r) => r.seat.provider === 'codex')?.client;
+    this.claude = Object.values(this.slots).find((r) => r.seat.provider === 'claude')?.client;
+    this.codexModels = Object.values(this.slots).find((r) => r.seat.provider === 'codex')?.models || [];
+  }
+
+  closeClients() {
+    for (const c of this.ownedClients) c.stop(); this.ownedClients.clear();
+    for (const c of this.extraClients) c.stop(); this.extraClients.clear();
+    for (const r of Object.values(this.slots)) sessionClaims.releaseOwner(r.owner);
+    if (roomClaims.get(this.file) === this) roomClaims.delete(this.file);
   }
 
   // Claude plan usage via headless `/usage` (no model call, free). Throttled; refreshed after Claude replies.
   async refreshLocalUsage() { const r = await scanLocalUsage(); if (r) this.post({ type: 'localUsage', usage: r }); }
 
   async refreshClaudeUsage(force) {
+    if (this.disposed || !this.claude) return;
     if (!force && this.usageAt && Date.now() - this.usageAt < 45000) return;
     this.usageAt = Date.now();
-    const u = await claudeUsage.fetch(this.claudeExe, this.meta.cwd);
-    if (!u) return;
+    const u = await claudeUsage.fetch(this.claudeExe, Object.values(this.slots).find((r) => r.seat.provider === 'claude').seat.cwd);
+    if (!u || this.disposed) return;
     this.claudeUsage = u;
     this.post({ type: 'claudeUsage', usage: u });
     this.postMeta();
   }
 
   // Save this room's model and effort for a vendor as the defaults for new rooms (user settings).
-  async saveDefaults(vendor) {
-    const cfg = config(), m = this.meta, G = vscode.ConfigurationTarget.Global;
-    if (vendor === 'claude') { await cfg.update('claudeModel', m.claudeModel || '', G); await cfg.update('claudeEffort', m.claudeEffort || '', G); }
-    else { await cfg.update('codexModel', m.codexModel || '', G); await cfg.update('codexEffort', m.codexEffort || '', G); }
-    const c = this.controls()[vendor], x = c.models.find((y) => y.id === c.model);
-    this.room.note(`Saved: new rooms start ${vendor === 'claude' ? 'Claude' : 'Codex'} on ${x ? x.name || x.id : c.model || 'its default model'} · ${c.effort || 'default effort'}.`);
+  async saveDefaults(id) {
+    const r = this.slots[id]; if (!r) return;
+    const p = r.seat, cfg = config(), G = vscode.ConfigurationTarget.Global;
+    await cfg.update(p.provider + 'Model', p.model || '', G); await cfg.update(p.provider + 'Effort', p.effort || '', G);
+    if (!this.disposed) this.room.note(`Saved ${p.label}'s model and effort as defaults for new ${p.provider === 'claude' ? 'Claude Code' : 'Codex'} seats. Existing seats keep their settings.`);
   }
 
   async refreshQuota() {
-    const r = await this.codex.rateLimits();
-    if (!r) return;
+    if (this.disposed || !this.codex) return;
+    let r; try { r = await this.codex.rateLimits(); } catch { return; }
+    if (!r || this.disposed) return;
     const snap = r.rateLimits || {};
     this.quota = { primary: snap.primary, secondary: snap.secondary, resetCredits: r.rateLimitResetCredits ? Number(r.rateLimitResetCredits.availableCount) : null, reached: snap.rateLimitReachedType || null };
     this.post({ type: 'quota', quota: this.quota });
@@ -264,6 +297,7 @@ class RoomSession {
   attach(panel) {
     this.panel = panel; sessions.add(this);
     panel.webview.onDidReceiveMessage((m) => {
+      if (this.disposed || !m || typeof m !== 'object') return;
       if (m.type === 'ready') this.postInit();
       else if ((m.type === 'send' || m.type === 'steer') && this.room && typeof m.text === 'string') {
         const files = (Array.isArray(m.attachmentIds) ? m.attachmentIds : []).map((id) => this.pendingAtts.get(id)).filter(Boolean);
@@ -274,16 +308,17 @@ class RoomSession {
         if (m.type === 'steer') this.room.steerFromHuman(m.text.trim(), files, ide);
         else this.room.postFromHuman(m.text.trim(), files, ide);
       }
-      else if (m.type === 'saveDefaults' && (m.vendor === 'claude' || m.vendor === 'codex')) this.saveDefaults(m.vendor);
+      else if (m.type === 'saveDefaults' && this.slots[m.vendor]) this.saveDefaults(m.vendor);
+      else if (m.type === 'historyShare' && this.room) this.shareHistory(m.source, m.reader, !!m.on, m.allHistory);
       else if (m.type === 'toggleIde') { this.meta.ideContext = !!m.on; this.postMeta(); }
       else if (m.type === 'openDiff' && typeof m.diff === 'string') openDiff(m.diff, this.meta.cwd);
-      else if (m.type === 'command' && this.room && typeof m.text === 'string') this.runCommand(m.text);
+      else if (m.type === 'command' && this.room && typeof m.text === 'string') this.runCommand(m.text).catch((e) => { if (!this.disposed) this.room.note(`Command failed: ${e.message}`); });
       else if (m.type === 'attachData' && typeof m.data === 'string') this.addAttachment({ name: m.name, data: m.data });
       else if (m.type === 'attachUris' && Array.isArray(m.uris)) m.uris.forEach((u) => { try { this.addAttachment({ name: path.basename(vscode.Uri.parse(u).fsPath), fromPath: vscode.Uri.parse(u).fsPath }); } catch (e) { this.post({ type: 'attachError', text: e.message }); } });
       else if (m.type === 'pickFiles') vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach' }).then((uris) => (uris || []).forEach((u) => this.addAttachment({ name: path.basename(u.fsPath), fromPath: u.fsPath })));
       else if (m.type === 'unattach') { const a = this.pendingAtts.get(m.id); if (a) { this.pendingAtts.delete(m.id); fs.rm(a.path, () => {}); } }
       else if (m.type === 'stop' && this.room) this.room.stopAll();
-      else if (m.type === 'session' && this.room && ['claude', 'codex'].includes(m.vendor) && ['new', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => this.room.note(`Couldn't switch the working session: ${e.message}`));
+      else if (m.type === 'session' && this.room && this.slots[m.vendor] && ['new', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => { if (!this.disposed) this.room.note(`Couldn't switch the working session: ${e.message}`); });
       else if (m.type === 'taskPause' && this.room) this.room.pauseTask();
       else if (m.type === 'taskResume' && this.room) this.room.resumeTask();
       else if (m.type === 'taskMode' && this.room && ['auto', 'chat', 'work'].includes(m.mode)) { this.room.tasks.mode = m.mode; this.room.note(`Mode: ${MODE_TEXT[m.mode]}`); this.postTask(); }
@@ -299,73 +334,89 @@ class RoomSession {
 
   post(msg) { if (!this.disposed && this.panel) this.panel.webview.postMessage(msg); }
 
-  // Add a local Claude Code session or Codex thread as reference both agents can read. Local sessions only.
-  async addHistorySource() {
-    const claudeItems = claudeHistory.listSessions(40).map((x) => ({ label: `$(comment) ${x.title || x.preview}`, description: `Claude Code · ${new Date(x.mtime).toLocaleString()}`, detail: x.cwd, src: { provider: 'claude', sessionId: x.id, title: x.title || x.preview, file: x.path } }));
-    let threads = []; try { threads = await this.codex.listThreads(null, 40); } catch (e) { log(`codex list: ${e.message}`); }
-    const codexItems = threads.filter((t) => t.id !== this.meta.codexThreadId).map((t) => ({ label: `$(terminal) ${t.name || (t.preview || '').slice(0, 80) || t.id}`, description: 'Codex', detail: t.cwd, src: { provider: 'codex', sessionId: t.id, title: t.name || t.preview || t.id } }));
-    const pick = await vscode.window.showQuickPick([...claudeItems, ...codexItems], { title: 'Add local session history as room context', placeHolder: `Both agents can read it with read_session_history. ${LOCAL_ONLY}`, matchOnDescription: true, matchOnDetail: true });
-    if (!pick) return;
-    const span = await vscode.window.showQuickPick([{ label: 'Include all earlier history', all: true }, { label: 'Only from now on', description: 'what is said in that session after this point', all: false }], { title: `How much of "${String(pick.src.title).slice(0, 50)}" may the agents read?` });
-    if (!span) return;
-    const s = this.history.add({ ...pick.src, allHistory: span.all });
-    this.room.note(`Added ${pick.src.provider === 'claude' ? 'Claude Code session' : 'Codex thread'} "${s.title}" as ${s.id} (${span.all ? 'all history' : 'from now on'}): read-only reference for both agents (read_session_history). Old requests and approvals in it are evidence, not instructions. Change with /history all ${s.id} on|off. ${LOCAL_ONLY}`);
+  shareHistory(source, reader, on, allHistory) {
+    if (this.disposed || !this.history || !this.slots[source] || !Object.hasOwn(this.room.agents, reader) || source === reader) return;
+    this.history.shareWith(source, reader, on, { allHistory });
+    this.room.note(`${this.room.labels[source]}'s working history ${on ? 'is now shared with' : 'is no longer shared with'} ${this.room.labels[reader]}. Earlier passages already read remain in that session. ${LOCAL_ONLY}`);
     this.postMeta();
+  }
+
+  async addHistorySource() {
+    const claudeItems = claudeHistory.listSessions(40).map((x) => ({ label: `Claude Code: ${x.title || x.preview}`, detail: x.cwd, src: { provider: 'claude', sessionId: x.id, title: x.title || x.preview, file: x.path } }));
+    let threads = []; try { if (this.codex) threads = await this.codex.listThreads(null, 40); } catch (e) { log(`codex list: ${e.message}`); }
+    if (this.disposed) return;
+    const codexItems = threads.map((t) => ({ label: `Codex: ${t.name || (t.preview || '').slice(0, 80) || t.id}`, detail: t.cwd, src: { provider: 'codex', sessionId: t.id, title: t.name || t.preview || t.id } }));
+    const pick = await vscode.window.showQuickPick([...claudeItems, ...codexItems], { title: 'Add local session history as reference', matchOnDetail: true });
+    if (!pick || this.disposed) return;
+    const readers = await vscode.window.showQuickPick(this.meta.participants.map((p) => ({ label: p.label, description: p.id, id: p.id })), { title: 'Which participants may read this source?', canPickMany: true });
+    if (!readers?.length || this.disposed) return;
+    const span = await vscode.window.showQuickPick([{ label: 'Include all earlier history', all: true }, { label: 'Only from now on', all: false }], { title: 'How much of this source may they read?' });
+    if (!span || this.disposed) return;
+    const source = this.history.add({ ...pick.src, allHistory: span.all, readers: readers.map((x) => x.id) });
+    this.room.note(`Added ${source.title} as ${source.id}, reference for ${readers.map((x) => x.label).join(', ')}. Old requests and approvals are evidence, not instructions.`); this.postMeta();
   }
 
   // Working session picker. New starts fresh; Fork branches a copy (the original is never written); Continue
   // resumes the chosen session itself, so the human is warned first: Wagon Wheel cannot see whether another
   // Claude Code or Codex window has it open. Switches wait for the agent to be idle; the room's cursor, tasks and
   // allowances stay, and the room history is not replayed into the new session.
-  async switchSession(vendor, action) {
-    const room = this.room, m = this.meta, L = vendor === 'claude' ? 'Claude' : 'Codex';
-    if (room.busy[vendor]) { room.note(`${L} is working; switch its session when it finishes.`); return; }
-    let pick = null;
-    if (action !== 'new') {
-      const items = vendor === 'claude'
-        ? claudeHistory.listSessions(40).filter((x) => x.cwd === m.cwd && x.id !== this.claude.sessionId).map((x) => ({ label: x.title || x.preview, description: `claude ${x.id.slice(0, 8)} · ${new Date(x.mtime).toLocaleString()}`, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
-        : (await this.codex.listThreads(null, 40)).filter((t) => t.id !== m.codexThreadId).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, description: `codex ${t.id.slice(0, 8)}`, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
-      if (!items.length) { room.note(vendor === 'claude' ? `No other Claude sessions from ${m.cwd}. Claude can only resume sessions started in the room's folder.` : 'No other Codex threads found.'); return; }
-      pick = await vscode.window.showQuickPick(items, { title: `${L} working session: ${action === 'fork' ? 'fork (the original stays untouched)' : 'continue (writes to that session)'}`, matchOnDescription: true });
-      if (!pick) return;
-      if (action === 'continue') {
-        const recent = pick.mtime && Date.now() - pick.mtime < 120000;
-        const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" in this room?`,
-          { modal: true, detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}Wagon Wheel will write to this ${L} session directly. If another ${L} window has it open, both will write to it and neither sees the other's turns. Close it there first, or fork it instead.` },
-          'Continue', 'Fork instead');
-        if (!go) return;
-        if (go === 'Fork instead') action = 'fork';
+  async switchSession(id, action) {
+    const r = this.slots[id], room = this.room;
+    if (!r || !room || this.disposed) return;
+    const p = r.seat, L = p.label;
+    const unresolved = () => room.held.has(id) || room.tasks._requests().some((q) => ['open', 'delivered'].includes(q.status) && (q.from === id || q.to === id));
+    if (room.busy[id] || r.switching || unresolved()) { room.note(`${L} has work in flight. Finish or stop it before changing its working session.`); return; }
+    const epoch = this.switchEpoch || 0, live = () => !this.disposed && (this.switchEpoch || 0) === epoch;
+    const cursor = room.state.transcript.length;
+    r.switching = true; room.busy[id] = true; room.emit('status', { name: id, busy: true, since: Date.now() });
+    let reserved = null, made = null, adopted = false;
+    try {
+      let pick = null;
+      if (action !== 'new') {
+        const items = p.provider === 'claude'
+          ? claudeHistory.listSessions(40).filter((x) => x.cwd === p.cwd && x.id !== p.sessionId).map((x) => ({ label: x.title || x.preview, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
+          : (await r.client.listThreads(null, 40)).filter((t) => t.id !== p.sessionId).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
+        if (!live()) return;
+        if (!items.length) { room.note(`No other ${p.provider} sessions available for ${L}.`); return; }
+        pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'fork' ? 'fork a local session' : 'continue a local session'}`, matchOnDetail: true });
+        if (!pick || !live()) return;
+        if (action === 'continue') {
+          const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" as ${L}?`, { modal: true,
+            detail: 'This writes to that session directly. Wagon Wheel prevents another seat or room in this extension host from owning it, but cannot see other apps or VS Code windows. Close it there first, or fork instead.' }, 'Continue', 'Fork instead');
+          if (!go || !live()) return; if (go === 'Fork instead') action = 'fork';
+        }
       }
+      if (!live() || unresolved()) { if (live()) room.note(`${L} received pending task work; its working session was not changed.`); return; }
+      if (action === 'continue') {
+        if (!sessionClaims.claim(p.provider, pick.id, r.owner)) throw new Error('That session is already owned by another seat or room. Fork it instead.');
+        reserved = pick.id;
+      }
+      if (p.provider === 'codex') {
+        made = await this.makeCodex(r, action, pick?.id, live); if (!made || !live()) return;
+      } else made = { client: this.makeClaude(r, action === 'continue' ? pick.id : null, action === 'fork' ? pick.id : null), id: action === 'continue' ? pick.id : null };
+      if (!live() || unresolved()) return;
+      const old = r.client;
+      this.bindId(r, made.id); r.client = made.client; r.models = made.models || [];
+      p.forkFrom = action === 'fork' ? pick.id : null;
+      if (p.provider === 'codex') { if (action === 'new') p.typedThreads = [...(p.typedThreads || []), made.id]; p.typed = (p.typedThreads || []).includes(made.id); }
+      this.history.resetParticipant(id); room.state.cursors[id] = cursor;
+      old.stop(); this.ownedClients.delete(old); adopted = true;
+      this.updateAliases();
+      room.note(`${L} now uses ${action === 'new' ? 'a new session' : action === 'fork' ? `a fork of ${pick.id.slice(0, 8)}` : `${pick.id.slice(0, 8)}, continued`}. Earlier room messages are not replayed. History grants reset; task consumption is retained.${p.provider === 'codex' && !p.typed ? ' This stored thread has no verified room tool set; requests remain suggestions.' : ''}`);
+      this.postMeta(); this.postTask();
+    } finally {
+      if (reserved && !adopted) sessionClaims.release(p.provider, reserved, r.owner);
+      if (made && !adopted) { made.client.stop(); this.ownedClients.delete(made.client); }
+      r.switchClient = null; r.switching = false; room.busy[id] = false; room.emit('status', { name: id, busy: false });
+      const pending = room.pending[id]; room.pending[id] = 0;
+      if (pending && !this.disposed) room.deliver(id, pending);
     }
-    if (room.busy[vendor]) { room.note(`${L} started working; switch its session when it finishes.`); return; }
-    const human = m.humanName || 'You';
-    if (vendor === 'claude') {
-      this.claude.stop();
-      this.claude.sessionId = action === 'continue' ? pick.id : null;
-      this.claude.forkFrom = action === 'fork' ? pick.id : null;
-      m.claudeSessionId = this.claude.sessionId;
-    } else {
-      let t;
-      if (action === 'new') t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true, this.xs));
-      else if (action === 'fork') t = await this.codex.forkThread(pick.id, roomPrompt('codex', 'claude', human));
-      else t = await this.codex.resumeThread(pick.id);
-      m.codexThreadId = t.id;
-      if (action === 'new') m.codexTypedThreads = [...(m.codexTypedThreads || []), t.id];
-      // Only threads this room started carry the typed tools (app-server takes them on thread/start only).
-      m.codexTyped = (m.codexTypedThreads || []).includes(t.id);
-      room.agents.codex.typed = m.codexTyped;
-    }
-    const wasShared = this.history.describe().share[vendor]; this.history.sync();
-    if (wasShared) room.note(`${L}'s new working session starts private; share it again if you want the other agent to read it.`);
-    const what = action === 'new' ? 'a new session' : action === 'fork' ? `a fork of ${pick.id.slice(0, 8)}` : `${pick.id.slice(0, 8)}, continued`;
-    room.note(`${L}'s working session is now ${what}. Room tasks and allowances carry over; earlier room messages are not replayed into it.${vendor === 'codex' && !m.codexTyped ? ' This thread has no typed request tool, so Codex\'s hand-offs show as suggestions for you to send.' : ''}`);
-    this.postMeta(); this.postTask();
   }
 
   postTask() {
     if (!this.room) return;
     const t = this.room.tasks;
-    this.post({ type: 'task', task: t.summary(), mode: t.mode, defaults: t.defaults, presets: PRESETS, typed: { claude: true, codex: !!this.meta.codexTyped } });
+    this.post({ type: 'task', task: t.summary(), mode: t.mode, defaults: t.defaults, presets: PRESETS, typed: Object.fromEntries(Object.entries(this.room.agents).map(([id, a]) => [id, !!a.typed])) });
   }
 
   claudeFastOk(model) {
@@ -375,24 +426,59 @@ class RoomSession {
 
   // What the pickers show: each vendor's models, efforts and fast mode, gated by what this machine can run.
   controls() {
-    const m = this.meta, v = this.claudeVersion;
-    const codexModels = (this.codexModels || []).map((x) => ({ id: x.id, name: x.displayName, efforts: x.supportedReasoningEfforts.map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
-    return {
-      claude: { session: this.claude ? this.claude.sessionId || this.claude.forkFrom : m.claudeSessionId, typed: true, shared: !!(m.history && m.history.share && m.history.share.claude), allHistory: !this.history || this.history.allHistory('claude'), cli: v ? v.join('.') : '?', model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast, efforts: commands.CLAUDE_EFFORTS,
-        models: commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') })) },
-      codex: { session: m.codexThreadId, typed: !!m.codexTyped, shared: !!(m.history && m.history.share && m.history.share.codex), allHistory: !this.history || this.history.allHistory('codex'), model: m.codexModel || (codexModels[0] && codexModels[0].id) || null, effort: m.codexEffort || null, fast: !!m.codexFast, models: codexModels }
-    };
+    const v = this.claudeVersion;
+    return Object.fromEntries(Object.values(this.slots).map((r) => {
+      const p = r.seat;
+      const models = p.provider === 'claude'
+        ? commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
+        : r.models.map((x) => ({ id: x.id, name: x.displayName, efforts: (x.supportedReasoningEfforts || []).map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
+      return [p.id, { provider: p.provider, label: p.label, cwd: p.cwd, session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
+        shared: !!this.history?.describe().share[p.id], readers: this.history ? this.history.readers(p.id) : [], allHistory: !this.history || this.history.allHistory(p.id),
+        cli: p.provider === 'claude' && v ? v.join('.') : undefined, model: p.model || models[0]?.id || null, effort: p.effort, fast: !!p.fast, models,
+        efforts: p.provider === 'claude' ? commands.CLAUDE_EFFORTS : undefined }];
+    }));
   }
 
-  cmdSpecs() { return commands.specs({ codexModels: this.codexModels || [], codexModel: this.meta.codexModel }); }
+  cmdSpecs() { return commands.specs({ participants: this.meta.participants || [], controls: this.controls() }); }
 
   postMeta() { this.save(); this.post({ type: 'meta', meta: this.meta, commands: this.cmdSpecs(), controls: this.controls() }); }
 
   async runCommand(text) {
+    if (this.disposed || !this.room) return;
     const room = this.room, m = this.meta;
     const { spec, arg, error } = commands.parse(text, this.cmdSpecs());
     if (error) { room.note(error); return; }
     const say = (t) => room.note(t);
+    if (spec.participant) {
+      const r = this.slots[spec.participant]; if (!r) return;
+      const p = r.seat, action = spec.action;
+      if (action === 'session') { await this.switchSession(p.id, arg); return; }
+      if (action === 'model' || action === 'effort') {
+        if (p.provider === 'claude') {
+          const cat = commands.CLAUDE_CATALOG.find((x) => x.id === arg);
+          const blocked = action === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, cat.name);
+          if (blocked) { say(`${p.label}: ${blocked}. Model unchanged.`); return; }
+          if (action === 'model' && p.fast && !this.claudeFastOk(arg)) { p.fast = false; r.client.setOptions({ fast: false }); }
+          r.client.setOptions({ [action]: arg });
+        } else if (action === 'model') {
+          const model = r.models.find((x) => x.id === arg);
+          if (p.effort && model && !(model.supportedReasoningEfforts || []).some((e) => e.reasoningEffort === p.effort)) p.effort = null;
+        }
+        p[action] = arg; say(`${p.label} ${action} set to ${arg}; its working session and task consumption stay.`);
+      } else if (action === 'fast') {
+        const on = arg === 'on', c = this.controls()[p.id], model = c.models.find((x) => x.id === c.model);
+        if (on && !(p.provider === 'claude' ? this.claudeFastOk(p.model) : model?.fast)) { say(`Fast mode is not available for ${p.label}'s selected model.`); return; }
+        p.fast = on; if (p.provider === 'claude') r.client.setOptions({ fast: on });
+        say(`${p.label} fast mode ${on ? 'on; uses additional provider allowance' : 'off'}.`);
+      } else if (action === 'compact') {
+        if (room.busy[p.id]) { say(`${p.label} is busy.`); return; }
+        room.busy[p.id] = true; room.emit('status', { name: p.id, busy: true, since: Date.now() });
+        try { await (p.provider === 'claude' ? r.client.compact() : r.client.compact(p.sessionId)); say(`${p.label} compacted its context.`); }
+        catch (e) { say(`${p.label} compact failed: ${e.message}`); }
+        finally { room.busy[p.id] = false; room.emit('status', { name: p.id, busy: false }); const pending = room.pending[p.id]; room.pending[p.id] = 0; if (pending && !this.disposed) room.deliver(p.id, pending); }
+      }
+      this.postMeta(); return;
+    }
     switch (spec.cmd) {
       case '/help': {
         const lines = []; let g = null;
@@ -415,51 +501,15 @@ class RoomSession {
         break;
       }
       case '/history share': {
-        const [who, on] = arg.split(' '); this.history.share(who, on === 'on', { allHistory: true });
-        const L = who === 'claude' ? 'Claude' : 'Codex', O = who === 'claude' ? 'Codex' : 'Claude';
-        say(on === 'on' ? `${L}'s working session is shared with ${O} as read-only reference (read_session_history). ${LOCAL_ONLY}` : `${L}'s working session is no longer shared. Passages ${O} already read stay in its context.`);
-        break;
+        const [source, reader, on] = arg.split(' ');
+        if (on) { this.shareHistory(source, reader, on === 'on'); return; }
+        if (!this.slots[source]) return;
+        this.history.share(source, reader === 'on', { allHistory: true });
+        say(`${room.labels[source]}'s history ${reader === 'on' ? 'shared with all current peers' : 'no longer shared'}. Earlier passages remain in sessions that already read them.`); break;
       }
-      case '/default': {
-        room.defaultTarget = m.defaultTarget = arg;
-        const L = { claude: 'Claude', codex: 'Codex' };
-        say(arg === 'both' ? 'Both agents now lead together: messages with no @mention go to both, taking turns.'
-          : `${L[arg]} is now the lead: messages with no @mention go to ${L[arg]}, and ${L[arg]} drives the work. ${L[arg === 'claude' ? 'codex' : 'claude']} helps when asked or handed something.`);
-        break;
-      }
+      case '/default': room.defaultTarget = m.defaultTarget = arg; say(arg === 'both' ? 'All participants receive untagged messages.' : `${room.labels[arg]} now leads untagged messages.`); break;
       case '/both': room.bothMode = m.bothMode = arg; say(arg === 'sequential' ? '@both now takes turns: the second agent sees the first answer and builds on it.' : '@both now answers at once; the agents do not see each other\'s replies until later.'); break;
-      case '/claude fast': {
-        const on = arg === 'on';
-        if (on && !this.claudeFastOk(m.claudeModel)) { say(atLeast(this.claudeVersion, '2.1.205') ? 'Fast mode needs Opus 5.5. Switch with /claude model claude-opus-5-5 first.' : `Fast mode needs Claude Code 2.1.205 or newer; this CLI is ${this.claudeVersion ? this.claudeVersion.join('.') : 'unknown'}.`); break; }
-        m.claudeFast = on; this.claude.setOptions({ fast: on });
-        say(on ? 'Claude fast mode on: up to 2.5x faster Opus, billed to your usage credits (not your plan). If credits run out it falls back to normal speed.' : 'Claude fast mode off.'); break;
-      }
-      case '/codex fast': m.codexFast = arg === 'on'; say(m.codexFast ? 'Codex fast mode on (priority tier): faster, uses more of your Codex quota.' : 'Codex fast mode off.'); break;
-      case '/claude model': case '/claude effort': {
-        const key = spec.cmd.endsWith('model') ? 'model' : 'effort';
-        const cat = commands.CLAUDE_CATALOG.find((x) => x.id === arg);
-        const blocked = key === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, cat.name);
-        if (blocked) { say(`${cat.name} isn't available right now: ${blocked}. Staying on ${m.claudeModel}.`); break; }
-        if (key === 'model' && m.claudeFast && !this.claudeFastOk(arg)) { m.claudeFast = false; this.claude.setOptions({ fast: false }); say('Fast mode is Opus-only, so it is now off.'); }
-        m[key === 'model' ? 'claudeModel' : 'claudeEffort'] = arg; this.claude.setOptions({ [key]: arg });
-        say(`Claude ${key} set to ${arg}. It restarts on the same session${room.busy.claude ? ' after its current reply' : ''}, so it keeps its memory.`); break;
-      }
-      case '/codex model': {
-        m.codexModel = arg;
-        const model = (this.codexModels || []).find((x) => x.id === arg);
-        if (m.codexEffort && model && !model.supportedReasoningEfforts.some((e) => e.reasoningEffort === m.codexEffort)) { say(`${arg} doesn't support effort ${m.codexEffort}; using its default (${model.defaultReasoningEffort}).`); m.codexEffort = null; }
-        say(`Codex model set to ${arg} from the next turn.`); break;
-      }
-      case '/codex effort': m.codexEffort = arg; say(`Codex effort set to ${arg} from the next turn.`); break;
-      case '/claude compact': case '/codex compact': {
-        const who = spec.cmd.startsWith('/claude') ? 'claude' : 'codex';
-        if (room.busy[who]) { say(`${who === 'claude' ? 'Claude' : 'Codex'} is busy; try again when it finishes.`); return; }
-        room.busy[who] = true; room.emit('status', { name: who, busy: true, since: Date.now() }); room.emit('activity', { name: who, phase: 'thinking', label: 'compacting context' });
-        try { if (who === 'claude') await this.claude.compact(); else await this.codex.compact(m.codexThreadId); say(`${who === 'claude' ? 'Claude' : 'Codex'} compacted its context.`); }
-        catch (e) { say(`${who === 'claude' ? 'Claude' : 'Codex'} compact failed: ${e.message}`); }
-        finally { room.busy[who] = false; room.emit('status', { name: who, busy: false }); room.emit('draft', { name: who, text: null }); if (room.pending[who]) { room.pending[who] = false; room.deliver(who); } }
-        break;
-      }
+
     }
     this.postMeta();
   }
@@ -470,7 +520,9 @@ class RoomSession {
     this.post({ type: 'ide', summary: ideContext.summary(ideSnapshot(this.meta.cwd)) });
     if (this.claudeUsage) this.post({ type: 'claudeUsage', usage: this.claudeUsage });
     this.postTask();
-    this.post({ type: 'init', meta: this.meta, commands: this.cmdSpecs(), controls: this.room ? this.controls() : null, transcript: this.room ? this.room.state.transcript.map((e) => this.view(e)) : [], busy: this.room ? this.room.busy : {}, quota: this.quota, cost: this.claude ? this.claude.totalCostUsd : 0 });
+    this.post({ type: 'init', meta: this.meta, commands: this.cmdSpecs(), controls: this.room ? this.controls() : null, transcript: this.room ? this.room.state.transcript.map((e) => this.view(e)) : [], busy: this.room ? this.room.busy : {}, quota: this.quota,
+      participantUsage: Object.fromEntries(Object.values(this.slots).map((r) => [r.seat.id, r.client?.lastTurnUsage || null])),
+      participantCost: Object.fromEntries(Object.values(this.slots).filter((r) => typeof r.client?.totalCostUsd === 'number').map((r) => [r.seat.id, r.client.totalCostUsd])) });
   }
 
   // Webview copy of an attachment: image thumbnails get a webview-safe URL.
@@ -491,8 +543,7 @@ class RoomSession {
     try { this.save(); } finally {
       this.disposed = true;
       sessions.delete(this); if (this.scheduler) this.scheduler.dispose();
-      for (const client of this.extraClients) client.stop(); this.extraClients.clear();
-      if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null;
+      this.closeClients(); this.panel = null;
     }
   }
 }
@@ -561,23 +612,22 @@ function panelHtml(webview, extUri) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource};">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${css}"><title>Wagon Wheel</title></head>
-<body data-wc="${require('../package.json').version}"><header id="hdr"><div><div id="title"></div><div id="ids"></div></div><div id="quota"></div></header>
+<body data-wc="${require('../package.json').version}"><header id="hdr" tabindex="0" aria-label="Room and account usage"><div><div id="title"></div><div id="ids"></div></div><div id="quota"></div></header>
 <main id="log" aria-live="polite"></main>
 <footer><div class="dock">
 <section id="task" class="task" hidden aria-live="polite"></section>
 <div id="menu" role="listbox" hidden></div><div id="pop" class="pop" hidden></div>
 <div class="composer"><div class="composer-in">
 <div id="tray" hidden></div>
-<textarea id="input" rows="1" aria-label="Message" placeholder="Message Claude and Codex…   @ to mention · / for commands"></textarea>
+<textarea id="input" rows="1" aria-label="Message" placeholder="Message the room…   @ to mention · / for commands"></textarea>
 <div class="tools">
 <button id="attach" class="icon" title="Attach files (or paste a screenshot, or Shift-drag files in)" aria-label="Attach files">+</button>
 <button id="ide" class="chip ide" title="IDE context: what you are looking at in VS Code is attached to your message. Click to turn off."></button>
-<button id="vc-claude" class="chip vendor claude" aria-haspopup="true"></button>
-<button id="vc-codex" class="chip vendor codex" aria-haspopup="true"></button>
+<span id="participants"></span>
 <button id="lead" class="chip lead" aria-haspopup="true" title="Who leads: messages without an @mention go to the lead"></button>
 <button id="tc" class="chip tc" aria-haspopup="true" title="Task controls: mode and allowances"></button>
 <span id="who"></span>
-<button id="stop" class="round stop" title="Stop both agents" aria-label="Stop" hidden>■</button>
+<button id="stop" class="round stop" title="Stop all participants" aria-label="Stop" hidden>■</button>
 <button id="send" class="round send" title="Send (Enter)" aria-label="Send">↑</button>
 </div></div></div>
 <div class="hint">Untagged messages go to <span id="deftarget">Claude</span> · @ to mention · / for commands · Enter to send, Shift+Enter for a new line</div>
@@ -592,7 +642,7 @@ async function openSession(context, session, opts) {
   panel.webview.html = panelHtml(panel.webview, context.extensionUri);
   session.attach(panel);
   try {
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting Codex and Claude…' }, () => session.boot(opts));
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting local sessions…' }, () => session.boot(opts));
     session.postInit();
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
@@ -604,6 +654,44 @@ async function openSession(context, session, opts) {
 // New rooms start on the current rules, so they get no upgrade notice.
 function newMeta(name) {
   return { id: crypto.randomUUID(), name, cwd: settings().cwd, createdAt: new Date().toISOString(), codexThreadId: null, claudeSessionId: null, handoffRule: HANDOFF_RULE };
+}
+
+// Choose the complete roster before starting any CLI: tool peer names are fixed when its thread is created.
+async function chooseParticipants(meta) {
+  const s = settings();
+  const kind = await vscode.window.showQuickPick([
+    { label: 'Claude + Codex', description: 'One fresh local session each', kind: 'default' },
+    { label: 'Custom local participants', description: 'Up to six named Claude Code or Codex sessions', kind: 'custom' }
+  ], { title: 'New room: choose participants' });
+  if (!kind) return null;
+  if (kind.kind === 'default') return normalizeParticipants(meta, s);
+  const seats = [];
+  while (true) {
+    const options = [];
+    if (seats.length < 6) options.push({ label: 'Add Codex', provider: 'codex' }, { label: 'Add Claude Code', provider: 'claude' });
+    if (seats.length) options.push({ label: 'Create room', description: seats.map((p) => `${p.label} (@${p.id})`).join(', '), done: true }, { label: 'Remove last participant', remove: true });
+    const next = await vscode.window.showQuickPick(options, { title: `Local participants (${seats.length}/6)`, placeHolder: 'Each participant owns a separate local session; the roster stays fixed for this room.' });
+    if (!next) return null;
+    if (next.done) return normalizeParticipants({ ...meta, seats }, s);
+    if (next.remove) { seats.pop(); continue; }
+    const provider = next.provider;
+    const label = await vscode.window.showInputBox({ prompt: 'Participant display name', value: provider === 'codex' ? 'Codex' : 'Claude', validateInput: (v) => !v.trim() || v.length > 60 || /[\x00-\x1f\x7f-\x9f]/.test(v) ? 'Use a name of 1–60 characters.' : null });
+    if (label === undefined) return null;
+    let suggestion = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 28);
+    if (!/^[a-z]/.test(suggestion)) suggestion = provider;
+    const base = suggestion; let suffix = 2;
+    while (seats.some((p) => p.id === suggestion)) suggestion = `${base}-${suffix++}`;
+    const validateId = (id) => {
+      try { normalizeParticipants({ ...meta, seats: [...seats, { id, label, provider, cwd: meta.cwd }] }, s); return null; }
+      catch (e) { return e.message; }
+    };
+    const id = await vscode.window.showInputBox({ prompt: 'Participant ID for @mentions and commands', value: suggestion, validateInput: validateId });
+    if (id === undefined) return null;
+    const folder = await vscode.window.showOpenDialog({ title: `${label}: choose its working folder`, canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(meta.cwd), openLabel: 'Use folder' });
+    if (!folder || !folder[0]) return null;
+    seats.push({ id, label, provider, cwd: folder[0].fsPath });
+    normalizeParticipants({ ...meta, seats }, s); // validate picker output before it can become a runtime record
+  }
 }
 
 // The rename changed the extension id, and with it the storage folder. Copy (never move) rooms saved under the
@@ -642,7 +730,10 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.newRoom', async () => {
     const name = await vscode.window.showInputBox({ prompt: 'Room name', value: `Room ${new Date().toLocaleDateString()}` });
     if (!name) return;
-    await openSession(context, new RoomSession(context, newMeta(name), null), {});
+    const meta = newMeta(name), seats = await chooseParticipants(meta);
+    if (!seats) return;
+    meta.seats = seats;
+    await openSession(context, new RoomSession(context, meta, null), {});
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.joinExisting', async () => {
@@ -704,4 +795,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants };

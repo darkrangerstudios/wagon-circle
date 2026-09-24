@@ -12,8 +12,10 @@ const CLAUDE_CATALOG = [
 const CLAUDE_MODELS = [...CLAUDE_CATALOG.map((m) => m.id), 'sonnet', 'opus', 'haiku'];
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'max'];
 
-// ctx: { codexModels: [{id, supportedReasoningEfforts:[{reasoningEffort}], defaultReasoningEffort}], codexModel }
+// New rooms pass { participants: [{id,label,provider}], controls: { [id]: {models,model,efforts} } }.
+// The legacy {codexModels, codexModel} form remains supported.
 function specs(ctx = {}) {
+  if (Array.isArray(ctx.participants)) return participantSpecs(ctx);
   const models = ctx.codexModels || [];
   const current = models.find((m) => m.id === ctx.codexModel) || models[0];
   const codexEfforts = current ? current.supportedReasoningEfforts.map((e) => e.reasoningEffort) : [];
@@ -26,7 +28,7 @@ function specs(ctx = {}) {
     { group: 'Room', cmd: '/history remove', desc: 'Stop sharing a history source' },
     { group: 'Room', cmd: '/history all', desc: 'Include a shared source\'s earlier history (on) or only what is said from now on (off): /history all <h1|claude|codex> on|off' },
     { group: 'Room', cmd: '/history share', args: ['claude on', 'claude off', 'codex on', 'codex off'], desc: 'Share an agent\'s working session with the other agent (read-only reference)' },
-    { group: 'Claude', cmd: '/claude model', args: CLAUDE_MODELS, desc: 'Switch Claude model (restarts on the same session)' },
+    { group: 'Claude', cmd: '/claude model', args: CLAUDE_MODELS, allowAnyArg: true, desc: 'Switch Claude model (restarts on the same session)' },
     { group: 'Claude', cmd: '/claude effort', args: CLAUDE_EFFORTS, desc: 'Claude thinking effort' },
     { group: 'Claude', cmd: '/claude fast', args: ['on', 'off'], desc: 'Opus fast mode, ~2.5x faster; billed to usage credits' },
     { group: 'Claude', cmd: '/claude compact', desc: 'Summarize Claude\'s context to free space' },
@@ -37,6 +39,38 @@ function specs(ctx = {}) {
   ];
 }
 
+function participantSpecs({ participants, controls = {} }) {
+  const ids = participants.map((p) => p.id);
+  const room = specs().filter((s) => s.group === 'Room');
+  room.find((s) => s.cmd === '/stop').desc = 'Stop all agents and cancel hand-offs';
+  room.find((s) => s.cmd === '/default').args = [...ids, 'both'];
+  room.find((s) => s.cmd === '/history add').desc = 'Add a local Claude Code session or Codex thread as shared reference (local only)';
+  room.find((s) => s.cmd === '/history all').desc = `Include a shared source's earlier history (on) or only what is said from now on (off): /history all <h1|${ids.join('|')}> on|off`;
+  const share = room.find((s) => s.cmd === '/history share');
+  share.args = ids.flatMap((source) => [
+    ...['on', 'off'].map((value) => `${source} ${value}`),
+    ...ids.filter((reader) => reader !== source).flatMap((reader) => ['on', 'off'].map((value) => `${source} ${reader} ${value}`))
+  ]);
+  share.desc = 'Share a working session as read-only reference: <source> <reader> on|off; omit the reader to apply to every peer';
+  return room.concat(participants.filter((p) => ['claude', 'codex'].includes(p.provider)).flatMap((p) => {
+    const control = controls[p.id] || {};
+    const models = Array.isArray(control.models) ? control.models : p.provider === 'claude' ? CLAUDE_CATALOG : [];
+    const current = models.find((m) => m.id === control.model) || models[0];
+    const effortValues = control.efforts || (current && (current.efforts || current.supportedReasoningEfforts)) || (p.provider === 'claude' ? CLAUDE_EFFORTS : []);
+    const efforts = Array.isArray(effortValues) ? effortValues.map((e) => typeof e === 'string' ? e : e.reasoningEffort).filter(Boolean) : [];
+    const command = (action, options) => ({ group: p.label || p.id, cmd: `/${p.id} ${action}`,
+      participant: p.id, action, provider: p.provider, ...options });
+    return [
+      command('model', { args: models.map((m) => m.id), ...(p.provider === 'claude' ? { allowAnyArg: true } : {}),
+        desc: p.provider === 'claude' ? 'Switch Claude model (restarts on the same session)' : 'Switch Codex model (applies from the next turn)' }),
+      command('effort', { args: efforts, desc: `Thinking effort for ${p.label || p.id}${current ? ` (${current.id})` : ''}` }),
+      command('fast', { args: ['on', 'off'], desc: p.provider === 'claude' ? 'Opus fast mode; billed to usage credits' : 'Priority tier: faster, uses more of your Codex quota' }),
+      command('compact', { desc: `Summarize ${p.label || p.id}'s working session to free space` }),
+      command('session', { args: ['new', 'continue', 'fork'], desc: `Choose a new, continued or forked working session for ${p.label || p.id}` })
+    ];
+  }));
+}
+
 // Longest matching command wins; the rest of the line is the argument.
 function parse(text, list) {
   const t = String(text).trim().replace(/\s+/g, ' ');
@@ -44,7 +78,7 @@ function parse(text, list) {
   if (!hit) return { error: `Unknown command "${t.split(' ').slice(0, 2).join(' ')}". Type /help for the list.` };
   const arg = t.slice(hit.cmd.length).trim();
   if (hit.args && !arg) return { error: `${hit.cmd} needs a value: ${hit.args.join(', ')}` };
-  if (hit.args && hit.args.length && !hit.args.includes(arg) && hit.cmd !== '/claude model') return { error: `${hit.cmd} accepts: ${hit.args.join(', ')}` };
+  if (hit.args && hit.args.length && !hit.args.includes(arg) && !hit.allowAnyArg) return { error: `${hit.cmd} accepts: ${hit.args.join(', ')}` };
   return { spec: hit, arg };
 }
 

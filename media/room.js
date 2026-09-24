@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.5.0';
+  const EXPECT = '0.5.1-local.1';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -16,6 +16,8 @@
   const log = $('log'), input = $('input');
   const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Wheel' };
   const GLYPH = { claude: '✳', codex: '>_' };
+  const providers = { claude: 'claude', codex: 'codex' };
+  const participantUsage = {}, participantCost = {};
   let busy = {}, cost = 0, usage = null, codexUsage = null, local = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
   const drafts = {}, act = {}, since = {};           // in-progress replies per agent
@@ -27,6 +29,16 @@
   const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
   const k = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   const secs = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
+  const participants = () => meta.participants || [{ id: 'claude', label: 'Claude', provider: 'claude' }, { id: 'codex', label: 'Codex', provider: 'codex' }];
+  const provider = (id) => providers[id] || 'other';
+  function syncParticipants() {
+    NAMES.human = meta.humanName || 'You';
+    for (const p of participants()) {
+      NAMES[p.id] = p.label || p.id; providers[p.id] = p.provider;
+      GLYPH[p.id] = p.provider === 'codex' ? '>_' : p.provider === 'claude' ? '✳' : '◆';
+    }
+  }
+  const allLabel = () => participants().length === 2 ? 'Both' : 'Everyone';
 
   // ---------- message bodies: text, code fences, diffs ----------
   const looksLikeDiff = (t) => /^(---|\+\+\+) /m.test(t) && /^@@ /m.test(t);
@@ -83,8 +95,9 @@
 
   // ---------- rows ----------
   function agentShell(name, tag) {
-    const row = el('article', `row agent ${name}`);
-    row.appendChild(el('div', `avatar ${name}`, GLYPH[name]));
+    const row = el('article', `row agent ${provider(name)}`);
+    row.dataset.participant = name;
+    row.appendChild(el('div', `avatar ${provider(name)}`, GLYPH[name]));
     const col = el('div'); const head = el('div', 'head');
     head.appendChild(el('span', 'name', NAMES[name])); if (tag) head.appendChild(el('span', 'tag', tag));
     col.appendChild(head); row.appendChild(col);
@@ -92,7 +105,7 @@
   }
   function modelTag(name) {
     if (!controls) return '';
-    const c = controls[name]; const m = c && c.models.find((x) => x.id === c.model);
+    const c = controls[name]; const m = c && (c.models || []).find((x) => x.id === c.model);
     return m ? (m.name || m.id) : (c && c.model) || '';
   }
   // Every message says when: today as "9:36 AM", then "Yesterday 9:36 PM", "Sep 22, 9:36 PM"; full date on hover.
@@ -182,7 +195,7 @@
   function renderWho() {
     const w = $('who'); w.textContent = '';
     for (const n of Object.keys(busy)) if (busy[n]) {
-      w.appendChild(el('span', `w ${n}`, `${NAMES[n]} · ${act[n] ? act[n].label : 'starting'} · ${secs(Date.now() - (since[n] || Date.now()))}`));
+      w.appendChild(el('span', `w ${provider(n)}`, `${NAMES[n]} · ${act[n] ? act[n].label : 'starting'} · ${secs(Date.now() - (since[n] || Date.now()))}`));
     }
     const any = Object.values(busy).some(Boolean), typed = !!(input.value.trim() || pending.length);
     $('stop').hidden = !any; $('send').hidden = !!any && !typed;
@@ -193,21 +206,25 @@
     if (!any && ticker) { clearInterval(ticker); ticker = null; }
   }
   function renderChips() {
-    const c = controls; const cb = $('vc-claude'), xb = $('vc-codex');
-    for (const [btn, name] of [[cb, 'claude'], [xb, 'codex']]) {
-      btn.textContent = ''; btn.appendChild(el('span', 'glyph', GLYPH[name]));
-      const v = c && c[name];
-      btn.appendChild(el('span', null, v ? `${modelTag(name) || 'default'} · ${v.effort || 'auto'}` : NAMES[name]));
+    const box = $('participants'); box.textContent = '';
+    for (const p of participants()) {
+      const name = p.id, v = controls && controls[name];
+      const btn = el('button', `chip vendor ${provider(name)}`); btn.id = `vc-${name}`;
+      btn.appendChild(el('span', 'glyph', GLYPH[name]));
+      btn.appendChild(el('span', 'seatlabel', NAMES[name]));
+      if (v) btn.appendChild(el('span', 'seatmodel', `${modelTag(name) || 'default'} · ${v.effort || 'auto'}`));
       if (v && v.fast) btn.appendChild(el('span', 'bolt', '⚡'));
-      btn.title = `${NAMES[name]}: model, effort and fast mode`;
+      btn.title = `${NAMES[name]} (@${name}): session, model and history${p.cwd ? '\n' + p.cwd : ''}`;
+      btn.setAttribute('aria-label', `${NAMES[name]} controls`);
+      btn.addEventListener('click', () => openPop(name)); box.appendChild(btn);
     }
     const ideBtn = $('ide'); ideBtn.textContent = ideSummary ? `📍 ${ideSummary}` : '';
     ideBtn.classList.toggle('off', meta.ideContext === false);
     const lead = meta.defaultTarget || 'claude';
-    $('deftarget').textContent = lead === 'both' ? 'both agents, in turn' : NAMES[lead];
+    $('deftarget').textContent = lead === 'both' ? `${allLabel().toLowerCase()}, ${meta.bothMode === 'parallel' ? 'at once' : 'in turn'}` : NAMES[lead];
     const lb = $('lead'); lb.textContent = '';
-    lb.appendChild(el('span', 'muted', 'Lead')); lb.appendChild(el('span', `glyph ${lead}`, lead === 'both' ? '✳ >_' : GLYPH[lead]));
-    lb.appendChild(el('span', null, lead === 'both' ? 'Both' : NAMES[lead]));
+    lb.appendChild(el('span', 'muted', 'Lead')); lb.appendChild(el('span', `glyph ${provider(lead)}`, lead === 'both' ? '◎' : GLYPH[lead]));
+    lb.appendChild(el('span', null, lead === 'both' ? allLabel() : NAMES[lead]));
   }
   function renderQuota() {
     const box = $('quota'); box.textContent = '';
@@ -233,10 +250,17 @@
         `Updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`].join('\n');
       box.appendChild(p);
     }
-    if (codexUsage) { const p = el('span', 'pill', `Codex last turn ${k(codexUsage.fresh + codexUsage.cacheWrite)} new, ${k(codexUsage.cached)} cached`); p.title = `Output ${k(codexUsage.output)}`; box.appendChild(p); }
-    if (cost) {
-      const p = el('span', 'pill', `Claude ≈$${cost.toFixed(2)} at API rates${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}`);
-      p.title = 'Billed to your Claude plan, not charged. This is what the same tokens would cost on the API.'; box.appendChild(p);
+    if (Object.keys(participantUsage).length || Object.keys(participantCost).length) {
+      for (const p of participants()) {
+        const u = participantUsage[p.id], dollars = participantCost[p.id];
+        if (!u && !dollars) continue;
+        const pill = el('span', 'pill', `${p.label}${dollars ? ` ≈$${dollars.toFixed(2)} at API rates` : ''}${u ? ` · last turn ${k(u.fresh + u.cacheWrite)} new, ${k(u.cached)} cached` : ''}`);
+        pill.title = [u ? `Output ${k(u.output)}` : '', dollars ? 'API-equivalent estimate, not a separate charge.' : '', 'Provider account limits above are shared across sessions.'].filter(Boolean).join('\n'); box.appendChild(pill);
+      }
+    } else {
+      // Old saved rooms and older hosts have only the provider-level last-turn fields.
+      if (codexUsage) { const p = el('span', 'pill', `Codex last turn ${k(codexUsage.fresh + codexUsage.cacheWrite)} new, ${k(codexUsage.cached)} cached`); p.title = `Output ${k(codexUsage.output)}`; box.appendChild(p); }
+      if (cost) { const p = el('span', 'pill', `Claude ≈$${cost.toFixed(2)} at API rates${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}`); p.title = 'API-equivalent estimate, not a separate charge.'; box.appendChild(p); }
     }
   }
   // ---------- task card and controls ----------
@@ -287,11 +311,11 @@
   function openTaskControls() {
     const pop = $('pop');
     if (!pop.hidden && pop.dataset.for === 'task') return closePop();
-    pop.dataset.for = 'task'; pop.textContent = ''; pop.hidden = false; pop.style.left = 'auto'; pop.style.right = '0';
+    pop.dataset.for = 'task'; pop.textContent = ''; pop.hidden = false;
     const h = el('h4'); h.appendChild(el('span', null, 'Task controls')); h.appendChild(el('small', null, task ? `task ${task.id}` : 'for new tasks')); pop.appendChild(h);
     const md = el('div'); md.appendChild(el('div', 'lbl', 'Mode'));
     const seg = el('div', 'seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Mode');
-    for (const [v, tip] of [['auto', 'A task starts when an agent asks the other for help'], ['chat', 'One consultation per message, no task'], ['work', 'Every message starts a task']]) {
+    for (const [v, tip] of [['auto', 'A task starts when an agent asks a peer for help'], ['chat', 'One consultation per message, no task'], ['work', 'Every message starts a task']]) {
       const x = el('button', v === taskMode ? 'on' : '', v[0].toUpperCase() + v.slice(1)); x.title = tip; x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', String(v === taskMode));
       x.addEventListener('click', () => { vscode.postMessage({ type: 'taskMode', mode: v }); closePop(); }); seg.appendChild(x);
     }
@@ -309,7 +333,7 @@
     }
     ps.appendChild(pseg); pop.appendChild(ps);
     const grid = el('div', 'limits');
-    for (const [key, label, help, max] of [['turns', 'Agent turns', 'Turn starts for this task across both agents, including retries', 200], ['reserve', 'Kept for wrap-up', 'Turns new requests may not use, so answers can come back', 50], ['minutes', 'Minutes', 'Active time; paused time does not count. At the limit running work stops', 1440]]) {
+    for (const [key, label, help, max] of [['turns', 'Agent turns', 'Turn starts for this task across all participants, including retries', 200], ['reserve', 'Kept for wrap-up', 'Turns new requests may not use, so answers can come back', 50], ['minutes', 'Minutes', 'Active time; paused time does not count. At the limit running work stops', 1440]]) {
       const id = `lim-${key}`; const lab = el('label', null, label); lab.htmlFor = id; lab.title = help;
       const inp = document.createElement('input'); inp.type = 'number'; inp.id = id; inp.min = key === 'reserve' ? '0' : '1'; inp.max = String(max); inp.value = cur[key]; inp.title = help;
       inp.addEventListener('input', mark); fields[key] = inp; grid.appendChild(lab); grid.appendChild(inp);
@@ -317,7 +341,7 @@
     pop.appendChild(grid); mark();
     function read() { return Object.fromEntries(Object.entries(fields).map(([k2, i]) => [k2, Number(i.value)])); }
     pop.appendChild(el('small', 'note', 'Token and dollar limits are not offered: usage arrives only after a turn. Presets never change the model, fast mode or permissions.'));
-    pop.appendChild(el('small', 'note', 'Permissions: read-only for both agents. Tasks cover review and investigation. Claude has no shell access; Codex can use its read-only sandbox for local inspection. Editing and development workflows are not supported in this version.'));
+    pop.appendChild(el('small', 'note', 'Local Codex and Claude Code permissions: read-only. Tasks cover review and investigation. Claude has no shell access; Codex can use its read-only sandbox for local inspection. Editing and development workflows are not supported in this version.'));
     const acts = el('div', 'actions');
     if (task && !['completed', 'stopped'].includes(task.status)) { const a = el('button', 'primary', 'Apply to this task'); a.addEventListener('click', () => { vscode.postMessage({ type: 'taskLimits', limits: read() }); closePop(); }); acts.appendChild(a); }
     const sv = el('button', 'link', 'Save as my defaults'); sv.title = 'New tasks start with these; tasks already running keep theirs';
@@ -330,10 +354,13 @@
     const pop = $('pop'); if (!controls) return;
     if (!pop.hidden && pop.dataset.for === name) return closePop();
     pop.dataset.for = name; pop.textContent = ''; pop.hidden = false;
-    const c = controls[name];
-    const h = el('h4'); h.appendChild(el('span', null, `${GLYPH[name]}  ${NAMES[name]}`)); h.appendChild(el('small', null, name === 'claude' ? `Claude Code ${c.cli}` : 'Codex app-server')); pop.appendChild(h);
+    const c = controls[name] || participants().find((p) => p.id === name); if (!c) { closePop(); return; }
+    const kind = c.provider || provider(name);
+    const h = el('h4'); h.appendChild(el('span', null, `${GLYPH[name]}  ${NAMES[name]}`)); h.appendChild(el('small', null, kind === 'claude' ? `Claude Code ${c.cli || ''}` : kind === 'codex' ? 'Codex app-server' : 'Experimental ACP')); pop.appendChild(h);
+    pop.appendChild(el('small', 'note seatcontext', `@${name}${c.cwd ? ' · ' + c.cwd : ''}`));
+    if (!['claude', 'codex'].includes(kind)) { pop.appendChild(el('small', 'note', 'Experimental agent: local process, provider-managed permissions. Model, effort and history controls are not available here.')); return; }
     const models = el('div'); models.appendChild(el('div', 'lbl', 'Model'));
-    for (const m of c.models) {
+    for (const m of c.models || []) {
       const b = el('button', `opt${m.id === c.model ? ' on' : ''}`); const l = el('span', null, m.name || m.id);
       const why = m.available === false ? `needs Claude Code ${m.minCli}+` : m.blocked || m.note;
       if (why) l.appendChild(el('small', null, `  ${why}`));
@@ -342,18 +369,18 @@
       b.addEventListener('click', () => { cmd(`/${name} model ${m.id}`); closePop(); }); models.appendChild(b);
     }
     pop.appendChild(models);
-    const cur = c.models.find((m) => m.id === c.model) || {};
-    const efforts = name === 'claude' ? c.efforts : (cur.efforts || []);
+    const cur = (c.models || []).find((m) => m.id === c.model) || {};
+    const efforts = kind === 'claude' ? (c.efforts || []) : (cur.efforts || []);
     if (efforts.length) {
-      const e = el('div'); e.appendChild(el('div', 'lbl', `Effort${name === 'codex' && cur.defaultEffort ? ` · default ${cur.defaultEffort}` : ''}`));
+      const e = el('div'); e.appendChild(el('div', 'lbl', `Effort${kind === 'codex' && cur.defaultEffort ? ` · default ${cur.defaultEffort}` : ''}`));
       const seg = el('div', 'seg');
       for (const v of efforts) { const b = el('button', v === c.effort ? 'on' : '', v); b.addEventListener('click', () => { cmd(`/${name} effort ${v}`); closePop(); }); seg.appendChild(b); }
       e.appendChild(seg); pop.appendChild(e);
     }
-    const fastOk = name === 'claude' ? !!cur.fastOk : !!cur.fast;
+    const fastOk = kind === 'claude' ? !!cur.fastOk : !!cur.fast;
     const row = el('div', 'fastrow'); const txt = el('div');
     txt.appendChild(el('span', null, '⚡ Fast mode'));
-    txt.appendChild(el('small', null, name === 'claude' ? (fastOk ? 'Up to 2.5x faster Opus · billed to usage credits' : 'Opus 5.5 only, on Claude Code 2.1.205+') : (fastOk ? `${cur.fast.description} · priority tier` : 'Not offered for this model')));
+    txt.appendChild(el('small', null, kind === 'claude' ? (fastOk ? 'Up to 2.5x faster Opus · billed to usage credits' : 'Opus 5.5 only, on Claude Code 2.1.205+') : (fastOk ? `${cur.fast.description} · priority tier` : 'Not offered for this model')));
     const sw = el('button', `switch${c.fast ? ' on' : ''}`); sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!c.fast)); sw.setAttribute('aria-label', 'Fast mode');
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
@@ -365,31 +392,32 @@
       x.addEventListener('click', () => { vscode.postMessage({ type: 'session', vendor: name, action: a }); closePop(); }); wseg.appendChild(x);
     }
     ws.appendChild(wseg); pop.appendChild(ws);
-    const other = name === 'claude' ? 'codex' : 'claude';
     pop.appendChild(el('div', 'lbl', 'Shared history'));
-    const hr = el('div', 'fastrow'); const ht = el('div');
-    ht.appendChild(el('span', null, `Let ${NAMES[other]} read this session`));
-    ht.appendChild(el('small', null, 'As read-only reference. Local sessions only.'));
-    const hs = el('button', `switch${c.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!c.shared)); hs.setAttribute('aria-label', 'Share session history');
-    hs.addEventListener('click', () => { cmd(`/history share ${name} ${c.shared ? 'off' : 'on'}`); closePop(); });
-    hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
-    if (c.shared) {
+    const readers = c.readers || participants().filter((p) => p.id !== name).map((p) => ({ ...p, shared: !!c.shared }));
+    for (const reader of readers) {
+      const hr = el('div', 'fastrow'); const ht = el('div');
+      ht.appendChild(el('span', null, `Let ${reader.label || NAMES[reader.id]} read this session`));
+      ht.appendChild(el('small', null, 'Read-only reference for this specific working session.'));
+      const hs = el('button', `switch${reader.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!reader.shared)); hs.setAttribute('aria-label', `Share ${NAMES[name]} history with ${reader.label || NAMES[reader.id]}`);
+      hs.addEventListener('click', () => { vscode.postMessage({ type: 'historyShare', source: name, reader: reader.id, on: !reader.shared }); closePop(); });
+      hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
+    }
+    if (readers.some((r) => r.shared)) {
       const ar = el('div', 'fastrow'); const at = el('div');
       at.appendChild(el('span', null, 'Include earlier history'));
-      at.appendChild(el('small', null, c.allHistory !== false ? `${NAMES[other]} can read the whole session.` : `${NAMES[other]} can read only what is said from when you turned this off.`));
+      at.appendChild(el('small', null, c.allHistory !== false ? 'Allowed readers can read the whole session.' : 'Allowed readers can read only what is said from when you turned this off.'));
       const as = el('button', `switch${c.allHistory !== false ? ' on' : ''}`); as.setAttribute('role', 'switch'); as.setAttribute('aria-checked', String(c.allHistory !== false)); as.setAttribute('aria-label', 'Include earlier history');
       as.addEventListener('click', () => { cmd(`/history all ${name} ${c.allHistory !== false ? 'off' : 'on'}`); closePop(); });
       ar.appendChild(at); ar.appendChild(as); pop.appendChild(ar);
     }
     // What this agent can do here: one line, full detail on hover.
-    const cap = el('small', 'note cap', name === 'claude' ? 'Read-only · no shell, web or edits' : 'Read-only sandbox · no edits, web or connectors');
-    cap.title = name === 'claude' ? 'Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers. Your own Claude settings do not apply here.'
+    const cap = el('small', 'note cap', kind === 'claude' ? 'Read-only · no shell, web or edits' : 'Read-only sandbox · no edits, web or connectors');
+    cap.title = kind === 'claude' ? 'Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers. Your own Claude settings do not apply here.'
       : 'Read-only sandbox for local inspection, plus the room tools when its thread has them. Read access is not confined to the room folder. Every approval request is declined. Web search, connected apps and external MCP tools are disabled and checked before the thread is used.';
     pop.appendChild(cap);
-    const save = el('button', 'link', 'Use these settings for new rooms');
+    const save = el('button', 'link', 'Use as provider defaults for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);
-    if (name === 'codex') pop.style.left = 'auto', pop.style.right = '0'; else pop.style.left = '0', pop.style.right = 'auto';
   }
 
   // ---------- attachments ----------
@@ -406,12 +434,15 @@
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'init') {
       log.textContent = ''; Object.keys(drafts).forEach((x) => delete drafts[x]);
-      meta = m.meta || {}; NAMES.human = meta.humanName || 'You';
-      for (const p of meta.participants || []) { if (!NAMES[p.id]) NAMES[p.id] = p.label; if (!GLYPH[p.id]) GLYPH[p.id] = '◆'; } specs = m.commands || specs; controls = m.controls || controls;
+      meta = m.meta || {}; syncParticipants();
+      specs = m.commands || specs; controls = m.controls || controls;
       $('title').textContent = meta.name || 'Wagon Wheel';
       $('ids').textContent = [meta.cwd, meta.forkedFrom && `codex fork of ${meta.forkedFrom.slice(0, 8)}`, meta.claudeForkedFrom && `claude fork of ${meta.claudeForkedFrom.slice(0, 8)}`].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(render(e)));
       busy = m.busy || {}; cost = m.cost || 0; if (m.quota) quota = m.quota;
+      for (const id of Object.keys(participantUsage)) delete participantUsage[id];
+      for (const id of Object.keys(participantCost)) delete participantCost[id];
+      Object.assign(participantUsage, m.participantUsage || {}); Object.assign(participantCost, m.participantCost || {});
       renderQuota(); renderChips(); renderWho(); renderTask(); log.scrollTop = log.scrollHeight;
     } else if (m.type === 'message') { setDraft(m.entry.from, null); add(render(m.entry)); }
     else if (m.type === 'draft') setDraft(m.name, m.text);
@@ -420,13 +451,15 @@
       busy[m.name] = m.busy;
       if (m.busy) since[m.name] = m.since || Date.now(); else { delete act[m.name]; delete since[m.name]; }
       if (typeof m.cost === 'number') cost = m.cost; if (m.usage) usage = m.usage; if (m.codexUsage) codexUsage = m.codexUsage;
+      if (m.participantUsage) participantUsage[m.name] = m.participantUsage;
+      if (typeof m.participantCost === 'number') participantCost[m.name] = m.participantCost;
       renderWho(); renderQuota();
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
     else if (m.type === 'localUsage') { local = m.usage; renderQuota(); }
     else if (m.type === 'task') { task = m.task; taskMode = m.mode || 'auto'; taskDefaults = m.defaults; presets = m.presets || presets; typedAgents = m.typed || {}; renderTask(); }
     else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
-    else if (m.type === 'meta') { meta = m.meta; specs = m.commands || specs; controls = m.controls || controls; renderChips(); }
+    else if (m.type === 'meta') { meta = m.meta; syncParticipants(); specs = m.commands || specs; controls = m.controls || controls; renderChips(); }
     else if (m.type === 'ide') { ideSummary = m.summary; renderChips(); }
     else if (m.type === 'attached') { pending.push(m.att); renderTray(); }
     else if (m.type === 'attachError') add(render({ from: 'system', kind: 'error', text: `Couldn't attach: ${m.text}` }));
@@ -445,11 +478,11 @@
   function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
 
   // ---------- autocomplete: @ agents, / commands grouped by platform ----------
-  const AT = [{ label: '@claude', insert: '@claude ', desc: 'Claude only' }, { label: '@codex', insert: '@codex ', desc: 'Codex only' }, { label: '@both', insert: '@both ', desc: 'Both, taking turns' }];
+  const mentions = () => [...participants().map((p) => ({ label: '@' + p.id, insert: '@' + p.id + ' ', desc: p.label })), { label: '@all', insert: '@all ', desc: 'All participants' }, { label: '@both', insert: '@both ', desc: 'All participants (alias)' }];
   function suggestions() {
     const caret = input.selectionStart, before = input.value.slice(0, caret);
-    const at = before.match(/(^|\s)@(\w*)$/);
-    if (at) return { from: caret - at[2].length - 1, to: caret, items: AT.filter((a) => a.label.slice(1).startsWith(at[2].toLowerCase())) };
+    const at = before.match(/(^|\s)@([\w-]*)$/);
+    if (at) return { from: caret - at[2].length - 1, to: caret, items: mentions().filter((a) => a.label.slice(1).startsWith(at[2].toLowerCase())) };
     if (/^\/[^\n]*$/.test(before)) {
       const q = before.replace(/\s+/g, ' ');
       const withArg = specs.filter((s) => s.args && q.startsWith(s.cmd + ' ')).sort((a, b) => b.cmd.length - a.cmd.length)[0];
@@ -503,22 +536,21 @@
   $('stop').addEventListener('click', () => cmd('/stop'));
   $('attach').addEventListener('click', () => vscode.postMessage({ type: 'pickFiles' }));
   $('ide').addEventListener('click', () => vscode.postMessage({ type: 'toggleIde', on: meta.ideContext === false }));
-  $('vc-claude').addEventListener('click', () => openPop('claude'));
-  $('vc-codex').addEventListener('click', () => openPop('codex'));
   $('tc').addEventListener('click', () => openTaskControls());
   // Lead picker: who drives the work and hears untagged messages.
   $('lead').addEventListener('click', () => {
     const pop = $('pop');
     if (!pop.hidden && pop.dataset.for === 'lead') return closePop();
-    pop.dataset.for = 'lead'; pop.textContent = ''; pop.hidden = false; pop.style.left = 'auto'; pop.style.right = '0';
+    pop.dataset.for = 'lead'; pop.textContent = ''; pop.hidden = false;
     const h = el('h4'); h.appendChild(el('span', null, 'Who leads?')); h.appendChild(el('small', null, 'untagged messages go to the lead')); pop.appendChild(h);
     const cur = meta.defaultTarget || 'claude';
-    for (const [v, label, note] of [['claude', '✳  Claude', 'Claude drives; Codex helps when asked'], ['codex', '>_  Codex', 'Codex drives; Claude helps when asked'], ['both', '✳ >_  Both', 'Both answer, taking turns']]) {
+    for (const [v, label, note] of [...participants().map((p) => [p.id, `${GLYPH[p.id]}  ${p.label}`, `@${p.id} leads; peers help when asked`]), ['both', `◎  ${allLabel()}`, meta.bothMode === 'parallel' ? 'All answer independently' : 'All answer, taking turns']]) {
       const b = el('button', `opt${v === cur ? ' on' : ''}`); const l = el('span', null, label); l.appendChild(el('small', null, `  ${note}`)); b.appendChild(l);
       b.addEventListener('click', () => { cmd(`/default ${v}`); closePop(); }); pop.appendChild(b);
     }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead') && !e.target.closest('#tc') && !e.target.closest('#task')) closePop(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
   document.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dropping'); });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
   document.addEventListener('drop', (e) => {
@@ -528,6 +560,6 @@
     const uris = (dt.getData('text/uri-list') || '').split(/\r?\n/).filter((u) => u && !u.startsWith('#'));
     if (uris.length) vscode.postMessage({ type: 'attachUris', uris });
   });
-  renderChips(); renderWho(); renderTask(); grow();
+  syncParticipants(); renderChips(); renderWho(); renderTask(); grow();
   vscode.postMessage({ type: 'ready' });
 })();

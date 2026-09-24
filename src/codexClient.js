@@ -52,7 +52,7 @@ class CodexClient extends EventEmitter {
     this.proc.on('exit', (code, sig) => this._fail(new Error(`codex app-server exited (${code ?? sig})`)));
     this.proc.stderr.on('data', (d) => this.log(`codex stderr: ${String(d).slice(0, 400)}`));
     readline.createInterface({ input: this.proc.stdout }).on('line', (line) => this._onLine(line));
-    await this.request('initialize', { clientInfo: { name: 'wagon-wheel', title: 'Wagon Wheel', version: '0.5.0' }, ...(this.tools.length ? { capabilities: { experimentalApi: true } } : {}) });
+    await this.request('initialize', { clientInfo: { name: 'wagon-wheel', title: 'Wagon Wheel', version: '0.5.1-local.1' }, ...(this.tools.length ? { capabilities: { experimentalApi: true } } : {}) });
     this._write({ method: 'initialized' });
   }
 

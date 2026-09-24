@@ -1,8 +1,8 @@
 {
   "name": "wagon-wheel",
   "displayName": "Wagon Wheel",
-  "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.5.0",
+  "description": "One VS Code room for your local Claude Code and Codex sessions. Named participants run as private child processes over stdio: no daemon, no open ports.",
+  "version": "0.5.1-local.1",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",

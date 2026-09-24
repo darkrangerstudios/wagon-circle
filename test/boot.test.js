@@ -19,7 +19,8 @@ const stubs = {
   vscode: { workspace: { getConfiguration: () => ({ get: (key) => key === 'experimentalAgents' ? experimentalAgents : undefined, inspect: (key) => key === 'experimentalAgents' && experimentalAgents !== undefined ? { workspaceValue: experimentalAgents } : undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: true },
     ConfigurationTarget: { Global: 1 }, window: {}, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) } },
 };
-class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: 'th-new' }; } async resumeThread(id) { return { id }; } async forkThread() { return { id: 'th-fork' }; }
+let fakeThreadSeq = 0;
+class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: `th-new-${++fakeThreadSeq}` }; } async resumeThread(id) { return { id }; } async forkThread() { return { id: `th-fork-${++fakeThreadSeq}` }; }
   async recentMessages() { return [{ role: 'human', text: 'CODEX_SEED_PRIVATE' }]; } async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {

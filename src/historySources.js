@@ -26,7 +26,7 @@ class HistorySources {
     saved.seq = saved.seq || 0; saved.sources = saved.sources || []; saved.share = saved.share || {};
     this.history = new SessionHistory(); this.bound = {}; this.policy = {};
     this.sync();
-    if (legacy) { for (const a of this.ids) if (saved.share[a]) this._grant(a); for (const x of saved.sources) this._grant(x.id); this.sync(); }
+    if (legacy) { const prior = this.ids.filter((id) => ['claude', 'codex'].includes(id)); for (const a of this.ids) if (saved.share[a]) this._grant(a, prior); for (const x of saved.sources) this._grant(x.id, prior); this.sync(); }
   }
 
   // Bind what changed; a new binding generation revokes every earlier grant and cursor for that label.
@@ -36,7 +36,7 @@ class HistorySources {
     for (const p of this.participants) {
       const a = p.id, sid = (w[a] && w[a].sessionId) || `none:${a}`;
       if (this.bound[a] !== sid) {
-        if (this.bound[a] !== undefined && this.saved.share[a]) { this.saved.share[a] = false; delete this.saved.from[a]; } // a new session starts private
+        if (this.bound[a] !== undefined && !String(this.bound[a]).startsWith('none:') && this.saved.share[a]) { this.saved.share[a] = false; delete this.saved.from[a]; } // a replacement session starts private; a fresh session's first id keeps its consent
         // A real session replaced by another real one is a new reader: grants given to the old one do not carry
         // over. A fresh session getting its first id (none -> id) is the same reader.
         if (this.bound[a] !== undefined && !String(this.bound[a]).startsWith('none:')) this.saved.epoch[a] = (this.saved.epoch[a] || 0) + 1;
@@ -61,17 +61,17 @@ class HistorySources {
   }
 
   // The human's grant: every current reader session (other than the source's own agent) may read this source.
-  _grant(id) {
+  _grant(id, readers = this.ids) {
     this.sync(); // settle session changes first, so the grant goes to the sessions that exist now
-    this.saved.grants[id] = Object.fromEntries(this.ids.filter((r) => r !== id).map((r) => [r, this.saved.epoch[r] || 0]));
+    this.saved.grants[id] = Object.fromEntries(this.ids.filter((r) => r !== id && readers.includes(r)).map((r) => [r, this.saved.epoch[r] || 0]));
   }
 
-  add({ provider, sessionId, title, file = null, allHistory = true }) {
+  add({ provider, sessionId, title, file = null, allHistory = true, readers = this.ids }) {
     if (!KIND[provider]) throw new Error('Unknown provider');
     const dup = this.saved.sources.find((s) => s.provider === provider && s.sessionId === sessionId);
     if (dup) return dup;
     const s = { id: `h${++this.saved.seq}`, provider, sessionId, title: String(title || sessionId).slice(0, 80), file };
-    this.saved.sources.push(s); this.saved.from[s.id] = allHistory ? null : this.now(); this._grant(s.id); this.sync();
+    this.saved.sources.push(s); this.saved.from[s.id] = allHistory ? null : this.now(); this._grant(s.id, readers); this.sync();
     return s;
   }
 
@@ -86,6 +86,30 @@ class HistorySources {
     this.saved.share[agent] = !!on;
     if (on) { this.saved.from[agent] = allHistory ? null : this.now(); this._grant(agent); } else delete this.saved.grants[agent];
     this.sync();
+  }
+
+  // A human grants one named reader, without enrolling every other room participant.
+  shareWith(source, reader, on, { allHistory } = {}) {
+    if (!this.ids.includes(source) || !this.ids.includes(reader) || source === reader) throw new Error('Choose a source and a different participant in this room.');
+    this.sync();
+    const grants = this.saved.grants[source] || (this.saved.grants[source] = {});
+    if (on) {
+      grants[reader] = this.saved.epoch[reader] || 0;
+      if (allHistory !== undefined || this.saved.from[source] === undefined) this.saved.from[source] = allHistory === false ? this.now() : null;
+    } else delete grants[reader];
+    this.saved.share[source] = Object.keys(grants).length > 0; this.sync();
+  }
+
+  readers(source) {
+    this.sync();
+    return this.participants.filter((p) => p.id !== source).map((p) => ({ id: p.id, label: p.label,
+      shared: !!this.saved.share[source] && this.saved.grants[source]?.[p.id] === (this.saved.epoch[p.id] || 0) }));
+  }
+
+  resetParticipant(id) {
+    if (!this.ids.includes(id)) return;
+    this.saved.share[id] = false; delete this.saved.grants[id]; delete this.saved.from[id];
+    this.saved.epoch[id] = (this.saved.epoch[id] || 0) + 1; this.policy = {}; this.sync();
   }
 
   // The "Include earlier history" toggle for a shared working session or an added source.

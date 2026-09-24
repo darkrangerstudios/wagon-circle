@@ -366,6 +366,7 @@ class Room extends EventEmitter {
   }
 
   stopAll() {
+    this.emit('stop'); // native session changes obey the same Stop boundary as turns
     this.cancelledThrough = this.state.cancelledThrough = this.run; this.pending = this._each(0); this.held.clear();
     if (this.tasks.stop()) this._taskChanged();
     for (const n of this.names) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();

@@ -26,7 +26,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 button:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Header: quiet, like both parents */
-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; max-height: 20vh; overflow-y: auto; flex-shrink: 0; }
 #title { font-weight: 600; }
 #ids { color: var(--muted); font-size: .82em; font-family: var(--mono); overflow-wrap: anywhere; }
 #quota { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
@@ -112,6 +112,11 @@ footer { padding: 6px 18px 12px; display: flex; min-height: 0; }
 textarea { width: 100%; resize: none; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 1.04em; line-height: 1.45; max-height: 40vh; padding: 4px 0; }
 textarea::placeholder { color: var(--muted); }
 .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#participants { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; max-height: 18vh; overflow-y: auto; overscroll-behavior: contain; order: -1; }
+#participants .vendor { max-width: 100%; min-width: 0; flex-wrap: wrap; white-space: normal; text-align: left; }
+.seatlabel { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.seatmodel { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.seatcontext { overflow-wrap: anywhere; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: .86em; white-space: nowrap; }
 .chip:hover { border-color: var(--muted); }
 .chip .glyph { font-weight: 700; }
@@ -145,7 +150,9 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .mitem.sel { background: var(--vscode-list-activeSelectionBackground, var(--bubble)); color: var(--vscode-list-activeSelectionForeground, inherit); }
 .mlabel { font-family: var(--mono); white-space: nowrap; }
 .mdesc { color: var(--muted); font-size: .86em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pop { padding: 14px; max-width: 420px; right: auto; display: grid; gap: 12px; max-height: 70vh; overflow-y: auto; }
+.pop { padding: 14px; width: min(420px, 100%); right: auto; display: grid; gap: 12px; max-height: 70vh; overflow-y: auto; overflow-wrap: anywhere; }
+/* A tall task card must not push the participant controls above the viewport. */
+#pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: 24px; width: min(420px, calc(100% - 32px)); max-height: calc(100% - 48px); }
 .pop h4 { margin: 0; display: flex; justify-content: space-between; align-items: baseline; font-size: 1em; }
 .pop h4 small { color: var(--muted); font-weight: 400; font-size: .8em; }
 .pop .lbl { font-size: .74em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 4px; }
