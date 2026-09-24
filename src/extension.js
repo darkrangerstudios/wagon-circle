@@ -33,6 +33,7 @@ const ideContext = require('./ideContext');
 const claudeUsage = require('./claudeUsage');
 const { findClaude, atLeast } = require('./claudeBinary');
 
+const HANDOFF_RULE = 4; // version of the room's hand-off rules; older saved rooms get one notice when it changes
 let claudeBin = null; // resolved once per window: newest Claude Code CLI on the machine
 const sessions = new Set();
 let lastEditor = null; // last code editor used; the room panel steals focus, so track it
@@ -160,9 +161,10 @@ class RoomSession {
       this.room.note(`Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; ${claudeSeed.length} recent messages loaded for Codex. The original session is untouched.`);
     }
     // Rooms made before v0.4.4 briefed Codex with the old "any @mention hands off" rule; its thread keeps that brief.
-    if ((this.meta.handoffRule || 0) < 4) {
-      if (this.state.transcript.length) this.room.note(`Wagon Circle is now Wagon Wheel: relayed messages are labelled "relayed by Wagon Wheel". Agents ask each other with a typed request, tracked as a task with a turn and time allowance, instead of @mentions.${this.meta.codexTyped ? '' : ' This room\'s Codex thread predates that, so a line where Codex starts with @claude shows as a suggestion for you to send; a new room gives Codex the typed request too.'}`);
-      this.meta.handoffRule = 4;
+    // A new room has no saved state (this.state is null): read the room's own, which always exists.
+    if ((this.meta.handoffRule || 0) < HANDOFF_RULE) {
+      if (this.room.state.transcript.length) this.room.note(`Wagon Circle is now Wagon Wheel: relayed messages are labelled "relayed by Wagon Wheel". Agents ask each other with a typed request, tracked as a task with a turn and time allowance, instead of @mentions.${this.meta.codexTyped ? '' : ' This room\'s Codex thread predates that, so a line where Codex starts with @claude shows as a suggestion for you to send; a new room gives Codex the typed request too.'}`);
+      this.meta.handoffRule = HANDOFF_RULE;
     }
     this.room.on('message', (entry) => this.post({ type: 'message', entry: this.view(entry) }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
@@ -544,8 +546,9 @@ async function openSession(context, session, opts) {
   }
 }
 
+// New rooms start on the current rules, so they get no upgrade notice.
 function newMeta(name) {
-  return { id: crypto.randomUUID(), name, cwd: settings().cwd, createdAt: new Date().toISOString(), codexThreadId: null, claudeSessionId: null };
+  return { id: crypto.randomUUID(), name, cwd: settings().cwd, createdAt: new Date().toISOString(), codexThreadId: null, claudeSessionId: null, handoffRule: HANDOFF_RULE };
 }
 
 // The rename changed the extension id, and with it the storage folder. Copy (never move) rooms saved under the
@@ -646,4 +649,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta };
