@@ -41,6 +41,28 @@ test('rebinding resets sharing and rejects old requests and cursors', async () =
   assert.equal(history.describe('claude').enabled, false);
 });
 
+test('a replacement reader session requires renewed sharing consent', async () => {
+  const { history, request } = setup();
+  history.bind('codex', { provider: 'codex', sessionId: 'replacement', readPage: async () => ({ messages: [] }) });
+  const changed = history.describe('claude');
+  assert.deepEqual(changed.readers, []);
+  await assert.rejects(history.read(request), /access/);
+  await assert.rejects(history.read({ ...request, policyRevision: changed.policyRevision }), /access/);
+  const renewed = history.configure('claude', { enabled: true, readers: ['codex'] });
+  const result = await history.read({ ...request, policyRevision: renewed.policyRevision });
+  assert.equal(result.messages[0].text, message.text);
+});
+
+test('reader replacement during retrieval discards the late result even after renewed consent', async () => {
+  let finish;
+  const { history, request } = setup(() => new Promise((resolve) => { finish = resolve; }));
+  const reading = history.read(request);
+  history.bind('codex', { provider: 'codex', sessionId: 'replacement', readPage: async () => ({ messages: [] }) });
+  history.configure('claude', { enabled: true, readers: ['codex'] });
+  finish({ messages: [message] });
+  await assert.rejects(reading, /changed during retrieval/);
+});
+
 test('a shared starting point excludes earlier and undated messages', async () => {
   const { history, request } = setup(async () => ({ messages: [message, { ...message, id: 'later', timestamp: 500 }, { ...message, id: 'unknown', timestamp: null }] }));
   const binding = history.configure('claude', { enabled: true, readers: ['codex'], after: 300 });

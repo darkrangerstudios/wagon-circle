@@ -15,6 +15,13 @@ class SessionHistory {
     const binding = { participant, provider, sessionId, readPage, generation: ++this.serial,
       policyRevision: 0, enabled: false, readers: [], after: null };
     this.bindings.set(participant, binding);
+    // Consent belongs to a working session, not its reusable participant label.
+    for (const source of this.bindings.values()) {
+      if (source.readers.includes(participant)) {
+        source.readers = source.readers.filter((reader) => reader !== participant);
+        source.policyRevision++;
+      }
+    }
     return this.describe(participant);
   }
 
@@ -37,7 +44,9 @@ class SessionHistory {
 
   async read({ requester, target, generation, policyRevision, cursor = null, query = '', limit = 20, maxChars = 12000 }) {
     const binding = this.bindings.get(target);
+    const readerBinding = this.bindings.get(requester);
     const admitted = () => this.bindings.get(target) === binding && binding.enabled
+      && readerBinding && this.bindings.get(requester) === readerBinding
       && binding.readers.includes(requester) && binding.generation === generation && binding.policyRevision === policyRevision;
     if (!binding || !admitted()) throw new Error('Session history access is disabled, out of scope or stale');
     if (typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50
