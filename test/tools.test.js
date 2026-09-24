@@ -103,3 +103,23 @@ test('a tool result that resolves after the reply ended is not handed to the mod
   const w = x.writes.find((m) => m.id === 11);
   assert.strictEqual(w.result.success, false); assert.doesNotMatch(JSON.stringify(w), /PRIVATE/);
 });
+
+test('turn usage: Claude sums every leg of a steered reply; Codex sums its per-call reports', async () => {
+  const { c } = claude();
+  const p = c.send('go');
+  c.steer('redirect');
+  c._onLine(JSON.stringify({ type: 'result', is_error: true, subtype: 'error_during_execution', usage: { input_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 7 } }));
+  c._onLine(JSON.stringify({ type: 'result', result: 'done', usage: { input_tokens: 3, cache_read_input_tokens: 50, cache_creation_input_tokens: 0, output_tokens: 4 } }));
+  await p;
+  assert.deepStrictEqual(c.lastTurnUsage, { fresh: 8, cached: 150, cacheWrite: 10, output: 11 });
+  const x = codex(); let started;
+  x.c.request = (m) => (m === 'turn/start' ? new Promise((r) => { started = r; }) : Promise.resolve({}));
+  const turn = x.c.runTurn('th', 'go');
+  started({ turn: { id: 't1' } }); await tick();
+  const up = (last) => x.c.emit('notification', 'thread/tokenUsage/updated', { threadId: 'th', turnId: 't1', tokenUsage: { last } });
+  up({ inputTokens: 1000, cachedInputTokens: 900, cacheWriteInputTokens: 0, outputTokens: 20 });
+  up({ inputTokens: 1100, cachedInputTokens: 1000, cacheWriteInputTokens: 0, outputTokens: 30 });
+  x.c.emit('notification', 'turn/completed', { threadId: 'th', turn: { id: 't1', status: 'completed' } });
+  await turn;
+  assert.deepStrictEqual(x.c.lastTurnUsage, { fresh: 200, cached: 1900, cacheWrite: 0, output: 50 });
+});

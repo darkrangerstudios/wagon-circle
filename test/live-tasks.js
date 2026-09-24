@@ -34,7 +34,7 @@ module.exports = { Queue };
   await codex.setName(thread.id, 'Wagon Wheel: live typed-assistance test');
   const bin = findClaude('');
   const claude = new ClaudeClient({ exe: bin.path, cwd, model: claudeModel, systemPrompt: roomPrompt('claude', 'codex', 'Dean', true), tools: toolSpecs(['codex']) });
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: (t, d, a, f, onTool) => codex.runTurn(thread.id, t, d, a, f, { model: codexModel, effort: 'low', onTool }), interrupt: () => codex.interrupt() } } });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: { get lastTurnUsage() { return codex.lastTurnUsage; }, typed: true, send: (t, d, a, f, onTool) => codex.runTurn(thread.id, t, d, a, f, { model: codexModel, effort: 'low', onTool }), interrupt: () => codex.interrupt() } } });
   room.on('message', (e) => say(`${e.from}${e.kind ? '/' + e.kind : ''}${e.answers ? ' (answers ' + e.answers.map((a) => a.request).join(',') + ')' : ''}: ${e.text.replace(/\s+/g, ' ').slice(0, 220)}`));
   const idle = async () => { await new Promise((r) => setTimeout(r, 1500)); while (room.busy.claude || room.busy.codex) await new Promise((r) => setTimeout(r, 500)); await new Promise((r) => setTimeout(r, 1500)); };
 
@@ -50,6 +50,9 @@ module.exports = { Queue };
   const claudeTurns = tr.filter((e) => e.from === 'claude' && !e.kind).length, codexTurns = tr.filter((e) => e.from === 'codex' && !e.kind).length;
   check(claudeTurns <= 2 && codexTurns <= reqs.length, `no acknowledgment turns (Claude ${claudeTurns}, Codex ${codexTurns})`);
   check(!tr.some((e) => e.kind === 'error'), 'no errors');
+  const u = t ? room.tasks.summary(t).usage : {};
+  check(u.claude && u.claude.turns >= 1 && !u.claude.unreported && u.claude.output > 0, `Claude reported its task tokens (${JSON.stringify(u.claude)})`);
+  check(u.codex && u.codex.turns >= 1 && !u.codex.unreported && u.codex.output > 0, `Codex reported its task tokens (${JSON.stringify(u.codex)})`);
   say(`task: ${t && t.status} · ${t && t.used.turns} task turns · summary: ${t && t.summary}`);
   say(`Claude CLI ${bin.version.join('.')} ${claudeModel} · cost $${claude.totalCostUsd.toFixed(4)} · last ${JSON.stringify(claude.lastUsage)}`);
   say(`Codex ${codexModel} usage (last): ${JSON.stringify(usage[usage.length - 1]).slice(0, 260)}`);

@@ -6,7 +6,7 @@
 
 One VS Code room where you, Claude and Codex talk in a single timeline.
 
-**Question this prototype answers:** can one room carry a useful three-way conversation under safe relay rules (mention routing, a hop cap, fork-not-share threads)? The answer decides whether this becomes a real extension, and later a .dmg/.exe.
+**Question this prototype answers:** can one room carry a useful three-way conversation under safe rules (typed requests between agents, task limits, read-only agents, fork-by-default sessions)? The answer decides whether this becomes a real extension, and later a .dmg/.exe.
 
 ## How it works
 - **Both agents are private child processes on stdio.** Codex runs as `codex app-server`, speaking newline-delimited JSON-RPC. Claude runs as `claude -p --input-format stream-json --output-format stream-json`. There is no daemon, no network port and no web server, and closing the room ends both processes.
@@ -22,7 +22,7 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 - **A lead you choose.** The Lead chip (or `/default`) picks who drives: Claude, Codex, or both taking turns. Untagged messages go to the lead, and a room notice tells both agents about the change. Each picker also has "Use these settings for new rooms", which saves that vendor's model and effort as your defaults.
 - **Routing that doesn't run away.** An untagged message goes to the lead, never to "whoever spoke last". `@both` takes turns in mention order (`/both parallel` to answer at once). Agent-to-agent work is bounded by the task's turn and time allowance; outside a task, each agent gets at most 2 replies per message from you. The agents are told these rules, so they don't speculate about routing.
 - **Model, effort and fast mode per vendor.** Composer chips open pickers with the models this machine can actually run. Claude: Opus 5.5, Sonnet 5, Fable 5.1, Haiku 4.5, gated by the Claude Code version; changes restart Claude on the same session, so it keeps its memory. Codex: the live `model/list`, with each model's own effort levels. Fast mode: Claude's Opus fast mode (`--settings {"fastMode":true}`, billed to usage credits) and Codex's priority tier. The same controls are slash commands, grouped by platform, with autocomplete (`/` and `@`).
-- **Plan usage for both vendors.** The header shows Codex's rate-limit windows and Claude's session, week and per-model limits, read from Claude Code's headless `/usage` (no model call, free). A model whose own weekly limit is used up, such as Fable, stays listed but greyed out with its reset time.
+- **Usage, three ways.** (1) **Your whole account:** the header shows Codex's rate-limit windows and Claude's session, week and per-model limits (Claude Code's headless `/usage`, no model call), refreshed every 5 minutes as well as after replies, so usage from your other windows shows up too. A model whose own weekly limit is used up, such as Fable, stays listed but greyed out with its reset time. (2) **This computer:** token totals for today and the last 7 days across every local Claude Code and Codex session, read incrementally from the CLIs' own logs (hover for new, cached, cache-write and output tokens). It cannot see web apps, other machines or cloud tasks, and an unrecognised log format shows as unknown rather than zero. (3) **This task:** the tokens each agent reported for the task's turns, on the task card; a turn with no report is counted as unreported, not zero.
 - **Newest Claude CLI automatically.** Wagon Wheel uses the newest Claude Code it finds, including the one bundled with the VS Code Claude extension, because older CLIs refuse newer models.
 - **IDE context.** Your active file, selection (or visible lines), open tabs and Problems ride along with each message. The 📍 chip shows what will be sent; click it to turn it off.
 - **Diffs.** Unified diffs in replies, and Codex's per-turn diff, render as file cards with +/− counts. **Open in diff editor** applies the patch in memory and shows it in VS Code's diff view; nothing is written to disk.
@@ -55,7 +55,7 @@ Then, from the Command Palette, run **Wagon Wheel: New Room**, **Wagon Wheel: Jo
 - `node test/live-smoke.js <codexThreadId> <scratchCwd>` runs a real private Codex server and a real Claude session. It forks the given thread and makes one small Claude turn plus one Codex turn, so it spends a little quota.
 
 ## Customization
-Today: `wagonWheel.userName`, `claudeModel`, `claudePath`, `codexPath`, `hopCap` and `cwd`. Planned: editable agent instructions and display names, per-agent tool levels, model per room, history depth, and single-agent rooms.
+Settings (search "Wagon Wheel" in VS Code settings) come in four short groups: **General** (your name, working folder, IDE context), **Agents** (models and effort for new rooms, CLI paths), **Room** (who leads, how @both answers) and **Tasks** (mode, turns, wrap-up reserve, minutes). The pickers in each room set most of these per room, and "Use these settings for new rooms" or "Save as my defaults" writes them here. Planned: editable agent instructions and display names, per-agent tool levels, and single-agent rooms.
 
 ## Deliberately left out
 - Cloud sessions. Wagon Wheel works with local sessions only; manage cloud sessions in each provider's own tools.

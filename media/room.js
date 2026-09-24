@@ -16,7 +16,7 @@
   const log = $('log'), input = $('input');
   const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Wheel' };
   const GLYPH = { claude: '✳', codex: '>_' };
-  let busy = {}, cost = 0, usage = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
+  let busy = {}, cost = 0, usage = null, codexUsage = null, local = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
   const drafts = {}, act = {}, since = {};           // in-progress replies per agent
   const menu = { items: [], sel: 0, open: false };
@@ -25,7 +25,7 @@
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
-  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const k = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   const secs = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
 
   // ---------- message bodies: text, code fences, diffs ----------
@@ -206,6 +206,18 @@
       cp('Claude session', cusage.session); cp('Claude week', cusage.week);
       for (const [name, v] of Object.entries(cusage.models || {})) if (v.pct >= 80) cp(`${name} week`, v);
     }
+    // This computer's token totals across all local sessions (not only this room). Hover for the breakdown.
+    if (local) {
+      const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
+      const part = (n, x) => (x === null ? `${n} no logs` : x.unknown ? `${n} unknown` : `${n} ${k(total(x.window))}`);
+      const p = el('span', 'pill', `This computer · ${local.windowDays} days: ${part('Claude', local.claude)} · ${part('Codex', local.codex)}`);
+      const line = (n, x, w) => (x && !x.unknown ? `${n} ${w === 'today' ? 'today' : `${local.windowDays} days`}: ${k(x[w].fresh)} new in · ${k(x[w].cached)} cached · ${k(x[w].cacheWrite)} cache writes · ${k(x[w].output)} out` : `${n}: ${x === null ? 'no local logs found' : 'log format not recognised'}`);
+      p.title = [line('Claude', local.claude, 'today'), line('Claude', local.claude, 'window'), line('Codex', local.codex, 'today'), line('Codex', local.codex, 'window'),
+        'Tokens from every Claude Code and Codex session on this computer, read from their local logs. Not included: web apps, other machines, cloud tasks. Most are cached reads, which cost far less than new input.',
+        `Updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`].join('\n');
+      box.appendChild(p);
+    }
+    if (codexUsage) { const p = el('span', 'pill', `Codex last turn ${k(codexUsage.fresh + codexUsage.cacheWrite)} new, ${k(codexUsage.cached)} cached`); p.title = `Output ${k(codexUsage.output)}`; box.appendChild(p); }
     if (cost) {
       const p = el('span', 'pill', `Claude ≈$${cost.toFixed(2)} at API rates${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}`);
       p.title = 'Billed to your Claude plan, not charged. This is what the same tokens would cost on the API.'; box.appendChild(p);
@@ -239,6 +251,12 @@
     m.appendChild(el('span', null, 'read-only'));
     m.appendChild(el('span', null, `${t.answered} answered · ${t.open.length} open`));
     box.appendChild(m);
+    const us = Object.entries(t.usage || {});
+    if (us.length) {
+      const tk = el('div', 'taskmeta');
+      tk.appendChild(el('span', null, `Tokens: ${us.map(([n, x]) => `${NAMES[n] || n} ${k(x.fresh + x.cacheWrite)} new · ${k(x.cached)} cached · ${k(x.output)} out${x.unreported ? ` (+${x.unreported} turn${x.unreported > 1 ? 's' : ''} unreported)` : ''}`).join(' · ')}`));
+      box.appendChild(tk);
+    }
     if (t.open.length || (t.log && t.log.length)) {
       const d = el('details', 'fold'); d.appendChild(el('summary', null, t.open.length ? t.open.map((r) => `${r.id} ${NAMES[r.from]} → ${NAMES[r.to]} · ${r.purpose} · ${r.status === 'delivered' ? 'with ' + NAMES[r.to] : 'waiting'}`).join('   ') : 'Activity'));
       const ol = el('ol'); for (const r of t.open) ol.appendChild(el('li', null, `${r.id}: ${r.question}`));
@@ -321,9 +339,6 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
-    const perm = el('div'); perm.appendChild(el('div', 'lbl', 'What it can do here'));
-    perm.appendChild(el('small', 'note', name === 'claude' ? 'Read-only: Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers.' : 'Read-only sandbox for local inspection, plus the room tools when its thread has them. Read access is not confined to the room folder. Every approval request is declined. Web search, connected apps and external MCP tools are disabled and checked before the thread is used.'));
-    pop.appendChild(perm);
     const ws = el('div'); ws.appendChild(el('div', 'lbl', `Working session${c.session ? ` · ${String(c.session).slice(0, 8)}` : ''}${c.typed ? '' : ' · no typed requests'}`));
     const wseg = el('div', 'seg');
     for (const [a, label, tip] of [['new', 'New', 'Start a fresh session for this agent'], ['continue', 'Continue…', 'Resume an existing session itself (you will be warned first)'], ['fork', 'Fork…', 'Branch a copy of an existing session; the original is untouched']]) {
@@ -332,9 +347,10 @@
     }
     ws.appendChild(wseg); pop.appendChild(ws);
     const other = name === 'claude' ? 'codex' : 'claude';
+    pop.appendChild(el('div', 'lbl', 'Shared history'));
     const hr = el('div', 'fastrow'); const ht = el('div');
-    ht.appendChild(el('span', null, `Share this session's history with ${NAMES[other]}`));
-    ht.appendChild(el('small', null, 'Read-only reference through read_session_history. Local sessions only; cloud sessions stay in the provider\'s own tools.'));
+    ht.appendChild(el('span', null, `Let ${NAMES[other]} read this session`));
+    ht.appendChild(el('small', null, 'As read-only reference. Local sessions only.'));
     const hs = el('button', `switch${c.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!c.shared)); hs.setAttribute('aria-label', 'Share session history');
     hs.addEventListener('click', () => { cmd(`/history share ${name} ${c.shared ? 'off' : 'on'}`); closePop(); });
     hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
@@ -346,6 +362,11 @@
       as.addEventListener('click', () => { cmd(`/history all ${name} ${c.allHistory !== false ? 'off' : 'on'}`); closePop(); });
       ar.appendChild(at); ar.appendChild(as); pop.appendChild(ar);
     }
+    // What this agent can do here: one line, full detail on hover.
+    const cap = el('small', 'note cap', name === 'claude' ? 'Read-only · no shell, web or edits' : 'Read-only sandbox · no edits, web or connectors');
+    cap.title = name === 'claude' ? 'Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers. Your own Claude settings do not apply here.'
+      : 'Read-only sandbox for local inspection, plus the room tools when its thread has them. Read access is not confined to the room folder. Every approval request is declined. Web search, connected apps and external MCP tools are disabled and checked before the thread is used.';
+    pop.appendChild(cap);
     const save = el('button', 'link', 'Use these settings for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);
@@ -378,10 +399,11 @@
     else if (m.type === 'status') {
       busy[m.name] = m.busy;
       if (m.busy) since[m.name] = m.since || Date.now(); else { delete act[m.name]; delete since[m.name]; }
-      if (typeof m.cost === 'number') cost = m.cost; if (m.usage) usage = m.usage;
+      if (typeof m.cost === 'number') cost = m.cost; if (m.usage) usage = m.usage; if (m.codexUsage) codexUsage = m.codexUsage;
       renderWho(); renderQuota();
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
+    else if (m.type === 'localUsage') { local = m.usage; renderQuota(); }
     else if (m.type === 'task') { task = m.task; taskMode = m.mode || 'auto'; taskDefaults = m.defaults; presets = m.presets || presets; typedAgents = m.typed || {}; renderTask(); }
     else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
     else if (m.type === 'meta') { meta = m.meta; specs = m.commands || specs; controls = m.controls || controls; renderChips(); }

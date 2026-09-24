@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const readline = require('readline');
 const { toCodexInput } = require('./attachments');
+const { fromCodex, sum } = require('./localUsage');
 
 // Methods the room must never call, whatever a future caller asks for.
 const FORBIDDEN = new Set(['account/rateLimitResetCredit/consume', 'account/logout', 'account/login/start', 'thread/delete']);
@@ -204,7 +205,8 @@ class CodexClient extends EventEmitter {
   runTurn(threadId, text, onDelta = () => {}, onActivity = () => {}, attachments = [], opts = {}) {
     if (!this.verifiedThreads.has(threadId)) return Promise.reject(permissionError());
     return new Promise((resolve, reject) => {
-      let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map();
+      let turnId = null; const messages = new Map(); let lastError = null; const thinking = new Map(); let usage = null;
+      this.lastTurnUsage = null;
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
       const onNote = (method, p) => {
         if (p.threadId && p.threadId !== threadId) return;
@@ -212,6 +214,8 @@ class CodexClient extends EventEmitter {
         if (method === 'turn/started' && p.turn && (!turnId || p.turn.id === turnId)) {
           turnId = active.turnId = p.turn.id; active.started = true;
           if (active.cancelled) this._interruptTurn(active);
+        } else if (method === 'thread/tokenUsage/updated' && p.tokenUsage) {
+          usage = sum(usage, fromCodex(p.tokenUsage.last)); this.lastTurnUsage = usage; // one report per model call
         } else if (method === 'turn/diff/updated' && p.diff) {
           onActivity({ phase: 'diff', diff: p.diff });
         } else if (method === 'item/started') {

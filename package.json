@@ -30,108 +30,180 @@
         "title": "Wagon Wheel: Check Setup"
       }
     ],
-    "configuration": {
-      "title": "Wagon Wheel",
-      "properties": {
-        "wagonWheel.userName": {
-          "type": "string",
-          "default": "",
-          "description": "Your name as the agents see it and as the room labels your messages. Empty = first name from git config user.name, else your login name."
-        },
-        "wagonWheel.claudeModel": {
-          "type": "string",
-          "default": "claude-sonnet-5",
-          "description": "Model alias or id passed to claude --model."
-        },
-        "wagonWheel.claudePath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the claude CLI. Empty = the newest one found (the VS Code Claude extension's bundled CLI or ~/.local/bin/claude)."
-        },
-        "wagonWheel.codexPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the codex CLI. Empty = ~/.local/bin/codex, then the standalone install, then PATH."
-        },
-        "wagonWheel.hopCap": {
-          "type": "number",
-          "default": 2,
-          "minimum": 0,
-          "maximum": 20,
-          "description": "Max agent-to-agent hand-offs per message you send."
-        },
-        "wagonWheel.cwd": {
-          "type": "string",
-          "default": "",
-          "description": "Working folder both agents may read. Empty = first workspace folder."
-        },
-        "wagonWheel.defaultTarget": {
-          "type": "string",
-          "enum": [
-            "claude",
-            "codex",
-            "both"
-          ],
-          "default": "claude",
-          "description": "Who leads new rooms: messages with no @mention go to the lead. Change per room with the Lead chip or /default."
-        },
-        "wagonWheel.bothMode": {
-          "type": "string",
-          "enum": [
-            "sequential",
-            "parallel"
-          ],
-          "default": "sequential",
-          "description": "How @both works: sequential = take turns, the second sees the first answer; parallel = answer at once. Change per room with /both."
-        },
-        "wagonWheel.ideContext": {
-          "type": "boolean",
-          "default": true,
-          "description": "Attach what you are looking at in VS Code (active file, selection or visible lines, open tabs, problems) to each message. Toggle per room with the \ud83d\udccd chip."
-        },
-        "wagonWheel.claudeEffort": {
-          "type": "string",
-          "enum": [
-            "",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "default": "",
-          "description": "Claude effort for new rooms. Empty = Claude Code default. Set from a room with \"Use for new rooms\"."
-        },
-        "wagonWheel.codexModel": {
-          "type": "string",
-          "default": "",
-          "description": "Codex model for new rooms (e.g. gpt-6-astra). Empty = your Codex config default. Set from a room with \"Use for new rooms\"."
-        },
-        "wagonWheel.taskMode": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "chat",
-            "work"
-          ],
-          "default": "auto",
-          "description": "Auto: a task starts when an agent asks the other for help. Chat: one consultation per message, no task. Work: every message starts a task."
-        },
-        "wagonWheel.taskDefaults": {
-          "type": "object",
-          "default": {
-            "turns": 20,
-            "reserve": 2,
-            "minutes": 30
+    "configuration": [
+      {
+        "title": "General",
+        "properties": {
+          "wagonWheel.userName": {
+            "type": "string",
+            "default": "",
+            "order": 1,
+            "description": "Your name as the agents see it. Empty: your first name from git, else your login name."
           },
-          "description": "Allowances for new tasks: agent turn starts (turns), how many of them are kept for wrapping up (reserve), and active minutes. Set from a room with \"Save as my defaults\"."
-        },
-        "wagonWheel.codexEffort": {
-          "type": "string",
-          "default": "",
-          "description": "Codex reasoning effort for new rooms. Empty = the model default."
+          "wagonWheel.cwd": {
+            "type": "string",
+            "default": "",
+            "order": 2,
+            "description": "Folder the agents work in. Empty: the first workspace folder."
+          },
+          "wagonWheel.ideContext": {
+            "type": "boolean",
+            "default": true,
+            "order": 3,
+            "description": "Send what you are looking at in VS Code (file, selection, open tabs, problems) with each message."
+          }
+        }
+      },
+      {
+        "title": "Agents",
+        "properties": {
+          "wagonWheel.claudeModel": {
+            "type": "string",
+            "default": "claude-sonnet-5",
+            "order": 1,
+            "description": "Claude model for new rooms."
+          },
+          "wagonWheel.claudeEffort": {
+            "type": "string",
+            "default": "",
+            "enum": [
+              "",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "enumItemLabels": [
+              "Default",
+              "Low",
+              "Medium",
+              "High",
+              "Max"
+            ],
+            "order": 2,
+            "description": "Claude effort for new rooms."
+          },
+          "wagonWheel.codexModel": {
+            "type": "string",
+            "default": "",
+            "order": 3,
+            "description": "Codex model for new rooms, e.g. gpt-6-astra. Empty: your Codex default."
+          },
+          "wagonWheel.codexEffort": {
+            "type": "string",
+            "default": "",
+            "order": 4,
+            "description": "Codex effort for new rooms. Empty: the model's default."
+          },
+          "wagonWheel.claudePath": {
+            "type": "string",
+            "default": "",
+            "order": 5,
+            "description": "Path to the claude CLI. Empty: the newest one found."
+          },
+          "wagonWheel.codexPath": {
+            "type": "string",
+            "default": "",
+            "order": 6,
+            "description": "Path to the codex CLI. Empty: found automatically."
+          }
+        }
+      },
+      {
+        "title": "Room",
+        "properties": {
+          "wagonWheel.defaultTarget": {
+            "type": "string",
+            "default": "claude",
+            "enum": [
+              "claude",
+              "codex",
+              "both"
+            ],
+            "enumItemLabels": [
+              "Claude",
+              "Codex",
+              "Both"
+            ],
+            "enumDescriptions": [
+              "Claude leads; Codex helps when asked",
+              "Codex leads; Claude helps when asked",
+              "Both answer, taking turns"
+            ],
+            "order": 1,
+            "description": "Who leads new rooms: messages without an @mention go to the lead."
+          },
+          "wagonWheel.bothMode": {
+            "type": "string",
+            "default": "sequential",
+            "enum": [
+              "sequential",
+              "parallel"
+            ],
+            "enumItemLabels": [
+              "Take turns",
+              "At once"
+            ],
+            "enumDescriptions": [
+              "The second agent sees the first answer",
+              "Both answer independently"
+            ],
+            "order": 2,
+            "description": "How @both answers."
+          }
+        }
+      },
+      {
+        "title": "Tasks",
+        "properties": {
+          "wagonWheel.taskMode": {
+            "type": "string",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "chat",
+              "work"
+            ],
+            "enumItemLabels": [
+              "Auto",
+              "Chat",
+              "Work"
+            ],
+            "enumDescriptions": [
+              "A task starts when an agent asks the other for help",
+              "One consultation per message, no task",
+              "Every message starts a task"
+            ],
+            "order": 1,
+            "description": "When agent work becomes a task."
+          },
+          "wagonWheel.taskTurns": {
+            "type": "number",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 200,
+            "order": 2,
+            "description": "Agent turns allowed per task (both agents, retries included)."
+          },
+          "wagonWheel.taskReserve": {
+            "type": "number",
+            "default": 2,
+            "minimum": 0,
+            "maximum": 50,
+            "order": 3,
+            "description": "Of those, turns kept for wrapping up."
+          },
+          "wagonWheel.taskMinutes": {
+            "type": "number",
+            "default": 30,
+            "minimum": 1,
+            "maximum": 1440,
+            "order": 4,
+            "description": "Active minutes per task. Paused time does not count."
+          }
         }
       }
-    },
+    ],
     "walkthroughs": [
       {
         "id": "wagonWheel.start",

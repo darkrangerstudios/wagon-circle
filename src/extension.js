@@ -14,6 +14,16 @@ const { roomPrompt } = require('./prompts');
 const { HistorySources, LOCAL_ONLY } = require('./historySources');
 const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
 const setup = require('./setup');
+const { LocalUsage } = require('./localUsage');
+
+// Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
+const localUsage = { scanner: null, last: null, running: null };
+async function scanLocalUsage() {
+  if (localUsage.running) return localUsage.running;
+  localUsage.scanner = localUsage.scanner || new LocalUsage();
+  localUsage.running = localUsage.scanner.scan().then((r) => { localUsage.last = r; return r; }, (e) => { log(`local usage scan: ${e.message}`); return localUsage.last; }).finally(() => { localUsage.running = null; });
+  return localUsage.running;
+}
 const claudeHistory = require('./claudeHistory');
 const attachments = require('./attachments');
 const commands = require('./commands');
@@ -45,7 +55,7 @@ function defaultName() {
 function config() {
   const c = vscode.workspace.getConfiguration('wagonWheel'), old = vscode.workspace.getConfiguration('wagonCircle');
   const setHere = (i) => i && [i.globalValue, i.workspaceValue, i.workspaceFolderValue].some((v) => v !== undefined);
-  return { get: (k) => (setHere(c.inspect(k)) || !setHere(old.inspect(k)) ? c.get(k) : old.get(k)), update: (...a) => c.update(...a) };
+  return { get: (k) => (setHere(c.inspect(k)) || !setHere(old.inspect(k)) ? c.get(k) : old.get(k)), isSet: (k) => setHere(c.inspect(k)) || setHere(old.inspect(k)), update: (...a) => c.update(...a) };
 }
 
 function settings() {
@@ -56,7 +66,6 @@ function settings() {
     claudeModel: c.get('claudeModel') || null,
     claude: claudeBin || (claudeBin = findClaude(c.get('claudePath') || null)),
     codexExe: firstExisting([c.get('codexPath'), path.join(home, '.local/bin/codex'), path.join(home, '.codex/packages/standalone/current/codex'), 'codex']),
-    hopCap: c.get('hopCap'),
     userName: (c.get('userName') || '').trim() || defaultName(),
     defaultTarget: c.get('defaultTarget') || 'claude',
     claudeEffort: c.get('claudeEffort') || null,
@@ -64,7 +73,8 @@ function settings() {
     codexEffort: c.get('codexEffort') || null,
     bothMode: c.get('bothMode') || 'sequential',
     taskMode: ['auto', 'chat', 'work'].includes(c.get('taskMode')) ? c.get('taskMode') : 'auto',
-    taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}) }),
+    // Three plain numbers; a taskDefaults object saved before v0.5 still applies until they are set.
+    taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}), ...Object.fromEntries([['turns', 'taskTurns'], ['reserve', 'taskReserve'], ['minutes', 'taskMinutes']].filter(([, key]) => c.isSet(key)).map(([k, key]) => [k, c.get(key)])) }),
     cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home)
   };
 }
@@ -97,7 +107,6 @@ class RoomSession {
     this.claudeVersion = s.claude.version;
     if (m.defaultTarget === undefined) m.defaultTarget = s.defaultTarget;
     if (m.bothMode === undefined) m.bothMode = s.bothMode;
-    if (m.hopCap === undefined) m.hopCap = s.hopCap;
     this.codex = new CodexClient({ exe: s.codexExe, cwd: this.meta.cwd, tools: toolSpecs(['claude']), log });
     await this.codex.start();
     this.codex.on('notification', (method) => { if (method === 'account/rateLimits/updated') this.refreshQuota(); });
@@ -131,7 +140,7 @@ class RoomSession {
     const codex = this.codex, meta = this.meta;
     const agents = {
       claude: this.claude,
-      codex: { typed: !!meta.codexTyped, send: (text, onDelta, onActivity, files, onTool) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast, onTool }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt(), steer: (text, files) => codex.steer(meta.codexThreadId, text, files) }
+      codex: { get lastTurnUsage() { return codex.lastTurnUsage; }, typed: !!meta.codexTyped, send: (text, onDelta, onActivity, files, onTool) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast, onTool }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt(), steer: (text, files) => codex.steer(meta.codexThreadId, text, files) }
     };
     const labelFor = (n) => { const c = this.controls()[n]; const x = c.models.find((y) => y.id === c.model); return [x ? (x.name || x.id) : c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
     // Local session history as callable context (read_session_history). Local sessions only.
@@ -139,7 +148,7 @@ class RoomSession {
       working: () => ({ claude: { sessionId: this.claude.sessionId }, codex: { sessionId: m.codexThreadId } }),
       makeReader: ({ provider, sessionId, file }) => provider === 'codex' ? codexHistoryReader(this.codex)
         : async (args) => { const f = file || claudeHistory.fileFor(sessionId); if (!f) throw new Error('that Claude session has no saved file yet'); return claudeHistoryReader(f, claudeHistory.ROOT)(args); } });
-    this.room = new Room({ agents, hopCap: m.hopCap, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args) });
+    this.room = new Room({ agents, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args) });
     for (const t of this.pendingNotes || []) this.room.note(t); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
     if (seed) {
@@ -158,12 +167,15 @@ class RoomSession {
     this.room.on('message', (entry) => this.post({ type: 'message', entry: this.view(entry) }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
     this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
-    this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null }));
+    this.room.on('status', (st) => this.post({ type: 'status', ...st, cost: this.claude.totalCostUsd, usage: this.claude.lastUsage || null, codexUsage: this.codex.lastTurnUsage || null }));
     this.room.on('changed', () => this.save());
     this.room.on('task', () => this.postTask());
     // The one host timer (scheduler.js): task time today; any future polled source registers here, not its own timer.
     this.scheduler = new Scheduler({ log });
     this.scheduler.add('task-clock', { everyMs: 15000, check: async () => { this.room.tick(); return 'quiet'; } });
+    // Usage from outside the room changes too: refresh both account-wide limits and this computer's token totals.
+    // Status reads and a local file scan; no model calls.
+    this.scheduler.add('usage', { everyMs: 5 * 60e3, check: async () => { await Promise.all([this.refreshQuota(), this.refreshClaudeUsage(true), this.refreshLocalUsage()]); return 'quiet'; } });
     this.room.on('message', (e) => { if (e.from === 'claude' || (e.from === 'system' && /^Claude/.test(e.text))) this.refreshClaudeUsage(); });
     this.claudeExe = s.claude.path;
     this.save();
@@ -172,6 +184,8 @@ class RoomSession {
   }
 
   // Claude plan usage via headless `/usage` (no model call, free). Throttled; refreshed after Claude replies.
+  async refreshLocalUsage() { const r = await scanLocalUsage(); if (r) this.post({ type: 'localUsage', usage: r }); }
+
   async refreshClaudeUsage(force) {
     if (!force && this.usageAt && Date.now() - this.usageAt < 45000) return;
     this.usageAt = Date.now();
@@ -228,7 +242,7 @@ class RoomSession {
       else if ((m.type === 'taskLimits' || m.type === 'taskDefaults') && this.room && m.limits) {
         const lim = cleanLimits(m.limits);
         if (m.type === 'taskLimits') this.room.setTaskLimits(lim);
-        else { this.room.tasks.setDefaults(lim); config().update('taskDefaults', this.room.tasks.defaults, vscode.ConfigurationTarget.Global); this.room.note(`Saved as your defaults for new tasks: ${lim.turns} turns (${lim.reserve} kept for wrapping up), ${lim.minutes} minutes. Tasks already running keep their own settings.`); }
+        else { this.room.tasks.setDefaults(lim); { const d = this.room.tasks.defaults, G = vscode.ConfigurationTarget.Global; config().update('taskTurns', d.turns, G); config().update('taskReserve', d.reserve, G); config().update('taskMinutes', d.minutes, G); } this.room.note(`Saved as your defaults for new tasks: ${lim.turns} turns (${lim.reserve} kept for wrapping up), ${lim.minutes} minutes. Tasks already running keep their own settings.`); }
         this.postTask();
       }
     });
@@ -366,7 +380,6 @@ class RoomSession {
         break;
       }
       case '/both': room.bothMode = m.bothMode = arg; say(arg === 'sequential' ? '@both now takes turns: the second agent sees the first answer and builds on it.' : '@both now answers at once; the agents do not see each other\'s replies until later.'); break;
-      case '/hops': room.hopCap = m.hopCap = Number(arg); say(`Agent-to-agent hand-offs are now capped at ${arg} per message.`); break;
       case '/claude fast': {
         const on = arg === 'on';
         if (on && !this.claudeFastOk(m.claudeModel)) { say(atLeast(this.claudeVersion, '2.1.205') ? 'Fast mode needs Opus 5.5. Switch with /claude model claude-opus-5-5 first.' : `Fast mode needs Claude Code 2.1.205 or newer; this CLI is ${this.claudeVersion ? this.claudeVersion.join('.') : 'unknown'}.`); break; }
@@ -404,6 +417,8 @@ class RoomSession {
   }
 
   postInit() {
+    if (localUsage.last) this.post({ type: 'localUsage', usage: localUsage.last });
+    this.refreshLocalUsage();
     this.post({ type: 'ide', summary: ideContext.summary(ideSnapshot(this.meta.cwd)) });
     if (this.claudeUsage) this.post({ type: 'claudeUsage', usage: this.claudeUsage });
     this.postTask();

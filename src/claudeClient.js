@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const readline = require('readline');
 const { toClaudeContent } = require('./attachments');
+const { fromClaude, sum } = require('./localUsage');
 
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
 const SERVER = 'wagon'; // in-process MCP server answered over this process's own stdio (no extra process, no port)
@@ -83,7 +84,7 @@ class ClaudeClient {
   _settle(err, text) {
     const w = this.waiter; if (!w) return;
     this.waiter = null;
-    const cancelled = this.cancelling;
+    const cancelled = this.cancelling; this.lastTurnUsage = w.usage || null;
     this.cancelling = false; this.steerQueue = []; clearTimeout(this.intTimer); this.intTimer = null;
     if (this.restartPending) { this.restartPending = false; this.stop(); }
     if (err && cancelled && !err.stopped) { err = new Error('stopped'); err.stopped = true; }
@@ -113,6 +114,7 @@ class ClaudeClient {
       if (text) { w.blocks.push(text); w.partial = ''; w.onDelta(w.blocks.join('\n\n')); }
     } else if (m.type === 'result') {
       clearTimeout(this.intTimer); this.intTimer = null; // the interrupt (if any) was honoured: disarm the kill fallback
+      w.usage = sum(w.usage, fromClaude(m.usage)); // a steered reply has one result per leg: the turn is their sum
       if (typeof m.total_cost_usd === 'number') this.totalCostUsd = m.total_cost_usd;
       if (this.steerQueue.length && !this.cancelling) {
         // A steer interrupted this turn: send the new instruction and keep the same reply open.
@@ -130,6 +132,7 @@ class ClaudeClient {
 
   send(text, onDelta = () => {}, onActivity = () => {}, attachments = [], onTool = null) {
     if (this.waiter) return Promise.reject(new Error('Claude is already answering'));
+    this.lastTurnUsage = null;
     if (!this.proc) this._spawn();
     return new Promise((resolve, reject) => {
       this.waiter = { resolve, reject, onDelta, onActivity, onTool, partial: '', blocks: [], thinking: '' };

@@ -141,6 +141,15 @@ class TaskLedger {
   // A human message during a task: logged as a visible revision; the objective itself never changes.
   noteHuman(text) { const t = this.active(); if (!t) return null; t.revision = (t.revision || 0) + 1; this._log(t, 'human', `rev ${t.revision}: ${clip(text, 100)}`); return t; }
 
+  // Tokens a turn spent on a task, as its agent reported them; a turn with no report is counted as unreported.
+  addUsage(taskId, agent, u) {
+    const t = this.get(taskId); if (!t) return;
+    const x = ((t.usage || (t.usage = {}))[agent] || (t.usage[agent] = { fresh: 0, cached: 0, cacheWrite: 0, output: 0, turns: 0, unreported: 0 }));
+    x.turns += 1;
+    if (!u) { x.unreported += 1; return; }
+    for (const k of ['fresh', 'cached', 'cacheWrite', 'output']) x[k] += Number.isFinite(u[k]) ? u[k] : 0;
+  }
+
   pause(by) { const t = this.active(); if (!t || t.status !== 'active') return false; this._halt(t, 'paused'); t.pausedBy = by; this._log(t, by, 'paused'); return true; }
 
   // Only the human resumes; an agent cannot restart paused or exhausted work.
@@ -176,7 +185,7 @@ class TaskLedger {
     if (!t) return null;
     return { id: t.id, objective: t.objective, lead: t.lead, status: t.status, limits: t.limits, turns: t.used.turns, usedMs: this.usedMs(t),
       open: t.requests.filter((r) => OPEN.has(r.status)).map((r) => ({ id: r.id, from: r.from, to: r.to, purpose: r.purpose, question: clip(r.question, 120), status: r.status })),
-      answered: t.requests.filter((r) => r.status === 'answered').length, summary: t.summary, log: t.log.slice(-8) };
+      answered: t.requests.filter((r) => r.status === 'answered').length, summary: t.summary, log: t.log.slice(-8), usage: t.usage || {} };
   }
 }
 

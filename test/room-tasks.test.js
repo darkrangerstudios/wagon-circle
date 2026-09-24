@@ -314,3 +314,14 @@ test('a human Stop survives a reload: stopped work is not held or revived', asyn
   assert.strictEqual(claude.inbox.length, 0);
   assert.ok(!again.state.transcript.some((e) => /Reopened:/.test(e.text)));
 });
+
+test('task usage: each turn\'s reported tokens go to its task; turns without a report are counted, not zero', async () => {
+  const claude = typed(async (text, n, tool) => { if (n === 1) await tool(...ask('codex', 'check U')); return 'ok'; });
+  claude.lastTurnUsage = { fresh: 10, cached: 90, cacheWrite: 0, output: 5 };
+  const codex = typed('U fine'); // reports nothing
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('review'); await settle();
+  const u = room.tasks.summary(room.tasks.get('t1')).usage;
+  assert.deepStrictEqual(u.claude, { fresh: 20, cached: 180, cacheWrite: 0, output: 10, turns: 2, unreported: 0 });
+  assert.deepStrictEqual(u.codex, { fresh: 0, cached: 0, cacheWrite: 0, output: 0, turns: 1, unreported: 1 });
+});

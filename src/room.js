@@ -249,6 +249,9 @@ class Room extends EventEmitter {
         this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
       }
     } finally {
+      // Tokens this turn spent go to the task it belonged to (or the task it started), whatever its outcome.
+      const tt = ctx.taskId ? this.tasks.get(ctx.taskId) : (() => { const a = this.tasks.active(); return a && a.run === run ? a : null; })();
+      if (tt) { this.tasks.addUsage(tt.id, name, this.agents[name].lastTurnUsage || null); this._taskChanged(); }
       if (this.state.inflight) delete this.state.inflight[name];
       this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
       const next = this.pending[name]; this.pending[name] = 0;

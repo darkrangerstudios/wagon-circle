@@ -22,7 +22,6 @@ function specs(ctx = {}) {
     { group: 'Room', cmd: '/stop', desc: 'Stop both agents and cancel hand-offs' },
     { group: 'Room', cmd: '/default', args: ['claude', 'codex', 'both'], desc: 'Who answers a message with no @mention' },
     { group: 'Room', cmd: '/both', args: ['sequential', 'parallel'], desc: 'How @both works: take turns, or answer at once' },
-    { group: 'Room', cmd: '/hops', args: ['0', '2', '4', '8'], desc: 'Max agent-to-agent hand-offs per message' },
     { group: 'Room', cmd: '/history add', desc: 'Add a local Claude Code session or Codex thread as reference both agents can read (local only)' },
     { group: 'Room', cmd: '/history remove', desc: 'Stop sharing a history source' },
     { group: 'Room', cmd: '/history all', desc: 'Include a shared source\'s earlier history (on) or only what is said from now on (off): /history all <h1|claude|codex> on|off' },
