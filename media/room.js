@@ -363,7 +363,7 @@
       $('ids').textContent = [meta.cwd, meta.forkedFrom && `codex fork of ${meta.forkedFrom.slice(0, 8)}`, meta.claudeForkedFrom && `claude fork of ${meta.claudeForkedFrom.slice(0, 8)}`].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(render(e)));
       busy = m.busy || {}; cost = m.cost || 0; if (m.quota) quota = m.quota;
-      renderQuota(); renderChips(); renderWho(); log.scrollTop = log.scrollHeight;
+      renderQuota(); renderChips(); renderWho(); renderTask(); log.scrollTop = log.scrollHeight;
     } else if (m.type === 'message') { setDraft(m.entry.from, null); add(render(m.entry)); }
     else if (m.type === 'draft') setDraft(m.name, m.text);
     else if (m.type === 'activity') setActivity(m);
