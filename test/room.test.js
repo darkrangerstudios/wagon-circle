@@ -2,6 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { Room, mentions } = require('../src/room');
+// These tests cover the pre-v0.5 prose router (proseHandoffs: true). The product default is typed requests
+// plus displayed suggestions; see room-tasks.test.js.
 
 // Fake agent: records what it was sent, replies from a script (string or fn), resolves after a tick.
 function fake(script) {
@@ -21,7 +23,7 @@ test('mentions: names, both/all, ignores emails', () => {
 
 test('no mention goes to the default agent, not both', async () => {
   const claude = fake('hi'), codex = fake('yo');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   assert.deepStrictEqual(room.postFromHuman('hello'), ['claude']);
   await settle();
   room.postFromHuman('@codex just you');
@@ -30,13 +32,13 @@ test('no mention goes to the default agent, not both', async () => {
   await settle();
   assert.strictEqual(claude.inbox.length, 2);
   assert.strictEqual(codex.inbox.length, 1);
-  const both = new Room({ humanName: 'Dean', agents: { claude: fake('a'), codex: fake('b') }, defaultTarget: 'both' });
+  const both = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude: fake('a'), codex: fake('b') }, defaultTarget: 'both' });
   assert.deepStrictEqual(both.postFromHuman('hi'), ['claude', 'codex']);
 });
 
 test('@both takes turns: the second agent sees the first answer, in mention order', async () => {
   const claude = fake('Claude says use a lock'), codex = fake('Agreed');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@codex then @claude: how do we stop duplicate work?');
   await settle();
   assert.strictEqual(codex.inbox.length, 1);
@@ -46,7 +48,7 @@ test('@both takes turns: the second agent sees the first answer, in mention orde
 
 test('parallel mode answers independently', async () => {
   const claude = fake('A'), codex = fake('B');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
   room.postFromHuman('@both go');
   await settle();
   assert.doesNotMatch(claude.inbox[0], /relayed/);
@@ -55,7 +57,7 @@ test('parallel mode answers independently', async () => {
 
 test('catch-up delta: agent sees Dean + the other agent, labelled, never its own words', async () => {
   const claude = fake('Claude answer'), codex = fake('Codex answer');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, bothMode: 'parallel' });
   room.postFromHuman('@both first');
   await settle();
   room.postFromHuman('@codex second');
@@ -69,7 +71,7 @@ test('catch-up delta: agent sees Dean + the other agent, labelled, never its own
 
 test('relay on mention, capped per Dean message', async () => {
   const claude = fake('@codex your turn'), codex = fake('@claude back to you');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, hopCap: 3 });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, hopCap: 3 });
   room.postFromHuman('@claude start');
   await new Promise((r) => setTimeout(r, 200));
   assert.strictEqual(claude.inbox.length + codex.inbox.length, 4); // 1 from Dean + 3 hops
@@ -83,7 +85,7 @@ test('relay on mention, capped per Dean message', async () => {
 
 test('self-mention does not loop', async () => {
   const claude = fake('as @claude I say hi'), codex = fake('x');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude go');
   await settle();
   assert.strictEqual(claude.inbox.length, 1);
@@ -93,7 +95,7 @@ test('self-mention does not loop', async () => {
 test('busy agent queues and receives one merged delta', async () => {
   let release; const slow = { inbox: [], send(t) { this.inbox.push(t); return this.inbox.length === 1 ? new Promise((r) => { release = r; }) : Promise.resolve('ok2'); } };
   const codex = fake('c');
-  const room = new Room({ humanName: 'Dean', agents: { claude: slow, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude: slow, codex } });
   room.postFromHuman('@claude one');
   room.postFromHuman('@claude two');
   room.postFromHuman('@claude three');
@@ -105,7 +107,7 @@ test('busy agent queues and receives one merged delta', async () => {
 
 test('history seeded for Codex fork reaches Claude only', async () => {
   const claude = fake('seen'), codex = fake('c');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.seedHistory([{ role: 'user', text: 'old ask' }, { role: 'codex', text: 'old answer' }], 'codex');
   room.postFromHuman('@both catch up');
   await settle();
@@ -115,7 +117,7 @@ test('history seeded for Codex fork reaches Claude only', async () => {
 
 test('agent failure becomes a notice, not relayed as content', async () => {
   const claude = { send: () => Promise.reject(new Error('usage limit')) }, codex = fake('c');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude hi');
   await settle();
   room.postFromHuman('@codex next');
@@ -127,7 +129,7 @@ test('agent failure becomes a notice, not relayed as content', async () => {
 test('stop halts relays and interrupts busy agents', async () => {
   let release; const claude = { send: () => new Promise((r) => { release = r; }), interrupt() { this.interrupted = true; } };
   const codex = fake('c');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude go');
   room.stopAll();
   assert.ok(claude.interrupted);
@@ -138,7 +140,7 @@ test('stop halts relays and interrupts busy agents', async () => {
 
 test('history from a forked Claude session reaches Codex only', async () => {
   const claude = fake('c1'), codex = fake('x1');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.seedHistory([{ role: 'user', text: 'claude-era ask' }, { role: 'claude', text: 'claude-era answer' }], 'claude');
   room.postFromHuman('@both go');
   await settle();
@@ -149,7 +151,7 @@ test('history from a forked Claude session reaches Codex only', async () => {
 
 test('both sides seeded: each agent gets only the other side\'s past', async () => {
   const claude = fake('c'), codex = fake('x');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.seedHistory([{ role: 'user', text: 'CODEX-PAST-Q' }, { role: 'codex', text: 'CODEX-PAST-A' }], 'codex');
   room.seedHistory([{ role: 'user', text: 'CLAUDE-PAST-Q' }, { role: 'claude', text: 'CLAUDE-PAST-A' }], 'claude');
   room.postFromHuman('@both sync up');
@@ -162,7 +164,7 @@ test('both sides seeded: each agent gets only the other side\'s past', async () 
 
 test('the human name is configurable everywhere it is written', async () => {
   const claude = fake('@codex over to you'), codex = fake('done');
-  const room = new Room({ humanName: 'Darby', agents: { claude, codex }, hopCap: 0 });
+  const room = new Room({ proseHandoffs: true, humanName: 'Darby', agents: { claude, codex }, hopCap: 0 });
   room.postFromHuman('@claude hi');
   await settle();
   assert.match(claude.inbox[0], /^\[Darby\]\n@claude hi/);
@@ -176,7 +178,7 @@ test('the human name is configurable everywhere it is written', async () => {
 
 test('activity passes through and tool steps are kept on the finished message', async () => {
   const claude = { send: (t, onDelta, onActivity) => { onActivity({ phase: 'thinking', label: 'thinking', thinking: 'hmm' }); onActivity({ phase: 'tool', label: 'reading room.js', step: true }); onActivity({ phase: 'writing', label: 'writing' }); return Promise.resolve('done'); } };
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex: fake('x') } });
   const seen = []; room.on('activity', (a) => seen.push(`${a.name}:${a.phase}:${a.label}`));
   const statuses = []; room.on('status', (s) => statuses.push(s));
   room.postFromHuman('@claude go');
@@ -189,7 +191,7 @@ test('activity passes through and tool steps are kept on the finished message', 
 
 test('IDE context rides with the message to every agent that reads it', async () => {
   const claude = fake('ok'), codex = fake('ok');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude why is this slow?', [], { summary: 'room.js · L40–52 selected', text: 'Active file: src/room.js\nSelected lines 40-52' });
   await settle();
   assert.match(claude.inbox[0], /\(IDE context from Dean's editor\)\nActive file: src\/room\.js/);
@@ -202,7 +204,7 @@ test('runaway from the 2026-09-23 transcript: talking ABOUT mentions must not ha
   // Both agents discuss the tags in backticks and quotes, as they did in Dean's live test.
   const claude = fake('So the `@both` tag seems to persist. Codex said "@claude should confirm" earlier.');
   const codex = fake('That supports `@both` carrying forward.\n```\n@claude\n```');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@both interesting, does it fire to both again?');
   await new Promise((r) => setTimeout(r, 200));
   assert.strictEqual(claude.inbox.length, 1);
@@ -211,7 +213,7 @@ test('runaway from the 2026-09-23 transcript: talking ABOUT mentions must not ha
 
 test('agents cannot use @both, and each agent gets at most 2 turns per human message', async () => {
   const claude = fake('@codex your turn @both'), codex = fake('@claude back to you');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, hopCap: 10 });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, hopCap: 10 });
   room.postFromHuman('@claude start');
   await new Promise((r) => setTimeout(r, 300));
   assert.strictEqual(claude.inbox.length, 2); // its answer + one reply to a hand-off
@@ -221,7 +223,7 @@ test('agents cannot use @both, and each agent gets at most 2 turns per human mes
 
 test('default hop cap of 2 keeps a normal exchange short', async () => {
   const claude = fake('@codex your turn'), codex = fake('@claude back to you');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, hopCap: 2 });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, hopCap: 2 });
   room.postFromHuman('@claude start');
   await new Promise((r) => setTimeout(r, 300));
   assert.strictEqual(claude.inbox.length + codex.inbox.length, 3); // answer, hand-off, hand-back; then waits on Dean
@@ -245,7 +247,7 @@ test('steer goes into the busy agent\'s turn, once, and the other agent sees it 
   let release; const steered = [];
   const claude = { send: () => new Promise((r) => { release = r; }), steer: (t) => { steered.push(t); return true; } };
   const codex = fake('ok');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude refactor the parser');
   const r = room.steerFromHuman('actually skip the tests for now');
   assert.deepStrictEqual(r.steered, ['claude']);
@@ -262,7 +264,7 @@ test('steer goes into the busy agent\'s turn, once, and the other agent sees it 
 test('a steer that only names an idle agent is an ordinary message', async () => {
   let release; const claude = { send: () => new Promise((r) => { release = r; }), steer: () => true };
   const codex = fake('on it');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude long job');
   const r = room.steerFromHuman('@codex meanwhile, check the README');
   assert.deepStrictEqual(r.steered, []);
@@ -273,7 +275,7 @@ test('a steer that only names an idle agent is an ordinary message', async () =>
 
 test('stopping shows a calm note, not a failure', async () => {
   const claude = { send: () => { const e = new Error('stopped'); e.stopped = true; return Promise.reject(e); } };
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex: fake('x') } });
   room.postFromHuman('@claude go');
   await settle();
   assert.ok(room.state.transcript.some((e) => e.from === 'system' && e.text === 'Claude stopped.' && !e.kind));
@@ -283,7 +285,7 @@ test('stopping shows a calm note, not a failure', async () => {
 test('Stop cancels the whole run: a new message cannot revive the stopped @both sequence', async () => {
   let release; const claude = { inbox: [], send(t) { this.inbox.push(t); return new Promise((r) => { release = r; }); }, interrupt() {} };
   const codex = fake('ok');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@both OLD_TASK');
   room.stopAll();
   room.postFromHuman('@claude NEW_TASK');
@@ -296,7 +298,7 @@ test('Stop cancels the whole run: a new message cannot revive the stopped @both 
 
 test('a delivery held back by the turn limit is kept for the next one', async () => {
   const claude = fake('ok'), codex = fake('ok');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, maxTurns: 1 });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex }, maxTurns: 1 });
   room.postFromHuman('@claude start'); await settle();
   room._append('codex', 'UNSEEN_FINDING');
   await room.deliver('claude'); // capped: not sent
@@ -308,7 +310,7 @@ test('a delivery held back by the turn limit is kept for the next one', async ()
 test('a failed send leaves its messages deliverable', async () => {
   let fail = true; const claude = fake(() => 'ok');
   const send = claude.send; claude.send = (t) => (fail ? Promise.reject(new Error('transport down')) : send(t));
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex: fake('x') } });
   room.postFromHuman('@claude FIRST'); await settle();
   fail = false;
   room.postFromHuman('@claude SECOND'); await settle();
@@ -318,7 +320,7 @@ test('a failed send leaves its messages deliverable', async () => {
 for (const [how, steer] of [['returns false', () => false], ['throws', () => { throw new Error('no turn'); }], ['rejects', () => Promise.reject(new Error('gone'))]]) {
   test(`a steer the agent ${how} on reaches it after its turn, and is not marked seen`, async () => {
     let release; const claude = { inbox: [], send(t) { this.inbox.push(t); return new Promise((r) => { release = r; }); }, steer };
-    const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+    const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex: fake('x') } });
     room.postFromHuman('@claude long job');
     room.steerFromHuman('LOST_STEER'); await settle();
     assert.ok(room.state.transcript.some((e) => e.from === 'system' && /Couldn't steer Claude/.test(e.text)));
@@ -332,7 +334,7 @@ for (const [how, steer] of [['returns false', () => false], ['throws', () => { t
 test('a reply that lands after Stop is shown but its hand-off is not followed', async () => {
   let release; const claude = { send: () => new Promise((r) => { release = r; }), interrupt() {} };
   const codex = fake('c');
-  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  const room = new Room({ proseHandoffs: true, humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@claude go'); room.stopAll();
   room.postFromHuman('@codex unrelated'); await settle();
   release('@codex please continue the old work'); await settle();

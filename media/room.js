@@ -98,7 +98,14 @@
   function render(entry) {
     const time = entry.ts ? new Date(entry.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
     if (entry.from === 'system') {
-      const row = el('div', `row system${entry.kind ? ' kind-' + entry.kind : ''}`); row.appendChild(el('div', 'text', entry.text)); return row;
+      const row = el('div', `row system${entry.kind ? ' kind-' + entry.kind : ''}`); row.appendChild(el('div', 'text', entry.text));
+      if (entry.kind === 'suggestion' && entry.suggest) {
+        // Only the human can turn an agent's prose hand-off into a message.
+        const b = el('button', 'tbtn', `Hand to ${NAMES[entry.suggest.to]}`);
+        b.addEventListener('click', () => { vscode.postMessage({ type: 'send', text: `@${entry.suggest.to} ${NAMES[entry.suggest.from]} asked for you above; please take it.` }); b.disabled = true; });
+        row.appendChild(b);
+      }
+      return row;
     }
     if (entry.from === 'human') {
       const row = el('article', `row human${entry.kind === 'history' ? ' history' : ''}`);

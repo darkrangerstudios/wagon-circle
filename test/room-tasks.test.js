@@ -50,11 +50,14 @@ test('typed agents are not routed by prose: a line-start @mention in a reply is 
   assert.strictEqual(codex.inbox.length, 0);
 });
 
-test('an untyped agent (e.g. a Codex thread made before tools) keeps the line-start hand-off rule', async () => {
+test('an untyped agent\'s line-start hand-off is a suggestion for the human, never an automatic dispatch', async () => {
   const claude = typed('ok'); const codex = { inbox: [], send: (t) => { codex.inbox.push(t); return Promise.resolve('@claude please look'); } };
   const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
   room.postFromHuman('@codex go'); await settle();
-  assert.strictEqual(claude.inbox.length, 1);
+  assert.strictEqual(claude.inbox.length, 0);
+  const sug = room.state.transcript.find((e) => e.kind === 'suggestion');
+  assert.deepStrictEqual(sug.suggest, { from: 'codex', to: 'claude' });
+  assert.strictEqual(sug.from, 'system');
 });
 
 test('a review needing six exchanges finishes without the human typing continue', async () => {

@@ -58,15 +58,17 @@ class Room extends EventEmitter {
   // Runs: each human message starts a run (a number). Stop cancels every run so far; work belonging to a
   // cancelled run (a queued delivery, the rest of an @both sequence, a hand-off) never starts again.
   // Typed agents (agent.typed) ask each other through the request_assistance tool, under a host-owned task
-  // (tasks.js). Their prose is never routed. Untyped agents keep the line-start @name hand-off rule.
-  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now }) {
+  // (tasks.js). Prose is never a control channel: an untyped agent's line-start @name becomes a displayed
+  // suggestion the human can send (DESIGN.md "Structured assistance"). proseHandoffs: true restores the
+  // pre-v0.5 automatic routing; the extension never sets it (kept for the legacy router tests).
+  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false }) {
     super();
     this.agents = agents; this.hopCap = hopCap; this.human = humanName;
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
     this.maxTurns = maxTurns; this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: 0, codex: 0 };
-    this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0;
+    this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0; this.proseHandoffs = proseHandoffs;
     this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
     this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
     this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
@@ -277,6 +279,10 @@ class Room extends EventEmitter {
   }
 
   _relay(from, text, run) {
+    if (!this.proseHandoffs) {
+      for (const to of handoffs(text, from)) this._append('system', `${LABEL[from]} asked for ${LABEL[to]} in its reply. Only you can pass it on.`, { kind: 'suggestion', suggest: { from, to } });
+      return;
+    }
     for (const to of handoffs(text, from)) {
       if (!this._live(run)) return;
       if (this.hopsLeft <= 0) {
