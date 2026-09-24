@@ -156,7 +156,7 @@ class Room extends EventEmitter {
     this._advance(name);
     this.turns[name] += 1;
     this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
-    const steps = []; let diff = null; const started = Date.now();
+    const steps = []; let diff = null; const started = Date.now(); const turnStart = this.state.transcript.length;
     const onActivity = (a) => { if (a.phase === 'diff') { diff = a.diff; return; } if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); };
     try {
       const reply = await this.agents[name].send(payload.text, (partial) => this.emit('draft', { name, text: partial }), onActivity, payload.attachments);
@@ -167,7 +167,9 @@ class Room extends EventEmitter {
       if (e.stopped) this.note(`${LABEL[name]} stopped.`);
       else {
         // The agent may never have received it: make it deliverable again (a repeat beats a silent loss).
-        for (const x of fresh) unmarkKnown(x, name);
+        // Steers accepted during the failed turn may have died with it too.
+        const steered = this.state.transcript.slice(turnStart).filter((x) => x.kind === 'steer' && x.steer.includes(name));
+        for (const x of fresh.concat(steered)) unmarkKnown(x, name);
         const at = this.state.transcript.indexOf(fresh[0]);
         if (at >= 0) this.state.cursors[name] = Math.min(this.state.cursors[name], at);
         this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });

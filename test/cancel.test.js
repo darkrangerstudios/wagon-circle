@@ -98,3 +98,60 @@ test('Codex: steer before the turn is live is refused, so the room can fall back
   assert.strictEqual(await c.steer('th', 'still early'), false);
   started(c, 't1'); completed(c, 't1', 'completed'); await turn;
 });
+
+// Codex delta review of v0.4.4, D1: the interrupt goes unanswered, so the 3-second fallback kills Claude.
+// That is still the user's Stop: the cancelled request must not be resent, and the next turn must be steerable.
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const childProcess = require('node:child_process');
+const { Room } = require('../src/room');
+
+function withFakeSpawn(fn) {
+  const procs = []; const realSpawn = childProcess.spawn; const realTimeout = global.setTimeout; let fire = null;
+  childProcess.spawn = () => {
+    const p = new EventEmitter(); p.stdout = new PassThrough(); p.stderr = new PassThrough(); p.writes = [];
+    p.stdin = { write(s) { p.writes.push(JSON.parse(s)); }, end() {} };
+    p.kill = () => p.emit('exit', null, 'SIGTERM');
+    procs.push(p); return p;
+  };
+  global.setTimeout = (f, ms) => (ms === 3000 ? ((fire = f), 1) : realTimeout(f, ms));
+  delete require.cache[require.resolve('../src/claudeClient')];
+  const { ClaudeClient: Fresh } = require('../src/claudeClient'); // picks up the fake spawn
+  return Promise.resolve(fn({ Fresh, procs, fireKill: () => fire() }))
+    .finally(() => { childProcess.spawn = realSpawn; global.setTimeout = realTimeout; delete require.cache[require.resolve('../src/claudeClient')]; });
+}
+const userText = (p) => p.writes.filter((w) => w.type === 'user').map((w) => w.message.content[0].text).join('\n');
+
+test('Claude: a Stop that has to kill the process ends as stopped, without resending the cancelled work', () => withFakeSpawn(async ({ Fresh, procs, fireKill }) => {
+  const c = new Fresh({ exe: 'fake', cwd: __dirname, systemPrompt: '' });
+  const room = new Room({ agents: { claude: c } });
+  room.postFromHuman('@claude CANCELLED_WORK');
+  room.stopAll();
+  room.postFromHuman('@claude NEW_QUESTION');
+  fireKill(); await tick(); await tick();
+  assert.strictEqual(procs.length, 2);
+  assert.doesNotMatch(userText(procs[1]), /CANCELLED_WORK/);
+  assert.match(userText(procs[1]), /NEW_QUESTION/);
+  assert.ok(!room.state.transcript.some((e) => e.kind === 'error'), 'a user Stop is not a failure');
+  assert.ok(room.state.transcript.some((e) => /Claude stopped/.test(e.text)));
+  assert.strictEqual(c.cancelling, false);
+  assert.strictEqual(c.steer('REDIRECT'), true); // the new turn is steerable before its first result
+  procs[1].stdout.write(JSON.stringify({ type: 'result', is_error: true, subtype: 'error_during_execution' }) + '\n'); await tick();
+  assert.match(userText(procs[1]), /REDIRECT/);
+  procs[1].stdout.write(JSON.stringify({ type: 'result', result: 'done' }) + '\n'); await tick(); await tick();
+  assert.ok(room.state.transcript.some((e) => e.from === 'claude' && e.text === 'done'));
+}));
+
+test('Claude: a steer whose interrupt has to kill the process is redelivered with the original, not lost', () => withFakeSpawn(async ({ Fresh, procs, fireKill }) => {
+  const c = new Fresh({ exe: 'fake', cwd: __dirname, systemPrompt: '' });
+  const room = new Room({ agents: { claude: c } });
+  room.postFromHuman('@claude ORIGINAL');
+  assert.deepStrictEqual(room.steerFromHuman('STEER_TEXT').steered, ['claude']);
+  fireKill(); await tick(); await tick();
+  assert.ok(room.state.transcript.some((e) => e.kind === 'error'), 'a crash is a failure, not a Stop');
+  assert.strictEqual(c.steerQueue.length, 0);
+  // The failure makes the turn's input deliverable again; the next message carries it, steer included.
+  room.postFromHuman('@claude AGAIN'); await tick();
+  const sent = userText(procs[1]);
+  assert.match(sent, /ORIGINAL/); assert.match(sent, /STEER_TEXT/); assert.match(sent, /AGAIN/);
+}));
