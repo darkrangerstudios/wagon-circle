@@ -325,3 +325,55 @@ test('task usage: each turn\'s reported tokens go to its task; turns without a r
   assert.deepStrictEqual(u.claude, { fresh: 20, cached: 180, cacheWrite: 0, output: 10, turns: 2, unreported: 0 });
   assert.deepStrictEqual(u.codex, { fresh: 0, cached: 0, cacheWrite: 0, output: 0, turns: 1, unreported: 1 });
 });
+
+// Codex review of 6992eb3: reload tests must reopen what was actually SAVED (the room saves on 'changed'),
+// not the live state. These reopen the last emitted snapshot.
+function saving(room) { const snaps = []; room.on('changed', (st) => snaps.push(JSON.parse(JSON.stringify(st)))); return () => snaps[snaps.length - 1]; }
+
+test('saved snapshot: the first turn (a human message in Work mode) is on disk as in flight before the provider answers', async () => {
+  const room = new Room({ humanName: 'Dean', agents: { claude: { typed: true, send: () => new Promise(() => {}) }, codex: typed('x') } });
+  room.tasks.mode = 'work';
+  const last = saving(room);
+  room.postFromHuman('Audit the parser'); await settle();
+  const again = new Room({ humanName: 'Dean', state: last(), agents: { claude: typed('resumed'), codex: typed('x') } });
+  assert.ok(again.held.has('claude'), 'the cut-off first turn is recoverable');
+  assert.strictEqual(again.tasks.get('t1').status, 'paused');
+  again.resumeTask(); await settle();
+  assert.ok(again.state.transcript.some((e) => e.from === 'claude' && e.text === 'resumed'));
+});
+
+test('saved snapshot: a peer interrupted mid-answer is recoverable', async () => {
+  const claude = typed(async (text, n, tool) => { if (n === 1) await tool(...ask('codex', 'check S')); return 'asked'; });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: () => new Promise(() => {}) } } });
+  const last = saving(room);
+  room.postFromHuman('review'); await settle();
+  const again = new Room({ humanName: 'Dean', state: last(), agents: { claude: typed('m'), codex: typed('S ok') } });
+  assert.ok(again.held.has('codex')); assert.strictEqual(again.tasks.get('t1').requests[0].status, 'open');
+});
+
+test('saved snapshot: a completed task with a finished consolidation reopens clean (nothing held, nothing "cut off")', async () => {
+  const claude = typed(async (text, n, tool) => { if (n === 1) { await tool(...ask('codex', 'check C')); return 'asked'; } await tool('finish_task', { summary: 'done' }); return 'merged'; });
+  claude.lastTurnUsage = { fresh: 1, cached: 2, cacheWrite: 0, output: 3 };
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: typed('C fine') } });
+  const last = saving(room);
+  room.postFromHuman('review'); await settle(300);
+  assert.strictEqual(room.tasks.get('t1').status, 'completed');
+  const snap = last();
+  assert.deepStrictEqual(snap.inflight, {});
+  const again = new Room({ humanName: 'Dean', state: snap, agents: { claude: typed('x'), codex: typed('y') } });
+  assert.strictEqual(again.held.size, 0);
+  assert.ok(!again.state.transcript.some((e) => /Reopened:/.test(e.text)));
+  assert.strictEqual(again.tasks.get('t1').usage.claude.turns, 2, 'usage saved with the finished turn');
+});
+
+test('saved snapshot: a terminal Stop reopens stopped, with nothing held or revived', async () => {
+  const room = new Room({ humanName: 'Dean', agents: { claude: { typed: true, send: () => new Promise(() => {}), interrupt() {} }, codex: typed('x') } });
+  const last = saving(room);
+  room.postFromHuman('@claude long job'); await settle();
+  room.stopAll();
+  const claude = typed('should not run');
+  const again = new Room({ humanName: 'Dean', state: last(), agents: { claude, codex: typed('x') } });
+  assert.strictEqual(again.held.size, 0);
+  again.resumeTask(); await settle();
+  assert.strictEqual(claude.inbox.length, 0);
+});

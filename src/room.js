@@ -220,7 +220,9 @@ class Room extends EventEmitter {
     if (requests.length) this.tasks.markDelivered(requests.map((e) => e.request), name);
     // Saved with the room until the turn ends, so a reload mid-turn can recover exactly this delivery.
     (this.state.inflight || (this.state.inflight = {}))[name] = { ids: fresh.map((e) => e.id), run, turnStart: this.state.transcript.length };
-    if (taskTurn) this._taskChanged();
+    // The room is saved on 'changed': emit it now, for every turn, so the in-flight record is on disk before the
+    // provider call starts (a crash mid-turn must find it).
+    if (taskTurn) this._taskChanged(); else this.emit('changed', this.state);
     const t = this.tasks.active(); const ctx = { run, taskId: t ? t.id : null, generation: t ? t.generation : 0 };
     this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
     const steps = []; let diff = null; const started = Date.now(); const turnStart = this.state.transcript.length;
@@ -251,8 +253,10 @@ class Room extends EventEmitter {
     } finally {
       // Tokens this turn spent go to the task it belonged to (or the task it started), whatever its outcome.
       const tt = ctx.taskId ? this.tasks.get(ctx.taskId) : (() => { const a = this.tasks.active(); return a && a.run === run ? a : null; })();
-      if (tt) { this.tasks.addUsage(tt.id, name, this.agents[name].lastTurnUsage || null); this._taskChanged(); }
+      if (tt) this.tasks.addUsage(tt.id, name, this.agents[name].lastTurnUsage || null);
+      // Clear the in-flight record BEFORE the save that ends the turn, so a finished turn is never saved as cut off.
       if (this.state.inflight) delete this.state.inflight[name];
+      if (tt) this._taskChanged(); else this.emit('changed', this.state);
       this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
