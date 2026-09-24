@@ -69,7 +69,9 @@ class Room extends EventEmitter {
     this.maxTurns = maxTurns; this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: 0, codex: 0 };
-    this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0; this.proseHandoffs = proseHandoffs; this.readHistory = readHistory;
+    this.hopsLeft = hopCap; this.capNoted = false; this.proseHandoffs = proseHandoffs; this.readHistory = readHistory;
+    // Saved with the room so a reload can tell cut-off work from work the human stopped.
+    this.run = this.state.run || 0; this.cancelledThrough = this.state.cancelledThrough || 0;
     this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
     this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
     this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
@@ -78,16 +80,29 @@ class Room extends EventEmitter {
 
   // After a reload no turn is running, so a request marked delivered was cut off with its turn: reopen it, make its
   // entry deliverable again and hold the recipient until the human continues. Nothing starts on its own.
+  // After a reload no turn is running. Every delivery that was in flight (a request to answer, an answer to take
+  // back, the human's own message) was cut off with its turn: make its input deliverable again and hold the agent.
+  // Work the human had stopped stays stopped. The task shows as paused, so Resume is the visible way on; nothing
+  // starts on its own and consumed allowances stay consumed.
   _reconcile() {
-    const cut = this.tasks._requests().filter((r) => r.status === 'delivered');
-    if (!cut.length) return;
-    for (const r of cut) {
-      const e = this.state.transcript.find((x) => x.kind === 'request' && x.request === r.id);
-      if (e) { unmarkKnown(e, r.to); const at = this.state.transcript.indexOf(e); this.state.cursors[r.to] = Math.min(this.state.cursors[r.to], at); }
-      r.status = 'open'; this.held.add(r.to);
+    const inflight = this.state.inflight || {}; this.state.inflight = {};
+    for (const [name, f] of Object.entries(inflight)) {
+      if (!this.agents[name] || !f || !(f.run > this.cancelledThrough)) continue;
+      const entries = this.state.transcript.filter((e) => f.ids.includes(e.id));
+      if (entries.length) this._undeliver(name, entries, f.turnStart); else this.tasks.reopen(name);
+      this.held.add(name);
     }
-    this.run = Math.max(this.run, this.cancelledThrough + 1); // the recovered work gets a live run of its own
-    this.note(`Reopened with ${cut.map((r) => `${r.id} for ${LABEL[r.to]}`).join(', ')} unanswered. Resume the task (or message the agent) to continue.`);
+    // Rooms saved before in-flight records: a request still marked delivered was cut off the same way.
+    for (const r of this.tasks._requests().filter((x) => x.status === 'delivered')) {
+      const e = this.state.transcript.find((x) => x.kind === 'request' && x.request === r.id);
+      if (e) this._undeliver(r.to, [e], this.state.transcript.length); else r.status = 'open';
+      this.held.add(r.to);
+    }
+    if (!this.held.size) return;
+    this.run = this.state.run = Math.max(this.run, this.cancelledThrough + 1); // recovered work gets a live run of its own
+    const t = this.tasks.active(); if (t && t.status === 'active') this.tasks.pause('reload');
+    const who = [...this.held].map((n) => LABEL[n]).join(' and ');
+    this.note(`Reopened: ${who}'s last turn was cut off before it finished. ${t ? 'The task is paused; Resume to continue' : 'Message the agent to continue'}. Nothing restarts on its own.`);
   }
 
   _taskChanged() { this.emit('task', this.tasks.summary()); this.emit('changed', this.state); }
@@ -112,7 +127,7 @@ class Room extends EventEmitter {
   postFromHuman(text, attachments = [], ide = null) {
     const addressed = mentions(text);
     const targets = addressed.length ? addressed : this.defaultTarget === 'both' ? [...AGENTS] : [this.defaultTarget];
-    const run = ++this.run;
+    const run = this.state.run = ++this.run;
     this.hopsLeft = this.hopCap; this.capNoted = false;
     this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
     const entry = this._append('human', text, { to: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
@@ -203,6 +218,8 @@ class Room extends EventEmitter {
     this._advance(name);
     if (taskTurn && !humanTurn) this.tasks.recordTurn(name); else this.turns[name] += 1;
     if (requests.length) this.tasks.markDelivered(requests.map((e) => e.request), name);
+    // Saved with the room until the turn ends, so a reload mid-turn can recover exactly this delivery.
+    (this.state.inflight || (this.state.inflight = {}))[name] = { ids: fresh.map((e) => e.id), run, turnStart: this.state.transcript.length };
     if (taskTurn) this._taskChanged();
     const t = this.tasks.active(); const ctx = { run, taskId: t ? t.id : null, generation: t ? t.generation : 0 };
     this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
@@ -232,6 +249,7 @@ class Room extends EventEmitter {
         this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
       }
     } finally {
+      if (this.state.inflight) delete this.state.inflight[name];
       this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
@@ -327,7 +345,7 @@ class Room extends EventEmitter {
   }
 
   stopAll() {
-    this.cancelledThrough = this.run; this.pending = { claude: 0, codex: 0 }; this.held.clear();
+    this.cancelledThrough = this.state.cancelledThrough = this.run; this.pending = { claude: 0, codex: 0 }; this.held.clear();
     if (this.tasks.stop()) this._taskChanged();
     for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
     this.note(`Stopped by ${this.human}.`);

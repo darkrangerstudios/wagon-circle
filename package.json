@@ -185,8 +185,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/darkrangerstudios/wagon-circle"
+    "url": "https://github.com/darkrangerstudios/wagon-wheel"
   },
-  "homepage": "https://darkrangerstudios.github.io/wagon-circle/",
+  "homepage": "https://darkrangerstudios.github.io/wagon-wheel/",
   "author": "Dean Buttry"
 }

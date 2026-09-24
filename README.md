@@ -2,7 +2,7 @@
 
 > Circle the wagons: one room for you, Claude and Codex, with nothing exposed.
 
-**Prototype 0.5.0.** Site: https://darkrangerstudios.github.io/wagon-circle/
+**Prototype 0.5.0.** Site: https://darkrangerstudios.github.io/wagon-wheel/
 
 One VS Code room where you, Claude and Codex talk in a single timeline.
 
@@ -40,7 +40,7 @@ One VS Code room where you, Claude and Codex talk in a single timeline.
 
 ## Try it
 ```
-"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --extensionDevelopmentPath="$HOME/code/wagon-circle" --new-window
+"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --extensionDevelopmentPath="$HOME/code/wagon-wheel" --new-window
 ```
 Then, from the Command Palette, run **Wagon Wheel: New Room**, **Wagon Wheel: Join Existing Conversations (fork)** or **Wagon Wheel: Reopen a Room**. Logs appear in Output → Wagon Wheel.
 

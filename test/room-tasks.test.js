@@ -264,19 +264,53 @@ test('a human Stop still cancels for good: nothing is held or redelivered', asyn
   assert.strictEqual(room.tasks.get('t1').requests[0].status, 'cancelled');
 });
 
-test('reload reopens a request that was cut off mid-delivery and holds it for the human', async () => {
+test('reload reopens a request that was cut off mid-delivery: the task shows paused, and Resume delivers it once', async () => {
   const claude = typed(async (text, n, tool) => { if (n === 1) await tool(...ask('codex', 'check F')); return 'asked'; });
   const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: () => new Promise(() => {}) } } });
   room.postFromHuman('review'); await settle();
   assert.strictEqual(room.tasks.get('t1').requests[0].status, 'delivered');
+  const used = room.tasks.get('t1').used.turns;
   const saved = JSON.parse(JSON.stringify(room.state));
   const codex = typed('F ok');
   const again = new Room({ humanName: 'Dean', state: saved, agents: { claude: typed('merged'), codex } });
-  assert.strictEqual(again.tasks.get('t1').requests[0].status, 'open');
+  const t = again.tasks.get('t1');
+  assert.deepStrictEqual([t.requests[0].status, t.status, again.tasks.summary().status], ['open', 'paused', 'paused']); // the card offers Resume
   assert.ok(again.held.has('codex'));
-  assert.ok(again.state.transcript.some((e) => /Reopened with r1 for Codex/.test(e.text)));
+  assert.ok(again.state.transcript.some((e) => /Reopened: Codex's last turn was cut off/.test(e.text)));
+  assert.strictEqual(t.used.turns, used, 'consumed allowance is kept');
   await settle(); assert.strictEqual(codex.inbox.length, 0, 'nothing starts on its own');
   again.resumeTask(); await settle();
-  assert.match(codex.inbox[0], /check F/);
-  assert.strictEqual(again.tasks.get('t1').requests[0].status, 'answered');
+  assert.strictEqual(codex.inbox.length, 1); assert.match(codex.inbox[0], /check F/);
+  assert.strictEqual(t.requests[0].status, 'answered');
+});
+
+// Codex combined review of 272670f: a reload while the lead takes an answer back lost that delivery.
+test('reload while the lead consolidates an answer: Resume gives the lead the answer again', async () => {
+  const claude = { typed: true, inbox: [], send: (text, d, a, att, onTool) => { claude.inbox.push(text); if (claude.inbox.length === 1) return onTool(...ask('codex', 'check G')).then(() => 'asked'); return new Promise(() => {}); } };
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: typed('G is fine') } });
+  room.postFromHuman('review'); await settle();
+  assert.match(claude.inbox[1], /answer to your request r1/); // consolidation turn in flight, never finishes
+  assert.strictEqual(room.tasks.get('t1').requests[0].status, 'answered');
+  const saved = JSON.parse(JSON.stringify(room.state));
+  const lead = typed('merged the answer');
+  const again = new Room({ humanName: 'Dean', state: saved, agents: { claude: lead, codex: typed('x') } });
+  assert.ok(again.held.has('claude'));
+  assert.strictEqual(again.tasks.get('t1').status, 'paused');
+  again.resumeTask(); await settle();
+  assert.strictEqual(lead.inbox.length, 1);
+  assert.match(lead.inbox[0], /answer to your request r1/); assert.match(lead.inbox[0], /G is fine/);
+  assert.ok(again.state.transcript.some((e) => e.from === 'claude' && e.text === 'merged the answer'));
+});
+
+test('a human Stop survives a reload: stopped work is not held or revived', async () => {
+  const room = new Room({ humanName: 'Dean', agents: { claude: { typed: true, send: () => new Promise(() => {}), interrupt() {} }, codex: typed('x') } });
+  room.postFromHuman('@claude long job'); await settle();
+  room.stopAll(); // the process dies before the stopped turn settles, so the in-flight record is still saved
+  const saved = JSON.parse(JSON.stringify(room.state));
+  const claude = typed('should not run');
+  const again = new Room({ humanName: 'Dean', state: saved, agents: { claude, codex: typed('x') } });
+  assert.strictEqual(again.held.size, 0);
+  again.resumeTask(); await settle();
+  assert.strictEqual(claude.inbox.length, 0);
+  assert.ok(!again.state.transcript.some((e) => /Reopened:/.test(e.text)));
 });

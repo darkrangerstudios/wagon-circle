@@ -534,13 +534,27 @@ function newMeta(name) {
 }
 
 // The rename changed the extension id, and with it the storage folder. Copy (never move) rooms saved under the
-// old id once, so reopening finds them and attachment paths inside them stay valid.
+// old id, so reopening finds them and attachment paths inside them stay valid. The copy is staged and checked,
+// then renamed into place in one step: an interrupted copy leaves no half-filled rooms folder, so the next launch
+// simply tries again, and an existing rooms folder (newer data) is never touched.
 const LEGACY_IDS = ['darkrangerstudios.wagon-circle']; // earlier extension ids, newest first
-function migrateRooms(context) {
-  const to = path.join(context.globalStorageUri.fsPath, 'rooms');
+function listFiles(dir, base = dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? listFiles(path.join(dir, d.name), base) : [[path.relative(base, path.join(dir, d.name)), fs.statSync(path.join(dir, d.name)).size]]));
+}
+function migrateRooms(context, fsx = fs) {
+  const to = path.join(context.globalStorageUri.fsPath, 'rooms'), staging = `${to}.migrating`;
   const from = LEGACY_IDS.map((id) => path.join(path.dirname(context.globalStorageUri.fsPath), id, 'rooms')).find((p) => fs.existsSync(p));
-  if (fs.existsSync(to) || !from) return;
-  try { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true }); log(`copied rooms from ${from}`); } catch (e) { log(`room migration failed: ${e.message}`); }
+  if (fs.existsSync(to) || !from) return false;
+  try {
+    fs.rmSync(staging, { recursive: true, force: true }); // leftovers of an interrupted attempt
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fsx.cpSync(from, staging, { recursive: true });
+    const want = JSON.stringify(listFiles(from).sort()), got = JSON.stringify(listFiles(staging).sort());
+    if (want !== got) throw new Error('copied files do not match the originals');
+    fs.renameSync(staging, to);
+    log(`copied rooms from ${from}`);
+    return true;
+  } catch (e) { log(`room migration will retry next launch: ${e.message}`); try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* next launch */ } return false; }
 }
 
 function activate(context) {
