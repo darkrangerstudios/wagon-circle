@@ -121,7 +121,12 @@ class AcpClient {
   // Stop: ACP's session/cancel notification; the pending prompt then answers with stopReason "cancelled".
   interrupt() { if (!this.waiter || !this.proc) return; this.waiter.cancelled = true; try { this._write({ method: 'session/cancel', params: { sessionId: this.sessionId } }); } catch { /* exited */ } }
 
-  stop() { if (this.proc) { const p = this.proc; this.proc = null; try { p.stdin.end(); } catch { /* closed */ } p.kill(); } }
+  stop() {
+    const p = this.proc; if (!p) return;
+    // Closing the room must settle its calls too; the exit event cannot do that after proc is cleared.
+    this._fail(p, new Error(`${this.label} stopped`));
+    try { p.stdin.end(); } catch { /* closed */ } p.kill();
+  }
 }
 
 module.exports = { AcpClient };

@@ -6,14 +6,18 @@ const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
 const Module = require('module');
 
+let experimentalAgents;
+const acpStarts = [];
+class FakeAcp { constructor(o) { this.o = o; this.capabilities = {}; } async start() { acpStarts.push(this.o); throw new Error('synthetic missing agent'); } stop() {} }
 const stubs = {
-  vscode: { workspace: { getConfiguration: () => ({ get: () => undefined, inspect: () => undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: true },
+  vscode: { workspace: { getConfiguration: () => ({ get: (key) => key === 'experimentalAgents' ? experimentalAgents : undefined, inspect: (key) => key === 'experimentalAgents' && experimentalAgents !== undefined ? { workspaceValue: experimentalAgents } : undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: true },
     ConfigurationTarget: { Global: 1 }, window: {}, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) } },
 };
 class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: 'th-new' }; } async resumeThread(id) { return { id }; } async forkThread() { return { id: 'th-fork' }; }
   async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {
+  [path.join(__dirname, '../src/acpClient.js')]: { AcpClient: FakeAcp },
   [path.join(__dirname, '../src/codexClient.js')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
   [path.join(__dirname, '../src/claudeClient.js')]: { ClaudeClient: FakeClaude, READ_ONLY_TOOLS: ['Read', 'Glob', 'Grep'] },
   [path.join(__dirname, '../src/claudeBinary.js')]: { findClaude: () => ({ path: 'claude', version: [2, 1, 281] }), atLeast: () => true },
@@ -55,4 +59,21 @@ test('Reopen: an older room with messages gets the upgrade notice once; an empty
   await empty.boot();
   assert.strictEqual(empty.room.state.transcript.length, 0);
   empty.dispose();
+});
+
+test('experimental profiles: off by default, only known Gemini accepted once, malformed settings ignored', async () => {
+  const run = async (value) => {
+    experimentalAgents = value; acpStarts.length = 0;
+    let s;
+    try { s = new RoomSession(context(), newMeta('profile check'), null); await s.boot(); return acpStarts.slice(); }
+    finally { if (s) s.dispose(); experimentalAgents = undefined; }
+  };
+  assert.deepStrictEqual(await run(undefined), []);
+  for (const value of ['gemini', {}, ['constructor', 'toString', '__proto__'], [{ id: 'gemini', command: '/unexpected' }]]) {
+    assert.deepStrictEqual(await run(value), [], 'invalid profile input cannot start an agent');
+  }
+  const got = await run(['gemini', 'gemini', 'unknown']);
+  assert.strictEqual(got.length, 1);
+  assert.strictEqual(got[0].exe, 'gemini');
+  assert.deepStrictEqual(got[0].args, ['--experimental-acp']);
 });

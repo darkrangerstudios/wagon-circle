@@ -60,3 +60,19 @@ test('ACP agent in a room: untyped, so its @claude line is a suggestion, not a d
     assert.strictEqual(claude.inbox.length, 1); // the human's own @claude line, never Gemini's
   } finally { g.stop(); }
 });
+
+test('ACP: disposing during a prompt rejects it promptly and clears pending timers', async () => {
+  const a = agent(); await a.start(); await a.newSession();
+  const result = a.send('slow work').then(() => 'resolved', (e) => e);
+  a.stop();
+  try {
+    const outcome = await Promise.race([result, new Promise((r) => setTimeout(() => r('still pending'), 150))]);
+    assert.ok(outcome instanceof Error, 'the disposed prompt must settle without its one-hour timeout');
+    assert.strictEqual(a.pending.size, 0);
+    assert.strictEqual(a.waiter, null);
+  } finally {
+    // Make a broken implementation safe to test: clear its timeout and reject the dangling promise.
+    for (const x of a.pending.values()) x.reject(new Error('test cleanup'));
+    a.pending.clear();
+  }
+});

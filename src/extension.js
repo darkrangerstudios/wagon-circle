@@ -83,7 +83,7 @@ function settings() {
     taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}), ...Object.fromEntries([['turns', 'taskTurns'], ['reserve', 'taskReserve'], ['minutes', 'taskMinutes']].filter(([, key]) => c.isSet(key)).map(([k, key]) => [k, c.get(key)])) }),
     cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home),
     // Only known, named profiles: no arbitrary executable from settings (DESIGN.md "Additional agents").
-    extraAgents: [...new Set(c.get('experimentalAgents') || [])].filter((id) => ACP_PROFILES[id]).map((id) => ({ id, ...ACP_PROFILES[id] }))
+    extraAgents: [...new Set(Array.isArray(c.get('experimentalAgents')) ? c.get('experimentalAgents') : [])].filter((id) => typeof id === 'string' && Object.hasOwn(ACP_PROFILES, id)).map((id) => ({ id, ...ACP_PROFILES[id] }))
   };
 }
 
