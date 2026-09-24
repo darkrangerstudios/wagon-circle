@@ -74,4 +74,11 @@ function recentMessages(file, turns = 8) {
   return msgs.slice(start);
 }
 
-module.exports = { listSessions, recentMessages, textOf };
+// The saved file for a session id, or null. Session ids are UUIDs; anything else is refused.
+function fileFor(id) {
+  if (!/^[0-9a-f-]{8,64}$/i.test(String(id)) || !fs.existsSync(ROOT)) return null;
+  for (const dir of fs.readdirSync(ROOT)) { const fp = path.join(ROOT, dir, `${id}.jsonl`); if (fs.existsSync(fp)) return fp; }
+  return null;
+}
+
+module.exports = { listSessions, recentMessages, textOf, fileFor, ROOT };

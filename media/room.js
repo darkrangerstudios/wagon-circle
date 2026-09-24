@@ -326,6 +326,13 @@
       x.addEventListener('click', () => { vscode.postMessage({ type: 'session', vendor: name, action: a }); closePop(); }); wseg.appendChild(x);
     }
     ws.appendChild(wseg); pop.appendChild(ws);
+    const other = name === 'claude' ? 'codex' : 'claude';
+    const hr = el('div', 'fastrow'); const ht = el('div');
+    ht.appendChild(el('span', null, `Share this session's history with ${NAMES[other]}`));
+    ht.appendChild(el('small', null, 'Read-only reference through read_session_history. Local sessions only; cloud sessions stay in the provider\'s own tools.'));
+    const hs = el('button', `switch${c.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!c.shared)); hs.setAttribute('aria-label', 'Share session history');
+    hs.addEventListener('click', () => { cmd(`/history share ${name} ${c.shared ? 'off' : 'on'}`); closePop(); });
+    hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
     const save = el('button', 'link', 'Use these settings for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);

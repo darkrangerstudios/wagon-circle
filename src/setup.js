@@ -64,6 +64,6 @@ async function checkSetup({ executables, executionHost, trusted }, options = {})
   const providers = await Promise.all(entries.map(([provider, executable]) => checkProvider(provider, executable, options)));
   return { executionHost, providers, state: providers.length && providers.every((p) => p.installation === 'available'
     && p.authentication === 'present') ? 'credentials-present' : 'needs-attention',
-  note: 'Sign-in status does not verify quota, model access, working-session tools or cloud capabilities.' };
+  note: 'Sign-in status does not verify quota, model access, or working-session tools.' };
 }
 module.exports = { checkProvider, checkSetup, runProbe, GUIDES };
