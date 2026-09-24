@@ -28,7 +28,7 @@ test('two sessions of the same provider are separate participants with their own
   const room = new Room({ humanName: 'Dean', agents: { claude: a, 'claude-2': b }, labels: { 'claude-2': 'Claude (reviewer)' } });
   room.postFromHuman('@claude first'); await settle();
   room.postFromHuman('@claude-2 second'); await settle();
-  assert.match(b.inbox[0], /\[Claude — relayed by Wagon Circle, not Dean\]\nA/);
+  assert.match(b.inbox[0], /\[Claude — relayed by Wagon Wheel, not Dean\]\nA/);
   assert.doesNotMatch(a.inbox.join('\n'), /second/);
   assert.notStrictEqual(room.state.cursors.claude, room.state.cursors['claude-2']);
 });

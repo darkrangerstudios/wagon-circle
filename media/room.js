@@ -181,14 +181,14 @@
   // ---------- composer: status, chips, pickers ----------
   function renderWho() {
     const w = $('who'); w.textContent = '';
-    for (const n of ['claude', 'codex']) if (busy[n]) {
+    for (const n of Object.keys(busy)) if (busy[n]) {
       w.appendChild(el('span', `w ${n}`, `${NAMES[n]} · ${act[n] ? act[n].label : 'starting'} · ${secs(Date.now() - (since[n] || Date.now()))}`));
     }
-    const any = busy.claude || busy.codex, typed = !!(input.value.trim() || pending.length);
+    const any = Object.values(busy).some(Boolean), typed = !!(input.value.trim() || pending.length);
     $('stop').hidden = !any; $('send').hidden = !!any && !typed;
     const steering = any && typed && !input.value.trim().startsWith('/');
     $('send').textContent = steering ? '↪' : '↑';
-    $('send').title = steering ? `Steer ${['claude', 'codex'].filter((n) => busy[n]).map((n) => NAMES[n]).join(' and ')} now (Enter) · ${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter queues it instead` : 'Send (Enter)';
+    $('send').title = steering ? `Steer ${Object.keys(busy).filter((n) => busy[n]).map((n) => NAMES[n]).join(' and ')} now (Enter) · ${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter queues it instead` : 'Send (Enter)';
     if (any && !ticker) ticker = setInterval(renderWho, 1000);
     if (!any && ticker) { clearInterval(ticker); ticker = null; }
   }
@@ -403,7 +403,8 @@
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'init') {
       log.textContent = ''; Object.keys(drafts).forEach((x) => delete drafts[x]);
-      meta = m.meta || {}; NAMES.human = meta.humanName || 'You'; specs = m.commands || specs; controls = m.controls || controls;
+      meta = m.meta || {}; NAMES.human = meta.humanName || 'You';
+      for (const p of meta.participants || []) { if (!NAMES[p.id]) NAMES[p.id] = p.label; if (!GLYPH[p.id]) GLYPH[p.id] = '◆'; } specs = m.commands || specs; controls = m.controls || controls;
       $('title').textContent = meta.name || 'Wagon Wheel';
       $('ids').textContent = [meta.cwd, meta.forkedFrom && `codex fork of ${meta.forkedFrom.slice(0, 8)}`, meta.claudeForkedFrom && `claude fork of ${meta.claudeForkedFrom.slice(0, 8)}`].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(render(e)));
@@ -433,7 +434,7 @@
   // While an agent is working, Enter steers it; Cmd/Ctrl+Enter queues the message as an ordinary one instead.
   function send(queue) {
     const t = input.value.trim(); if (!t && !pending.length) return;
-    const steer = !queue && (busy.claude || busy.codex);
+    const steer = !queue && Object.values(busy).some(Boolean);
     if (t.startsWith('/')) cmd(t);
     else { vscode.postMessage({ type: steer ? 'steer' : 'send', text: t, attachmentIds: pending.map((a) => a.id), ide: meta.ideContext !== false }); pending = []; renderTray(); }
     input.value = ''; grow(); closeMenu(); input.focus();

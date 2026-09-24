@@ -10,7 +10,8 @@ const { ClaudeClient } = require('./claudeClient');
 const { Room, AGENTS } = require('./room');
 const { toolSpecs, PRESETS } = require('./tasks');
 const { Scheduler } = require('./scheduler');
-const { roomPrompt } = require('./prompts');
+const { roomPrompt, acpPrompt } = require('./prompts');
+const { AcpClient } = require('./acpClient');
 const { HistorySources, LOCAL_ONLY } = require('./historySources');
 const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
 const setup = require('./setup');
@@ -76,7 +77,8 @@ function settings() {
     taskMode: ['auto', 'chat', 'work'].includes(c.get('taskMode')) ? c.get('taskMode') : 'auto',
     // Three plain numbers; a taskDefaults object saved before v0.5 still applies until they are set.
     taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}), ...Object.fromEntries([['turns', 'taskTurns'], ['reserve', 'taskReserve'], ['minutes', 'taskMinutes']].filter(([, key]) => c.isSet(key)).map(([k, key]) => [k, c.get(key)])) }),
-    cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home)
+    cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home),
+    extraAgents: (c.get('extraAgents') || []).filter((x) => x && /^[a-z][a-z0-9-]{0,31}$/.test(x.id) && !['claude', 'codex', 'both', 'all', 'human', 'system'].includes(x.id) && typeof x.command === 'string' && x.command)
   };
 }
 
@@ -108,7 +110,9 @@ class RoomSession {
     this.claudeVersion = s.claude.version;
     if (m.defaultTarget === undefined) m.defaultTarget = s.defaultTarget;
     if (m.bothMode === undefined) m.bothMode = s.bothMode;
-    this.codex = new CodexClient({ exe: s.codexExe, cwd: this.meta.cwd, tools: toolSpecs(['claude']), log });
+    // Extra (ACP) participants from settings, known before the clients start so briefs and tool peers include them.
+    const xs = this.xs = s.extraAgents.map((x) => ({ id: x.id, label: x.label || x.id[0].toUpperCase() + x.id.slice(1) }));
+    this.codex = new CodexClient({ exe: s.codexExe, cwd: this.meta.cwd, tools: toolSpecs(['claude', ...xs.map((x) => x.id)]), log });
     await this.codex.start();
     this.codex.on('notification', (method) => { if (method === 'account/rateLimits/updated') this.refreshQuota(); });
     this.codex.on('exit', (e) => { log(`codex exited: ${e.message}`); this.post({ type: 'notice', text: 'Codex process exited. Reopen the room to restart it.' }); });
@@ -123,7 +127,7 @@ class RoomSession {
       if (shareSeed.codex) { try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; } }
       else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Codex thread ${forkFrom.id.slice(0, 8)} ("${(forkFrom.name || forkFrom.preview || '').slice(0, 60)}"). Codex keeps its memory; nothing from it was shared with Claude. The original thread is untouched.`];
     } else {
-      const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
+      const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true, this.xs));
       this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
     }
     await this.codex.setName(this.meta.codexThreadId, `Wagon Wheel: ${this.meta.name}`);
@@ -136,20 +140,40 @@ class RoomSession {
       if (shareSeed.claude) { try { claudeSeed = claudeHistory.recentMessages(claudeFrom.path, 8); } catch (e) { log(`claude history read failed: ${e.message}`); claudeSeed = []; } }
       else this.pendingNotes = [...(this.pendingNotes || []), `Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; nothing from it was shared with Codex. The original session is untouched.`];
     }
-    this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true), tools: toolSpecs(['codex']), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeFork, addDirs: [this.attDir], log });
+    this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true, xs), tools: toolSpecs(['codex', ...xs.map((x) => x.id)]), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeFork, addDirs: [this.attDir], log });
+
+    // Experimental ACP participants (wagonWheel.extraAgents). Continue their saved session when they can load
+    // one; otherwise start new and say so.
+    m.extra = m.extra || {}; this.extras = [];
+    for (const x of s.extraAgents) {
+      const label = x.label || x.id[0].toUpperCase() + x.id.slice(1);
+      const others = ['Claude', 'Codex', ...s.extraAgents.filter((y) => y.id !== x.id).map((y) => y.label || y.id)];
+      const a = new AcpClient({ exe: x.command, args: Array.isArray(x.args) ? x.args : [], cwd: m.cwd, label, brief: acpPrompt(label, human, others), log });
+      try {
+        await a.start();
+        const saved = m.extra[x.id] && m.extra[x.id].sessionId;
+        if (saved && a.capabilities.loadSession) await a.loadSession(saved);
+        else { await a.newSession(); if (saved) this.pendingNotes = [...(this.pendingNotes || []), `${label} cannot reload its earlier session, so it started a new one.`]; }
+        m.extra[x.id] = { sessionId: a.sessionId, label };
+        this.extras.push({ id: x.id, label, client: a });
+      } catch (e) { log(`${x.id}: ${e.message}`); a.stop(); this.pendingNotes = [...(this.pendingNotes || []), `${label} (experimental) could not start: ${e.message}`]; }
+    }
+    const extraList = this.extras.map((x) => ({ id: x.id, label: x.label }));
+    m.participants = [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, ...extraList];
 
     const codex = this.codex, meta = this.meta;
     const agents = {
       claude: this.claude,
       codex: { get lastTurnUsage() { return codex.lastTurnUsage; }, typed: !!meta.codexTyped, send: (text, onDelta, onActivity, files, onTool) => codex.runTurn(meta.codexThreadId, text, onDelta, onActivity, files, { model: meta.codexModel, effort: meta.codexEffort, fast: meta.codexFast, onTool }).finally(() => this.refreshQuota()), interrupt: () => codex.interrupt(), steer: (text, files) => codex.steer(meta.codexThreadId, text, files) }
     };
-    const labelFor = (n) => { const c = this.controls()[n]; const x = c.models.find((y) => y.id === c.model); return [x ? (x.name || x.id) : c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
+    for (const x of this.extras) agents[x.id] = x.client;
+    const labelFor = (n) => { if (!this.controls()[n]) return null; const c = this.controls()[n]; const x = c.models.find((y) => y.id === c.model); return [x ? (x.name || x.id) : c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
     // Local session history as callable context (read_session_history). Local sessions only.
-    this.history = new HistorySources({ saved: m.history || (m.history = {}),
-      working: () => ({ claude: { sessionId: this.claude.sessionId }, codex: { sessionId: m.codexThreadId } }),
-      makeReader: ({ provider, sessionId, file }) => provider === 'codex' ? codexHistoryReader(this.codex)
+    this.history = new HistorySources({ saved: m.history || (m.history = {}), participants: [{ id: 'claude', label: 'Claude', provider: 'claude' }, { id: 'codex', label: 'Codex', provider: 'codex' }, ...extraList.map((x) => ({ ...x, provider: 'acp' }))],
+      working: () => ({ claude: { sessionId: this.claude.sessionId }, codex: { sessionId: m.codexThreadId }, ...Object.fromEntries(this.extras.map((x) => [x.id, { sessionId: x.client.sessionId }])) }),
+      makeReader: ({ provider, sessionId, file }) => provider === 'acp' ? async () => { throw new Error('history reading is not available for ACP agents yet'); } : provider === 'codex' ? codexHistoryReader(this.codex)
         : async (args) => { const f = file || claudeHistory.fileFor(sessionId); if (!f) throw new Error('that Claude session has no saved file yet'); return claudeHistoryReader(f, claudeHistory.ROOT)(args); } });
-    this.room = new Room({ agents, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args) });
+    this.room = new Room({ agents, state: this.state, humanName: human, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (who, args) => this.history.read(who, args), labels: Object.fromEntries(extraList.map((x) => [x.id, x.label])) });
     for (const t of this.pendingNotes || []) this.room.note(t); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
     if (seed) {
@@ -300,7 +324,7 @@ class RoomSession {
       m.claudeSessionId = this.claude.sessionId;
     } else {
       let t;
-      if (action === 'new') t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
+      if (action === 'new') t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true, this.xs));
       else if (action === 'fork') t = await this.codex.forkThread(pick.id, roomPrompt('codex', 'claude', human));
       else t = await this.codex.resumeThread(pick.id);
       m.codexThreadId = t.id;
@@ -439,7 +463,7 @@ class RoomSession {
     } catch (e) { this.post({ type: 'attachError', text: e.message }); }
   }
 
-  dispose() { sessions.delete(this); if (this.scheduler) this.scheduler.dispose(); this.save(); if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null; }
+  dispose() { sessions.delete(this); if (this.scheduler) this.scheduler.dispose(); for (const x of this.extras || []) x.client.stop(); this.save(); if (this.codex) this.codex.stop(); if (this.claude) this.claude.stop(); this.panel = null; }
 }
 
 const MODE_TEXT = {
