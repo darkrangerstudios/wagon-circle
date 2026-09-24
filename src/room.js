@@ -3,15 +3,21 @@
 const { EventEmitter } = require('events');
 const { TaskLedger } = require('./tasks');
 
+// The original two participants. A room's actual participants come from its agents map (a registry keyed by
+// stable participant id, e.g. 'gemini' or 'claude-2'); these defaults keep pre-registry rooms unchanged.
 const AGENTS = ['claude', 'codex'];
 const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Wagon Wheel' };
+const ID = /^[a-z][a-z0-9-]{0,31}$/;
+const esc = (n) => n.replace(/[-]/g, '\\-');
+const nameRe = (names) => names.slice().sort((a, b) => b.length - a.length).map(esc).join('|');
 
-// @claude, @codex, @both / @all. Ignores e-mail-like text (x@codex.com) by requiring a non-word char before '@'.
-function mentions(text) {
+// @name for each participant, plus @both / @all. Ignores e-mail-like text (x@codex.com) by requiring a
+// non-word char before '@'.
+function mentions(text, names = AGENTS) {
   const found = new Set();
-  for (const m of String(text).matchAll(/(^|[^\w@.])@(claude|codex|both|all)\b/gi)) {
+  for (const m of String(text).matchAll(new RegExp(`(^|[^\\w@.])@(${nameRe(names)}|both|all)(?![\\w-])`, 'gi'))) {
     const n = m[2].toLowerCase();
-    if (n === 'both' || n === 'all') AGENTS.forEach((a) => found.add(a)); else found.add(n);
+    if (n === 'both' || n === 'all') names.forEach((a) => found.add(a)); else found.add(n);
   }
   return [...found];
 }
@@ -20,10 +26,10 @@ function mentions(text) {
 // A mention anywhere else is conversation ("I agree with @codex"), not a request; so are mentions inside
 // code fences, blockquotes or quotes (talking ABOUT a mention caused the 2026-09-23 runaway).
 // Agents cannot use @both / @all. Interim protocol until typed assistance requests replace text routing.
-function handoffs(text, from) {
+function handoffs(text, from, names = AGENTS) {
   const found = new Set();
   const prose = String(text).replace(/^[ \t]*(```|~~~)[\s\S]*?(^[ \t]*\1|(?![\s\S]))/gm, ' ');
-  for (const m of prose.matchAll(/^[ \t]*@(claude|codex)\b/gim)) found.add(m[1].toLowerCase());
+  for (const m of prose.matchAll(new RegExp(`^[ \\t]*@(${nameRe(names)})(?![\\w-])`, 'gim'))) found.add(m[1].toLowerCase());
   return [...found].filter((n) => n !== from);
 }
 
@@ -32,7 +38,7 @@ const markKnown = (e, name) => { if (!knows(e, name)) e.knownBy = [].concat(e.kn
 const unmarkKnown = (e, name) => { e.knownBy = [].concat(e.knownBy || []).filter((n) => n !== name); };
 
 // Agent-facing label. `to` is the agent receiving the payload (requests and answers read differently to their parties).
-function label(entry, human, to) {
+function label(entry, human, to, LABEL = module.exports.LABEL) {
   if (entry.kind === 'request') {
     const who = entry.to === to ? 'you' : LABEL[entry.to];
     return `[Request ${entry.request} from ${LABEL[entry.from]} to ${who} (${entry.purpose})${entry.task ? `, task ${entry.task}` : ''}: relayed by Wagon Wheel, not ${human}.${entry.to === to ? ` Your reply goes back to ${LABEL[entry.from]} automatically.` : ''}]`;
@@ -62,24 +68,28 @@ class Room extends EventEmitter {
   // suggestion the human can send (DESIGN.md "Structured assistance"). proseHandoffs: true restores the
   // pre-v0.5 automatic routing; the extension never sets it (kept for the legacy router tests).
   // readHistory(requester, args): shared session history (extension glue over sessionHistory.js); optional.
-  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false, readHistory = null }) {
+  // labels: display names by participant id (defaults: Claude, Codex, else the id capitalised).
+  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false, readHistory = null, labels = {} }) {
     super();
     this.agents = agents; this.hopCap = hopCap; this.human = humanName;
+    this.names = Object.keys(agents);
+    for (const n of this.names) if (!ID.test(n) || n === 'both' || n === 'all' || n === 'human' || n === 'system') throw new Error(`Invalid participant id "${n}"`);
+    this.labels = { ...LABEL, ...Object.fromEntries(this.names.map((n) => [n, labels[n] || LABEL[n] || n[0].toUpperCase() + n.slice(1)])) };
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
-    this.maxTurns = maxTurns; this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
-    this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
-    this.busy = { claude: false, codex: false }; this.pending = { claude: 0, codex: 0 };
+    this.maxTurns = maxTurns; this.turns = this._each(0); this.turnNoted = {};
+    this.state = state || { transcript: [], cursors: this._each(0), lastTargets: [...this.names], seq: 0 };
+    // A participant added to an existing room starts at the present: the room's past is not replayed into it.
+    for (const n of this.names) if (!Number.isInteger(this.state.cursors[n])) this.state.cursors[n] = this.state.transcript.length;
+    this.busy = this._each(false); this.pending = this._each(0);
     this.hopsLeft = hopCap; this.capNoted = false; this.proseHandoffs = proseHandoffs; this.readHistory = readHistory;
     // Saved with the room so a reload can tell cut-off work from work the human stopped.
     this.run = this.state.run || 0; this.cancelledThrough = this.state.cancelledThrough || 0;
-    this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
+    this.tasks = new TaskLedger({ now, agents: this.names, state: this.state.tasks });
     this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
     this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
     this._reconcile();
   }
 
-  // After a reload no turn is running, so a request marked delivered was cut off with its turn: reopen it, make its
-  // entry deliverable again and hold the recipient until the human continues. Nothing starts on its own.
   // After a reload no turn is running. Every delivery that was in flight (a request to answer, an answer to take
   // back, the human's own message) was cut off with its turn: make its input deliverable again and hold the agent.
   // Work the human had stopped stays stopped. The task shows as paused, so Resume is the visible way on; nothing
@@ -101,9 +111,11 @@ class Room extends EventEmitter {
     if (!this.held.size) return;
     this.run = this.state.run = Math.max(this.run, this.cancelledThrough + 1); // recovered work gets a live run of its own
     const t = this.tasks.active(); if (t && t.status === 'active') this.tasks.pause('reload');
-    const who = [...this.held].map((n) => LABEL[n]).join(' and ');
+    const who = [...this.held].map((n) => this.labels[n]).join(' and ');
     this.note(`Reopened: ${who}'s last turn was cut off before it finished. ${t ? 'The task is paused; Resume to continue' : 'Message the agent to continue'}. Nothing restarts on its own.`);
   }
+
+  _each(v) { return Object.fromEntries(this.names.map((n) => [n, v])); }
 
   _taskChanged() { this.emit('task', this.tasks.summary()); this.emit('changed', this.state); }
 
@@ -119,17 +131,17 @@ class Room extends EventEmitter {
   // Seed history one agent already has (its forked thread or session) so only the other agent receives it.
   // items: [{role: 'user'|'codex'|'claude', text}]; alreadyKnownBy: 'codex' | 'claude'.
   seedHistory(items, alreadyKnownBy) {
-    for (const it of items) this._append(AGENTS.includes(it.role) ? it.role : 'human', it.text, { kind: 'history', source: LABEL[alreadyKnownBy], knownBy: alreadyKnownBy });
+    for (const it of items) this._append(this.names.includes(it.role) ? it.role : 'human', it.text, { kind: 'history', source: this.labels[alreadyKnownBy], knownBy: alreadyKnownBy });
   }
 
   note(text) { return this._append('system', text); }
 
   postFromHuman(text, attachments = [], ide = null) {
-    const addressed = mentions(text);
-    const targets = addressed.length ? addressed : this.defaultTarget === 'both' ? [...AGENTS] : [this.defaultTarget];
+    const addressed = mentions(text, this.names);
+    const targets = addressed.length ? addressed : this.defaultTarget === 'both' ? [...this.names] : [this.defaultTarget];
     const run = this.state.run = ++this.run;
     this.hopsLeft = this.hopCap; this.capNoted = false;
-    this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
+    this.turns = this._each(0); this.turnNoted = {};
     const entry = this._append('human', text, { to: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
     this.lastHuman = { id: entry.id, text };
     if (this.tasks.noteHuman(text)) this._taskChanged();
@@ -142,8 +154,8 @@ class Room extends EventEmitter {
   // Steer: send a message INTO a running turn. Goes to the busy agents it @mentions, or to every busy agent
   // if it mentions none. If it only mentions idle agents (or nobody is busy), it is an ordinary message.
   steerFromHuman(text, attachments = [], ide = null) {
-    const busyNow = AGENTS.filter((a) => this.busy[a] && this.agents[a] && this.agents[a].steer);
-    const named = mentions(text);
+    const busyNow = this.names.filter((a) => this.busy[a] && this.agents[a] && this.agents[a].steer);
+    const named = mentions(text, this.names);
     const targets = named.length ? named.filter((a) => busyNow.includes(a)) : busyNow;
     if (!targets.length) return { steered: [], targets: this.postFromHuman(text, attachments, ide) };
     // Marked seen by a target up front so its current turn's catch-up doesn't repeat it; unmarked if the
@@ -160,7 +172,7 @@ class Room extends EventEmitter {
           unmarkKnown(entry, t);
           const at = this.state.transcript.indexOf(entry);
           if (at >= 0) this.state.cursors[t] = Math.min(this.state.cursors[t], at);
-          this.note(`Couldn't steer ${LABEL[t]} mid-turn (${failed}); it gets your message when its turn ends.`);
+          this.note(`Couldn't steer ${this.labels[t]} mid-turn (${failed}); it gets your message when its turn ends.`);
           if (this._live(run)) this.deliver(t, run);
         });
     }
@@ -187,7 +199,7 @@ class Room extends EventEmitter {
   payloadFor(name, fresh = this._fresh(name)) {
     const text = fresh.map((e) => {
       const files = (e.attachments || []).map((a) => a.name);
-      return `${label(e, this.human, name)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${e.ide ? `\n(IDE context from ${this.human}'s editor)\n${e.ide.text}` : ''}`;
+      return `${label(e, this.human, name, this.labels)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${e.ide ? `\n(IDE context from ${this.human}'s editor)\n${e.ide.text}` : ''}`;
     }).join('\n\n');
     return { text, attachments: fresh.flatMap((e) => e.attachments || []) };
   }
@@ -209,7 +221,7 @@ class Room extends EventEmitter {
       if (!adm.ok) { this._hold(name, adm.reason); return; }
     } else if (!taskTurn && this.turns[name] >= this.maxTurns) {
       // Not delivered, so not marked seen: the next delivery to this agent still carries it.
-      if (!this.turnNoted[name]) { this.turnNoted[name] = true; this.note(`${LABEL[name]} has had its ${this.maxTurns} turns for this message; waiting on ${this.human}.`); }
+      if (!this.turnNoted[name]) { this.turnNoted[name] = true; this.note(`${this.labels[name]} has had its ${this.maxTurns} turns for this message; waiting on ${this.human}.`); }
       return;
     }
     this.held.delete(name);
@@ -241,14 +253,14 @@ class Room extends EventEmitter {
       }
     } catch (e) {
       if (e.stopped) {
-        this.note(`${LABEL[name]} stopped.`);
+        this.note(`${this.labels[name]} stopped.`);
         // Interrupted by a task limit, not by the human's Stop: the turn's input is undelivered again and waits
         // (held) until the human adds allowance and resumes. A human Stop cancels it for good.
         if (this._live(run)) { this._undeliver(name, fresh, turnStart); this.held.add(name); this._taskChanged(); }
       } else {
         // The agent may never have received it: make it deliverable again (a repeat beats a silent loss).
         this._undeliver(name, fresh, turnStart);
-        this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
+        this._append('system', `${this.labels[name]} failed: ${e.message}`, { kind: 'error' });
       }
     } finally {
       // Tokens this turn spent go to the task it belonged to (or the task it started), whatever its outcome.
@@ -277,7 +289,7 @@ class Room extends EventEmitter {
   _hold(name, reason) {
     this.held.add(name);
     const t = this.tasks.active(); const key = `${t && t.id}:${reason}`;
-    if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${reason}. ${LABEL[name]}'s pending work waits for ${this.human} (resume, add allowance, or stop).`); }
+    if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${reason}. ${this.labels[name]}'s pending work waits for ${this.human} (resume, add allowance, or stop).`); }
     this._taskChanged();
   }
 
@@ -295,13 +307,13 @@ class Room extends EventEmitter {
         this.deliver(q.to, ctx.run);
       } else if (r.budget) {
         const t = this.tasks.active(), key = `${t && t.id}:budget`;
-        if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${LABEL[name]} asked ${LABEL[args && args.to] || 'a peer'} for more, but ${r.text.replace(/^Not sent: /, '').replace(/\.$/, '')}. Add turns or time in Task controls to let them continue.`); }
+        if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${this.labels[name]} asked ${this.labels[args && args.to] || 'a peer'} for more, but ${r.text.replace(/^Not sent: /, '').replace(/\.$/, '')}. Add turns or time in Task controls to let them continue.`); }
       }
       return r;
     }
     if (tool === 'finish_task') {
       const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary, ctx);
-      if (r.ok) { this.note(`Task ${t.id} finished by ${LABEL[name]}: ${t.summary || ''}`); this._taskChanged(); }
+      if (r.ok) { this.note(`Task ${t.id} finished by ${this.labels[name]}: ${t.summary || ''}`); this._taskChanged(); }
       return r;
     }
     if (tool === 'read_session_history') {
@@ -331,19 +343,19 @@ class Room extends EventEmitter {
   tick() {
     if (!this.tasks.checkTime()) return;
     this.note(`Task ${this.tasks.active().id} used its time allowance. Running work is stopped; add time to continue, or finish with what we have.`);
-    for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
+    for (const n of this.names) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
     this._taskChanged();
   }
 
   _relay(from, text, run) {
     if (!this.proseHandoffs) {
-      for (const to of handoffs(text, from)) this._append('system', `${LABEL[from]} asked for ${LABEL[to]} in its reply. Only you can pass it on.`, { kind: 'suggestion', suggest: { from, to } });
+      for (const to of handoffs(text, from, this.names)) this._append('system', `${this.labels[from]} asked for ${this.labels[to]} in its reply. Only you can pass it on.`, { kind: 'suggestion', suggest: { from, to } });
       return;
     }
-    for (const to of handoffs(text, from)) {
+    for (const to of handoffs(text, from, this.names)) {
       if (!this._live(run)) return;
       if (this.hopsLeft <= 0) {
-        if (!this.capNoted) { this.capNoted = true; this.note(`Hop cap (${this.hopCap}) reached. ${LABEL[from]} asked for ${LABEL[to]}; waiting on ${this.human}.`); }
+        if (!this.capNoted) { this.capNoted = true; this.note(`Hop cap (${this.hopCap}) reached. ${this.labels[from]} asked for ${this.labels[to]}; waiting on ${this.human}.`); }
         continue;
       }
       this.hopsLeft -= 1;
@@ -352,9 +364,9 @@ class Room extends EventEmitter {
   }
 
   stopAll() {
-    this.cancelledThrough = this.state.cancelledThrough = this.run; this.pending = { claude: 0, codex: 0 }; this.held.clear();
+    this.cancelledThrough = this.state.cancelledThrough = this.run; this.pending = this._each(0); this.held.clear();
     if (this.tasks.stop()) this._taskChanged();
-    for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
+    for (const n of this.names) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
     this.note(`Stopped by ${this.human}.`);
   }
 }
