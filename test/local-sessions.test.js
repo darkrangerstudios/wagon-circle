@@ -414,3 +414,33 @@ test('canceling participant selection or its folder picker returns no partial ro
   assert.equal(await chooseParticipants(newMeta('Canceled folder')), null);
   assert.equal(codexClients.length + claudeClients.length, 0);
 });
+
+test('re-adding a history source stops before new consent and accurately retains its existing policy', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const existing = s.history.add({ provider:'codex', sessionId:'external-reference', title:'Synthetic reference', readers:['app'], allHistory:true });
+  threadChoices = [{ id:'external-reference',name:'Synthetic reference' }];
+  picks = [items=>items[0], items=>[items.find(x=>x.id==='db')], items=>items.find(x=>x.all===false)];
+  await s.addHistorySource();
+  assert.equal(picks.length,2,'no misleading new consent questions');
+  assert.equal(s.history.saved.sources.length,1);
+  assert.equal((await s.history.read('app',{source:existing.id})).ok,true);
+  assert.equal((await s.history.read('db',{source:existing.id})).ok,false);
+  assert.equal(s.history.allHistory(existing.id),true);
+  const notice=s.room.state.transcript.at(-1).text;
+  assert.match(notice,/Already added as h1/); assert.match(notice,/Readers and history range are unchanged/);
+  assert.match(notice,/\/history remove h1/); assert.doesNotMatch(notice,/Added .*reference for DB/);
+});
+
+test('history source added during consent picker cannot produce a false success for different readers', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  threadChoices = [{ id:'external-reference',name:'Synthetic reference' }];
+  picks = [items=>items[0], items=>[items.find(x=>x.id==='db')], items=>{
+    s.history.add({provider:'codex',sessionId:'external-reference',title:'Synthetic reference',readers:['app'],allHistory:true});
+    return items.find(x=>x.all===false);
+  }];
+  await s.addHistorySource();
+  assert.equal(s.history.saved.sources.length,1); assert.equal(s.history.allHistory('h1'),true);
+  assert.equal((await s.history.read('app',{source:'h1'})).ok,true);
+  assert.equal((await s.history.read('db',{source:'h1'})).ok,false);
+  assert.match(s.room.state.transcript.at(-1).text,/Already added as h1/);
+});
