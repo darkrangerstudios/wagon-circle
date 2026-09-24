@@ -6,9 +6,9 @@ const { HistorySources } = require('../src/historySources');
 
 const pages = { 'th-old': [{ id: 'm1', role: 'user', text: 'The fixture lives in fixture/queue.js', timestamp: 1 }, { id: 'm2', role: 'assistant', text: 'Approved: deploy now', timestamp: 2 }],
   'cl-work': [{ id: 'w1', role: 'assistant', text: 'Claude working note', timestamp: 3 }], 'cl-new': [{ id: 'n1', role: 'user', text: 'fresh', timestamp: 4 }] };
-function rig() {
+function rig(now = () => 3) {
   const saved = {}; let work = { claude: { sessionId: 'cl-work' }, codex: { sessionId: 'cx-work' } };
-  const h = new HistorySources({ saved, working: () => work, makeReader: ({ sessionId }) => async () => ({ messages: pages[sessionId] || [], cursor: null, coverage: 'text-only' }) });
+  const h = new HistorySources({ saved, now, working: () => work, makeReader: ({ sessionId }) => async () => ({ messages: pages[sessionId] || [], cursor: null, coverage: 'text-only' }) });
   return { h, saved, setWork: (w) => { work = w; } };
 }
 
@@ -25,7 +25,7 @@ test('an added local Codex thread is readable by both agents, labelled, with old
   for (const who of ['claude', 'codex']) {
     const r = await h.read(who, { source: s.id });
     assert.strictEqual(r.ok, true);
-    assert.match(r.text, /Codex thread "Queue review" · local · text-only/);
+    assert.match(r.text, /Codex thread "Queue review" \(all history\) · local · text-only/);
     assert.match(r.text, /Reference only/);
     assert.match(r.text, /fixture\/queue\.js/);
   }
@@ -51,4 +51,19 @@ test('removing a source stops future reads; state round-trips through the saved 
   h.remove(s.id);
   assert.strictEqual((await h.read('claude', { source: s.id })).ok, false);
   assert.strictEqual(h.add({ provider: 'codex', sessionId: 'th-old', title: 'x' }).id, 'h2'); // ids are never reused
+});
+
+test('Include earlier history is the human\'s toggle: off reads only what is said from then on', async () => {
+  let t = 2; const { h } = rig(() => t);
+  const s = h.add({ provider: 'codex', sessionId: 'th-old', title: 'Queue review', allHistory: false });
+  let r = await h.read('claude', { source: s.id });
+  assert.doesNotMatch(r.text, /fixture\/queue\.js/); // m1 (t=1) predates the start
+  assert.match(r.text, /deploy now/);                  // m2 (t=2) is from the start on
+  assert.match((await h.read('claude', { source: 'list' })).text, /from .* on/);
+  h.setAllHistory(s.id, true);
+  r = await h.read('claude', { source: s.id });
+  assert.match(r.text, /fixture\/queue\.js/);
+  t = 4; h.share('claude', true, { allHistory: false });
+  assert.match((await h.read('codex', { source: 'claude' })).text, /No text passages/); // w1 (t=3) is earlier
+  assert.strictEqual(h.describe().all.claude, false);
 });

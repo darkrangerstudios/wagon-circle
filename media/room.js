@@ -338,6 +338,14 @@
     const hs = el('button', `switch${c.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!c.shared)); hs.setAttribute('aria-label', 'Share session history');
     hs.addEventListener('click', () => { cmd(`/history share ${name} ${c.shared ? 'off' : 'on'}`); closePop(); });
     hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
+    if (c.shared) {
+      const ar = el('div', 'fastrow'); const at = el('div');
+      at.appendChild(el('span', null, 'Include earlier history'));
+      at.appendChild(el('small', null, c.allHistory !== false ? `${NAMES[other]} can read the whole session.` : `${NAMES[other]} can read only what is said from when you turned this off.`));
+      const as = el('button', `switch${c.allHistory !== false ? ' on' : ''}`); as.setAttribute('role', 'switch'); as.setAttribute('aria-checked', String(c.allHistory !== false)); as.setAttribute('aria-label', 'Include earlier history');
+      as.addEventListener('click', () => { cmd(`/history all ${name} ${c.allHistory !== false ? 'off' : 'on'}`); closePop(); });
+      ar.appendChild(at); ar.appendChild(as); pop.appendChild(ar);
+    }
     const save = el('button', 'link', 'Use these settings for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);

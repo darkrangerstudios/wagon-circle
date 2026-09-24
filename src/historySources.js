@@ -14,8 +14,11 @@ const LOCAL_ONLY = 'Local sessions only: cloud sessions are managed in each prov
 class HistorySources {
   // saved: room meta.history ({ seq, sources: [{id, provider, sessionId, title, file}], share: {claude, codex} }).
   // makeReader({provider, sessionId, file}) -> readPage. working() -> { claude: {sessionId, file}, codex: {sessionId} }.
-  constructor({ saved, makeReader, working }) {
-    this.saved = saved; this.makeReader = makeReader; this.working = working;
+  // Each source has a human-set start: saved.from[id] = null reads its whole history, a timestamp reads only what
+  // was said from then on ("Include earlier history" off).
+  constructor({ saved, makeReader, working, now = Date.now }) {
+    this.saved = saved; this.makeReader = makeReader; this.working = working; this.now = now;
+    saved.from = saved.from || {};
     saved.seq = saved.seq || 0; saved.sources = saved.sources || []; saved.share = saved.share || { claude: false, codex: false };
     this.history = new SessionHistory(); this.bound = {};
     this.sync();
@@ -27,39 +30,53 @@ class HistorySources {
     for (const a of AGENTS) {
       const sid = (w[a] && w[a].sessionId) || `none:${a}`;
       if (this.bound[a] !== sid) {
-        if (this.bound[a] !== undefined && this.saved.share[a]) this.saved.share[a] = false; // a new session starts private
+        if (this.bound[a] !== undefined && this.saved.share[a]) { this.saved.share[a] = false; delete this.saved.from[a]; } // a new session starts private
         this.history.bind(a, { provider: a, sessionId: sid, readPage: w[a] && w[a].sessionId ? this.makeReader({ provider: a, ...w[a] }) : async () => { throw new Error(`${NAME[a]} has no working session yet`); } });
         this.bound[a] = sid;
       }
     }
     for (const s of this.saved.sources) if (this.bound[s.id] !== s.sessionId) { this.history.bind(s.id, { provider: s.provider, sessionId: s.sessionId, readPage: this.makeReader(s) }); this.bound[s.id] = s.sessionId; }
-    for (const a of AGENTS) this.history.configure(a, { enabled: !!this.saved.share[a], readers: AGENTS.filter((x) => x !== a) });
-    for (const s of this.saved.sources) this.history.configure(s.id, { enabled: true, readers: [...AGENTS] });
+    const after = (id) => (Number.isFinite(this.saved.from[id]) ? this.saved.from[id] : null);
+    for (const a of AGENTS) this.history.configure(a, { enabled: !!this.saved.share[a], readers: AGENTS.filter((x) => x !== a), after: after(a) });
+    for (const s of this.saved.sources) this.history.configure(s.id, { enabled: true, readers: [...AGENTS], after: after(s.id) });
   }
 
-  add({ provider, sessionId, title, file = null }) {
+  add({ provider, sessionId, title, file = null, allHistory = true }) {
     if (!KIND[provider]) throw new Error('Unknown provider');
     const dup = this.saved.sources.find((s) => s.provider === provider && s.sessionId === sessionId);
     if (dup) return dup;
     const s = { id: `h${++this.saved.seq}`, provider, sessionId, title: String(title || sessionId).slice(0, 80), file };
-    this.saved.sources.push(s); this.sync();
+    this.saved.sources.push(s); this.saved.from[s.id] = allHistory ? null : this.now(); this.sync();
     return s;
   }
 
   remove(id) {
     const i = this.saved.sources.findIndex((s) => s.id === id); if (i < 0) return false;
-    this.saved.sources.splice(i, 1);
+    this.saved.sources.splice(i, 1); delete this.saved.from[id];
     this.history.configure(id, { enabled: false, readers: [] }); delete this.bound[id]; // future reads refused
     return true;
   }
 
-  share(agent, on) { this.saved.share[agent] = !!on; this.sync(); }
+  share(agent, on, { allHistory = true } = {}) {
+    this.saved.share[agent] = !!on;
+    if (on) this.saved.from[agent] = allHistory ? null : this.now();
+    this.sync();
+  }
+
+  // The "Include earlier history" toggle for a shared working session or an added source.
+  setAllHistory(id, all) {
+    if (!(this.saved.share[id] || this.saved.sources.some((s) => s.id === id))) return false;
+    this.saved.from[id] = all ? null : this.now(); this.sync();
+    return true;
+  }
+  allHistory(id) { return !Number.isFinite(this.saved.from[id]); }
 
   // What a requester may read, for the tool's "list" call and the UI.
   list(requester) {
     const out = [];
-    for (const a of AGENTS) if (a !== requester && this.saved.share[a]) out.push({ source: a, label: `${NAME[a]}'s working session`, provider: a });
-    for (const s of this.saved.sources) out.push({ source: s.id, label: `${KIND[s.provider]} "${s.title}"`, provider: s.provider });
+    const span = (id) => (this.allHistory(id) ? 'all history' : `from ${new Date(this.saved.from[id]).toISOString().slice(0, 16).replace('T', ' ')} on`);
+    for (const a of AGENTS) if (a !== requester && this.saved.share[a]) out.push({ source: a, label: `${NAME[a]}'s working session (${span(a)})`, provider: a });
+    for (const s of this.saved.sources) out.push({ source: s.id, label: `${KIND[s.provider]} "${s.title}" (${span(s.id)})`, provider: s.provider });
     return out;
   }
 
@@ -83,7 +100,7 @@ class HistorySources {
     return { ok: true, text: lines.join('\n') };
   }
 
-  describe() { return { share: { ...this.saved.share }, sources: this.saved.sources.map((s) => ({ id: s.id, provider: s.provider, title: s.title })) }; }
+  describe() { return { share: { ...this.saved.share }, all: Object.fromEntries([...AGENTS, ...this.saved.sources.map((s) => s.id)].map((id) => [id, this.allHistory(id)])), sources: this.saved.sources.map((s) => ({ id: s.id, provider: s.provider, title: s.title, all: this.allHistory(s.id) })) }; }
 }
 
 module.exports = { HistorySources, LOCAL_ONLY };
