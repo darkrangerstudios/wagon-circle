@@ -186,3 +186,4 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .pop .primary { padding: 4px 12px; border-radius: 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 .row.request .reqhead { font-size: .82em; color: var(--muted); margin-bottom: 2px; }
 .pop .note.cap { cursor: help; }
+.row.system .ts { margin-left: 8px; font-size: .85em; opacity: .75; }

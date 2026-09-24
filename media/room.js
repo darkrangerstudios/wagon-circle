@@ -95,10 +95,22 @@
     const c = controls[name]; const m = c && c.models.find((x) => x.id === c.model);
     return m ? (m.name || m.id) : (c && c.model) || '';
   }
+  // Every message says when: today as "9:36 AM", then "Yesterday 9:36 PM", "Sep 22, 9:36 PM"; full date on hover.
+  function stamp(ts) {
+    if (!ts) return '';
+    const d = new Date(ts), now = new Date(), t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const ago = Math.round((day(now) - day(d)) / 864e5);
+    if (ago === 0) return t;
+    if (ago === 1) return `Yesterday ${t}`;
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) })}, ${t}`;
+  }
+  const fullTime = (ts) => (ts ? new Date(ts).toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '');
   function render(entry) {
-    const time = entry.ts ? new Date(entry.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    const time = stamp(entry.ts);
     if (entry.from === 'system') {
       const row = el('div', `row system${entry.kind ? ' kind-' + entry.kind : ''}`); row.appendChild(el('div', 'text', entry.text));
+      if (entry.ts) { const s = el('span', 'ts', time); s.title = fullTime(entry.ts); row.appendChild(s); }
       if (entry.kind === 'suggestion' && entry.suggest) {
         // Only the human can turn an agent's prose hand-off into a message.
         const b = el('button', 'tbtn', `Hand to ${NAMES[entry.suggest.to]}`);
@@ -109,21 +121,25 @@
     }
     if (entry.from === 'human') {
       const row = el('article', `row human${entry.kind === 'history' ? ' history' : ''}`);
-      row.appendChild(el('div', 'who', entry.kind === 'history' ? 'earlier · User' : entry.kind === 'steer' ? `${NAMES.human} · ↪ steering ${entry.steer.map((n) => NAMES[n]).join(' and ')} · ${time}` : `${NAMES.human} · ${time}`));
+      const who = el('div', 'who', entry.kind === 'history' ? 'earlier · User' : entry.kind === 'steer' ? `${NAMES.human} · ↪ steering ${entry.steer.map((n) => NAMES[n]).join(' and ')} · ${time}` : `${NAMES.human} · ${time}`);
+      if (entry.ts) who.title = fullTime(entry.ts);
+      row.appendChild(who);
       const b = el('div', 'bubble'); b.appendChild(body(entry.text)); row.appendChild(b);
       if (entry.attachments && entry.attachments.length) row.appendChild(files(entry.attachments));
       if (entry.ide) row.appendChild(el('div', 'idechip', `📍 ${entry.ide.summary}`));
       return row;
     }
     if (entry.kind === 'request') {
-      const { row, col } = agentShell(entry.from, time);
+      const { row, col, head } = agentShell(entry.from, time);
+      if (entry.ts) head.title = fullTime(entry.ts);
       row.classList.add('request');
       col.appendChild(el('div', 'reqhead', `asks ${NAMES[entry.to]} · ${entry.purpose} · ${entry.request}${entry.task ? ` · task ${entry.task}` : ''}`));
       col.appendChild(body(entry.text));
       return row;
     }
     const answers = (entry.answers || []).map((a) => a.request);
-    const { row, col } = agentShell(entry.from, entry.kind === 'history' ? '' : [answers.length ? `answers ${answers.join(', ')}` : '', entry.model || '', time].filter(Boolean).join(' · '));
+    const { row, col, head } = agentShell(entry.from, entry.kind === 'history' ? '' : [answers.length ? `answers ${answers.join(', ')}` : '', entry.model || '', time].filter(Boolean).join(' · '));
+    if (entry.ts && entry.kind !== 'history') head.title = fullTime(entry.ts);
     if (entry.kind === 'history') row.classList.add('history');
     col.appendChild(body(entry.text));
     if (entry.diff) { const d = el('details', 'fold'); d.open = true; d.appendChild(el('summary', null, 'Changes this turn')); d.appendChild(diffCard(entry.diff)); col.appendChild(d); }
@@ -260,7 +276,7 @@
     if (t.open.length || (t.log && t.log.length)) {
       const d = el('details', 'fold'); d.appendChild(el('summary', null, t.open.length ? t.open.map((r) => `${r.id} ${NAMES[r.from]} → ${NAMES[r.to]} · ${r.purpose} · ${r.status === 'delivered' ? 'with ' + NAMES[r.to] : 'waiting'}`).join('   ') : 'Activity'));
       const ol = el('ol'); for (const r of t.open) ol.appendChild(el('li', null, `${r.id}: ${r.question}`));
-      for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${x.actor === 'host' ? 'Wagon Wheel' : NAMES[x.actor] || x.actor}: ${x.text}`));
+      for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${stamp(x.at)} ${x.actor === 'host' ? 'Wagon Wheel' : NAMES[x.actor] || x.actor}: ${x.text}`));
       d.appendChild(ol); box.appendChild(d);
     }
     if (t.summary) box.appendChild(el('div', 'tasksum', t.summary));
