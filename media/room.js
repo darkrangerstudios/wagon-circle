@@ -236,6 +236,7 @@
     m.appendChild(el('span', null, `${t.turns}/${t.limits.turns} turns${t.limits.reserve ? ` (${t.limits.reserve} kept for wrap-up)` : ''}`));
     m.appendChild(el('span', null, `${mins(t.usedMs)} of ${t.limits.minutes}m`));
     m.appendChild(el('span', null, `lead ${NAMES[t.lead]}`));
+    m.appendChild(el('span', null, 'read-only'));
     m.appendChild(el('span', null, `${t.answered} answered · ${t.open.length} open`));
     box.appendChild(m);
     if (t.open.length || (t.log && t.log.length)) {
@@ -278,7 +279,8 @@
     }
     pop.appendChild(grid); mark();
     function read() { return Object.fromEntries(Object.entries(fields).map(([k2, i]) => [k2, Number(i.value)])); }
-    pop.appendChild(el('small', 'note', 'Token and dollar limits are not offered: usage arrives only after a turn. Presets never change the model, fast mode or permissions (read-only).'));
+    pop.appendChild(el('small', 'note', 'Token and dollar limits are not offered: usage arrives only after a turn. Presets never change the model, fast mode or permissions.'));
+    pop.appendChild(el('small', 'note', 'Permissions: read-only for both agents. Tasks cover review and investigation; editing files, running tests or shell commands is not available in this version.'));
     const acts = el('div', 'actions');
     if (task && !['completed', 'stopped'].includes(task.status)) { const a = el('button', 'primary', 'Apply to this task'); a.addEventListener('click', () => { vscode.postMessage({ type: 'taskLimits', limits: read() }); closePop(); }); acts.appendChild(a); }
     const sv = el('button', 'link', 'Save as my defaults'); sv.title = 'New tasks start with these; tasks already running keep theirs';
@@ -319,6 +321,9 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
+    const perm = el('div'); perm.appendChild(el('div', 'lbl', 'What it can do here'));
+    perm.appendChild(el('small', 'note', name === 'claude' ? 'Read-only: Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers.' : 'Read-only sandbox: it can read and search the room folder, plus the room tools when its thread has them. No edits; every approval request is declined. No web or other MCP servers.'));
+    pop.appendChild(perm);
     const ws = el('div'); ws.appendChild(el('div', 'lbl', `Working session${c.session ? ` · ${String(c.session).slice(0, 8)}` : ''}${c.typed ? '' : ' · no typed requests'}`));
     const wseg = el('div', 'seg');
     for (const [a, label, tip] of [['new', 'New', 'Start a fresh session for this agent'], ['continue', 'Continue…', 'Resume an existing session itself (you will be warned first)'], ['fork', 'Fork…', 'Branch a copy of an existing session; the original is untouched']]) {

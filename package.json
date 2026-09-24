@@ -24,6 +24,10 @@
       {
         "command": "wagonCircle.openRoom",
         "title": "Wagon Circle: Reopen a Room"
+      },
+      {
+        "command": "wagonCircle.checkSetup",
+        "title": "Wagon Circle: Check Setup"
       }
     ],
     "configuration": {
@@ -104,13 +108,21 @@
         },
         "wagonCircle.taskMode": {
           "type": "string",
-          "enum": ["auto", "chat", "work"],
+          "enum": [
+            "auto",
+            "chat",
+            "work"
+          ],
           "default": "auto",
           "description": "Auto: a task starts when an agent asks the other for help. Chat: one consultation per message, no task. Work: every message starts a task."
         },
         "wagonCircle.taskDefaults": {
           "type": "object",
-          "default": { "turns": 20, "reserve": 2, "minutes": 30 },
+          "default": {
+            "turns": 20,
+            "reserve": 2,
+            "minutes": 30
+          },
           "description": "Allowances for new tasks: agent turn starts (turns), how many of them are kept for wrapping up (reserve), and active minutes. Set from a room with \"Save as my defaults\"."
         },
         "wagonCircle.codexEffort": {
@@ -119,7 +131,54 @@
           "description": "Codex reasoning effort for new rooms. Empty = the model default."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "wagonCircle.start",
+        "title": "Get started with Wagon Circle",
+        "description": "Claude and Codex in one room, working on local sessions.",
+        "steps": [
+          {
+            "id": "setup",
+            "title": "Get your agents ready",
+            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonCircle.checkSetup)",
+            "media": {
+              "markdown": "walkthrough/setup.md"
+            },
+            "completionEvents": [
+              "onCommand:wagonCircle.checkSetup"
+            ]
+          },
+          {
+            "id": "sessions",
+            "title": "Choose where the work happens",
+            "description": "Each agent has its own local working session: new, continued or forked.",
+            "media": {
+              "markdown": "walkthrough/sessions.md"
+            }
+          },
+          {
+            "id": "tasks",
+            "title": "Stay in the conversation while work continues",
+            "description": "Tasks, allowances, Pause and Stop. Local sessions only.",
+            "media": {
+              "markdown": "walkthrough/tasks.md"
+            }
+          },
+          {
+            "id": "try",
+            "title": "Try one small handoff",
+            "description": "A small read-only review in a new room.\n[New room](command:wagonCircle.newRoom)",
+            "media": {
+              "markdown": "walkthrough/try-it.md"
+            },
+            "completionEvents": [
+              "onCommand:wagonCircle.newRoom"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "test": "node --test test/*.test.js"

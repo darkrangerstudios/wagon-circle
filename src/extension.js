@@ -13,6 +13,7 @@ const { Scheduler } = require('./scheduler');
 const { roomPrompt } = require('./prompts');
 const { HistorySources, LOCAL_ONLY } = require('./historySources');
 const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
+const setup = require('./setup');
 const claudeHistory = require('./claudeHistory');
 const attachments = require('./attachments');
 const commands = require('./commands');
@@ -545,6 +546,20 @@ function activate(context) {
     // claude --resume only finds a session from its own project folder, so a forked Claude session sets the room's folder.
     if (cl.s) meta.cwd = cl.s.cwd;
     await openSession(context, new RoomSession(context, meta, null), { forkFrom: cx.t || null, claudeFrom: cl.s || null });
+  }));
+
+  // First-run check (setup.js): CLI versions and sign-in on this host. No model calls, no installs, no logins.
+  context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.checkSetup', async () => {
+    const s = settings();
+    const r = await setup.checkSetup({ trusted: vscode.workspace.isTrusted, executionHost: vscode.env.remoteName ? `remote (${vscode.env.remoteName})` : 'this computer', executables: { claude: s.claude.path, codex: s.codexExe } });
+    if (r.state === 'workspace-untrusted') { vscode.window.showWarningMessage('Wagon Circle: trust this workspace before checking the CLIs.'); return; }
+    const W = { claude: 'Claude Code', codex: 'Codex CLI' };
+    const line = (p) => `${W[p.provider]}: ${p.installation === 'available' ? `v${p.version}` : p.installation}${p.installation === 'available' ? `, ${p.authentication === 'present' ? 'signed in' : p.authentication === 'signed-out' ? 'signed out' : 'sign-in unknown'}` : ''}${p.issue ? ` (${p.issue})` : ''}`;
+    for (const p of r.providers) log(`setup: ${line(p)} [${p.executable}]`);
+    const msg = `Wagon Circle on ${r.executionHost}: ${r.providers.map(line).join('; ')}. ${r.note}`;
+    const bad = r.providers.filter((p) => p.installation !== 'available' || p.authentication !== 'present');
+    if (!bad.length) vscode.window.showInformationMessage(msg);
+    else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide)); }
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.openRoom', async () => {
