@@ -21,7 +21,7 @@ test('Claude: typed tools are allowed and served in-process; no other MCP server
   const a = c._args();
   assert.deepStrictEqual(JSON.parse(a[a.indexOf('--mcp-config') + 1]), { mcpServers: { wagon: { type: 'sdk', name: 'wagon' } } });
   assert.ok(a.includes('--strict-mcp-config'));
-  assert.strictEqual(a[a.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,mcp__wagon__request_assistance,mcp__wagon__finish_task');
+  assert.strictEqual(a[a.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,mcp__wagon__request_assistance,mcp__wagon__read_session_history,mcp__wagon__finish_task');
   const plain = new ClaudeClient({ exe: 'x', cwd: __dirname, systemPrompt: '' })._args();
   assert.strictEqual(plain[plain.indexOf('--mcp-config') + 1], '{"mcpServers":{}}');
 });
@@ -29,7 +29,7 @@ test('Claude: typed tools are allowed and served in-process; no other MCP server
 test('Claude: tools/list and tools/call are answered over stdin; the call goes to the open reply', async () => {
   const { c, writes, mcp } = claude();
   mcp(1, 'tools/list'); await tick();
-  assert.deepStrictEqual(reply(writes, 'q1').result.tools.map((t) => t.name), ['request_assistance', 'finish_task']);
+  assert.deepStrictEqual(reply(writes, 'q1').result.tools.map((t) => t.name), ['request_assistance', 'read_session_history', 'finish_task']);
   const seen = [];
   const pending = c.send('go', () => {}, () => {}, [], (name, args) => { seen.push([name, args]); return { ok: true, text: 'accepted r1' }; });
   mcp(2, 'tools/call', { name: 'request_assistance', arguments: { to: 'codex', purpose: 'review', question: 'q' } }); await tick(); await tick();
@@ -60,7 +60,7 @@ test('Codex: new threads carry the tools; a tool call reaches the running turn o
   const { c, writes, call } = codex(); const sent = [];
   c.request = (method, params) => { sent.push({ method, params }); return method === 'thread/start' ? Promise.resolve({ thread: { id: 'th' } }) : new Promise(() => {}); };
   await c.startThread('brief');
-  assert.deepStrictEqual(sent[0].params.dynamicTools.map((t) => [t.type, t.name]), [['function', 'request_assistance'], ['function', 'finish_task']]);
+  assert.deepStrictEqual(sent[0].params.dynamicTools.map((t) => [t.type, t.name]), [['function', 'request_assistance'], ['function', 'read_session_history'], ['function', 'finish_task']]);
   c.runTurn('th', 'go', () => {}, () => {}, [], { onTool: (name, args) => ({ ok: true, text: `accepted for ${args.to}` }) });
   call(7, 'th'); await tick(); await tick();
   assert.deepStrictEqual(writes.find((w) => w.id === 7).result, { contentItems: [{ type: 'inputText', text: 'accepted for claude' }], success: true });

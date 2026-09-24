@@ -201,3 +201,16 @@ test('reload keeps unresolved requests, consumption and ownership; the open requ
   assert.strictEqual(again.tasks.get('t1').requests[0].status, 'answered');
   assert.ok(again.tasks.get('t1').used.turns >= used);
 });
+
+test('read_session_history goes to the host reader with the real requester and never counts as a turn or starts a task', async () => {
+  const calls = [];
+  const claude = typed(async (text, n, tool) => (await tool('read_session_history', { from: 'codex', query: 'fixture' })).text);
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: typed('x') }, readHistory: (who, args) => { calls.push([who, args]); return { ok: true, text: 'passage' }; } });
+  room.postFromHuman('what did codex find earlier?'); await settle();
+  assert.deepStrictEqual(calls, [['claude', { from: 'codex', query: 'fixture' }]]);
+  assert.strictEqual(room.tasks.active(), null);
+  assert.ok(room.state.transcript.some((e) => e.from === 'claude' && e.text === 'passage'));
+  const denied = new Room({ humanName: 'Dean', agents: { claude: typed(async (t, n, tool) => (await tool('read_session_history', { from: 'codex' })).text), codex: typed('x') } });
+  denied.postFromHuman('go'); await settle();
+  assert.ok(denied.state.transcript.some((e) => /not available/.test(e.text)));
+});

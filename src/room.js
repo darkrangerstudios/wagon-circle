@@ -61,14 +61,15 @@ class Room extends EventEmitter {
   // (tasks.js). Prose is never a control channel: an untyped agent's line-start @name becomes a displayed
   // suggestion the human can send (DESIGN.md "Structured assistance"). proseHandoffs: true restores the
   // pre-v0.5 automatic routing; the extension never sets it (kept for the legacy router tests).
-  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false }) {
+  // readHistory(requester, args): shared session history (extension glue over sessionHistory.js); optional.
+  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false, readHistory = null }) {
     super();
     this.agents = agents; this.hopCap = hopCap; this.human = humanName;
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
     this.maxTurns = maxTurns; this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: 0, codex: 0 };
-    this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0; this.proseHandoffs = proseHandoffs;
+    this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0; this.proseHandoffs = proseHandoffs; this.readHistory = readHistory;
     this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
     this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
     this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
@@ -255,6 +256,10 @@ class Room extends EventEmitter {
       const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary);
       if (r.ok) { this.note(`Task ${t.id} finished by ${LABEL[name]}: ${t.summary || ''}`); this._taskChanged(); }
       return r;
+    }
+    if (tool === 'read_session_history') {
+      if (!this.readHistory) return { ok: false, text: 'Session history sharing is not available in this room.' };
+      return Promise.resolve(this.readHistory(name, args || {})).catch((e) => ({ ok: false, text: `Not available: ${e.message}` }));
     }
     return { ok: false, text: `Unknown tool ${tool}.` };
   }

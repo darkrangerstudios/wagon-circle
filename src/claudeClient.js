@@ -14,6 +14,7 @@ const base = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
 function describeTool(name, input = {}) {
   if (name === `mcp__${SERVER}__request_assistance`) return `asking ${input.to || 'a peer'} (${input.purpose || 'help'})`;
   if (name === `mcp__${SERVER}__finish_task`) return 'proposing the task is done';
+  if (name === `mcp__${SERVER}__read_session_history`) return `reading ${input.from || 'shared'} history`;
   if (name === 'Read') return `reading ${base(input.file_path)}`;
   if (name === 'Grep') return `searching for "${clip(input.pattern, 40)}"`;
   if (name === 'Glob') return `listing ${clip(input.pattern, 40)}`;
