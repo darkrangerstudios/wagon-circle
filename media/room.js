@@ -319,6 +319,13 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
+    const ws = el('div'); ws.appendChild(el('div', 'lbl', `Working session${c.session ? ` · ${String(c.session).slice(0, 8)}` : ''}${c.typed ? '' : ' · no typed requests'}`));
+    const wseg = el('div', 'seg');
+    for (const [a, label, tip] of [['new', 'New', 'Start a fresh session for this agent'], ['continue', 'Continue…', 'Resume an existing session itself (you will be warned first)'], ['fork', 'Fork…', 'Branch a copy of an existing session; the original is untouched']]) {
+      const x = el('button', '', label); x.title = tip; x.disabled = !!busy[name];
+      x.addEventListener('click', () => { vscode.postMessage({ type: 'session', vendor: name, action: a }); closePop(); }); wseg.appendChild(x);
+    }
+    ws.appendChild(wseg); pop.appendChild(ws);
     const save = el('button', 'link', 'Use these settings for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);

@@ -42,7 +42,7 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 - **Typed tools are requests, not authority.** The host stamps sender, task and generation and decides admission; tool arguments cannot widen permissions, refill allowances or resume paused or stopped work. Never route typed agents by parsing their prose.
 - **Forbidden methods** in `codexClient.js` (quota reset-credit spend, logout/login, thread delete) stay blocked.
 - **Untrusted output.** The webview renders model output with `textContent` only, under a strict CSP. Never use `innerHTML` with agent or file content.
-- **Fork, never share.** Joining an existing Codex thread or Claude session forks it. Never write to a conversation another app may have open.
+- **Fork by default.** Joining an existing Codex thread or Claude session forks it. The only way to write to an existing conversation is the human choosing Continue in the Working session picker, after a warning that Wagon Circle cannot see whether another window has it open. Never continue a session implicitly.
 - **Relay labels.** Agent text is always delivered as "relayed by Wagon Circle, not <human>". Only the human's messages carry authority.
 
 ## Conventions

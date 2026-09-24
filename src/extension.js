@@ -102,7 +102,7 @@ class RoomSession {
       try { seed = await this.codex.recentMessages(forkFrom.id, 8); } catch (e) { log(`history read failed: ${e.message}`); seed = []; }
     } else {
       const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
-      this.meta.codexThreadId = t.id; this.meta.codexTyped = true;
+      this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
     }
     await this.codex.setName(this.meta.codexThreadId, `Wagon Circle: ${this.meta.name}`);
     this.codexModels = await this.codex.listModels();
@@ -202,6 +202,7 @@ class RoomSession {
       else if (m.type === 'pickFiles') vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach' }).then((uris) => (uris || []).forEach((u) => this.addAttachment({ name: path.basename(u.fsPath), fromPath: u.fsPath })));
       else if (m.type === 'unattach') { const a = this.pendingAtts.get(m.id); if (a) { this.pendingAtts.delete(m.id); fs.rm(a.path, () => {}); } }
       else if (m.type === 'stop' && this.room) this.room.stopAll();
+      else if (m.type === 'session' && this.room && ['claude', 'codex'].includes(m.vendor) && ['new', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => this.room.note(`Couldn't switch the working session: ${e.message}`));
       else if (m.type === 'taskPause' && this.room) this.room.pauseTask();
       else if (m.type === 'taskResume' && this.room) this.room.resumeTask();
       else if (m.type === 'taskMode' && this.room && ['auto', 'chat', 'work'].includes(m.mode)) { this.room.tasks.mode = m.mode; this.room.note(`Mode: ${MODE_TEXT[m.mode]}`); this.postTask(); }
@@ -216,6 +217,53 @@ class RoomSession {
   }
 
   post(msg) { if (this.panel) this.panel.webview.postMessage(msg); }
+
+  // Working session picker. New starts fresh; Fork branches a copy (the original is never written); Continue
+  // resumes the chosen session itself, so the human is warned first: Wagon Circle cannot see whether another
+  // Claude Code or Codex window has it open. Switches wait for the agent to be idle; the room's cursor, tasks and
+  // allowances stay, and the room history is not replayed into the new session.
+  async switchSession(vendor, action) {
+    const room = this.room, m = this.meta, L = vendor === 'claude' ? 'Claude' : 'Codex';
+    if (room.busy[vendor]) { room.note(`${L} is working; switch its session when it finishes.`); return; }
+    let pick = null;
+    if (action !== 'new') {
+      const items = vendor === 'claude'
+        ? claudeHistory.listSessions(40).filter((x) => x.cwd === m.cwd && x.id !== this.claude.sessionId).map((x) => ({ label: x.title || x.preview, description: `claude ${x.id.slice(0, 8)} · ${new Date(x.mtime).toLocaleString()}`, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
+        : (await this.codex.listThreads(null, 40)).filter((t) => t.id !== m.codexThreadId).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, description: `codex ${t.id.slice(0, 8)}`, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
+      if (!items.length) { room.note(vendor === 'claude' ? `No other Claude sessions from ${m.cwd}. Claude can only resume sessions started in the room's folder.` : 'No other Codex threads found.'); return; }
+      pick = await vscode.window.showQuickPick(items, { title: `${L} working session: ${action === 'fork' ? 'fork (the original stays untouched)' : 'continue (writes to that session)'}`, matchOnDescription: true });
+      if (!pick) return;
+      if (action === 'continue') {
+        const recent = pick.mtime && Date.now() - pick.mtime < 120000;
+        const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" in this room?`,
+          { modal: true, detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}Wagon Circle will write to this ${L} session directly. If another ${L} window has it open, both will write to it and neither sees the other's turns. Close it there first, or fork it instead.` },
+          'Continue', 'Fork instead');
+        if (!go) return;
+        if (go === 'Fork instead') action = 'fork';
+      }
+    }
+    if (room.busy[vendor]) { room.note(`${L} started working; switch its session when it finishes.`); return; }
+    const human = m.humanName || 'You';
+    if (vendor === 'claude') {
+      this.claude.stop();
+      this.claude.sessionId = action === 'continue' ? pick.id : null;
+      this.claude.forkFrom = action === 'fork' ? pick.id : null;
+      m.claudeSessionId = this.claude.sessionId;
+    } else {
+      let t;
+      if (action === 'new') t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
+      else if (action === 'fork') t = await this.codex.forkThread(pick.id, roomPrompt('codex', 'claude', human));
+      else t = await this.codex.resumeThread(pick.id);
+      m.codexThreadId = t.id;
+      if (action === 'new') m.codexTypedThreads = [...(m.codexTypedThreads || []), t.id];
+      // Only threads this room started carry the typed tools (app-server takes them on thread/start only).
+      m.codexTyped = (m.codexTypedThreads || []).includes(t.id);
+      room.agents.codex.typed = m.codexTyped;
+    }
+    const what = action === 'new' ? 'a new session' : action === 'fork' ? `a fork of ${pick.id.slice(0, 8)}` : `${pick.id.slice(0, 8)}, continued`;
+    room.note(`${L}'s working session is now ${what}. Room tasks and allowances carry over; earlier room messages are not replayed into it.${vendor === 'codex' && !m.codexTyped ? ' This thread has no typed request tool, so Codex\'s hand-offs show as suggestions for you to send.' : ''}`);
+    this.postMeta(); this.postTask();
+  }
 
   postTask() {
     if (!this.room) return;
@@ -233,9 +281,9 @@ class RoomSession {
     const m = this.meta, v = this.claudeVersion;
     const codexModels = (this.codexModels || []).map((x) => ({ id: x.id, name: x.displayName, efforts: x.supportedReasoningEfforts.map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
     return {
-      claude: { cli: v ? v.join('.') : '?', model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast, efforts: commands.CLAUDE_EFFORTS,
+      claude: { session: this.claude ? this.claude.sessionId || this.claude.forkFrom : m.claudeSessionId, typed: true, cli: v ? v.join('.') : '?', model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast, efforts: commands.CLAUDE_EFFORTS,
         models: commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') })) },
-      codex: { model: m.codexModel || (codexModels[0] && codexModels[0].id) || null, effort: m.codexEffort || null, fast: !!m.codexFast, models: codexModels }
+      codex: { session: m.codexThreadId, typed: !!m.codexTyped, model: m.codexModel || (codexModels[0] && codexModels[0].id) || null, effort: m.codexEffort || null, fast: !!m.codexFast, models: codexModels }
     };
   }
 
