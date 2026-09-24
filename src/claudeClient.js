@@ -30,8 +30,13 @@ class ClaudeClient {
   }
 
   _args() {
+    // The boundary is enforced by the CLI, not by permission rules alone: --restricted ignores the user's own
+    // settings files (their allow rules once let the room's Claude run shell commands) and confines file tools to
+    // the working directories; --tools limits the built-in set to reading. --allowedTools then lets the read
+    // tools and our own room tools run without prompting, and dontAsk refuses everything else.
     const a = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--include-partial-messages', '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
+      '--include-partial-messages', '--restricted', '--tools', READ_ONLY_TOOLS.join(','),
+      '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: this.typed ? { [SERVER]: { type: 'sdk', name: SERVER } } : {} }), '--append-system-prompt', this.systemPrompt];
     if (this.model) a.push('--model', this.model);
     if (this.effort) a.push('--effort', this.effort);

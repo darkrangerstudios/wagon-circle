@@ -21,6 +21,10 @@ test('Claude: typed tools are allowed and served in-process; no other MCP server
   const a = c._args();
   assert.deepStrictEqual(JSON.parse(a[a.indexOf('--mcp-config') + 1]), { mcpServers: { wagon: { type: 'sdk', name: 'wagon' } } });
   assert.ok(a.includes('--strict-mcp-config'));
+  // The user's own settings must not widen the room: restricted mode, and only the read tools built in.
+  assert.ok(a.includes('--restricted'));
+  assert.strictEqual(a[a.indexOf('--tools') + 1], 'Read,Glob,Grep');
+  assert.strictEqual(a[a.indexOf('--permission-mode') + 1], 'dontAsk');
   assert.strictEqual(a[a.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,mcp__wagon__request_assistance,mcp__wagon__read_session_history,mcp__wagon__finish_task');
   const plain = new ClaudeClient({ exe: 'x', cwd: __dirname, systemPrompt: '' })._args();
   assert.strictEqual(plain[plain.indexOf('--mcp-config') + 1], '{"mcpServers":{}}');
