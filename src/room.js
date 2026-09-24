@@ -101,6 +101,7 @@ class Room extends EventEmitter {
     this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
     const entry = this._append('human', text, { to: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
     this.lastHuman = { id: entry.id, text };
+    if (this.tasks.noteHuman(text)) this._taskChanged();
     if (this.tasks.mode === 'work' && !this.tasks.active()) { this.tasks.start({ objective: text, originId: entry.id, lead: targets[0] }); this._taskChanged(); }
     if (targets.length > 1 && this.bothMode === 'sequential') this._inTurn(targets, run);
     else for (const t of targets) this.deliver(t, run);

@@ -162,3 +162,42 @@ test('old saved rooms get an empty ledger and keep their transcript', () => {
   assert.strictEqual(room.state.transcript.length, 1);
   assert.deepStrictEqual(room.state.tasks.tasks, []);
 });
+
+test('an answer for a busy requester waits under its original request id, then arrives once', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const claude = typed(async (text, n, tool) => { if (n === 1) { await tool(...ask('codex', 'check C')); await gate; return 'still working'; } return 'merged'; });
+  const codex = typed('C is fine');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('review'); await settle();
+  assert.strictEqual(room.tasks.get('t1').requests[0].status, 'answered');
+  assert.strictEqual(claude.inbox.length, 1, 'Claude is busy: the answer is queued, not steered in');
+  release(); await settle();
+  assert.strictEqual(claude.inbox.length, 2);
+  assert.match(claude.inbox[1], /answer to your request r1/);
+  await settle(); assert.strictEqual(claude.inbox.length, 2);
+});
+
+test('a side question keeps the objective and shows as a task revision', async () => {
+  const claude = typed(async (text, n, tool) => { if (n === 1) await tool(...ask('codex', 'check D')); return 'ok'; });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: typed('D ok') } });
+  room.postFromHuman('Review the parser'); await settle();
+  room.postFromHuman('also, what time is it?'); await settle();
+  const t = room.tasks.get('t1');
+  assert.strictEqual(t.objective, 'Review the parser');
+  assert.strictEqual(t.revision, 1);
+  assert.ok(t.log.some((x) => /rev 1: also, what time/.test(x.text)));
+});
+
+test('reload keeps unresolved requests, consumption and ownership; the open request is delivered after reopen', async () => {
+  const claude = typed(async (text, n, tool) => { await tool(...ask('codex', 'check E')); return 'asked'; });
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: () => Promise.reject(new Error('window closed')) } } }); // Codex never answers before the "reload"
+  room.postFromHuman('review'); await settle();
+  const saved = JSON.parse(JSON.stringify(room.state));
+  const again = new Room({ humanName: 'Dean', state: saved, agents: { claude: typed('merged'), codex: typed('E ok') } });
+  const t = again.tasks.get('t1');
+  assert.deepStrictEqual([t.status, t.lead, t.requests[0].status], ['active', 'claude', 'open']);
+  const used = t.used.turns;
+  again.postFromHuman('@codex continue'); await settle();
+  assert.strictEqual(again.tasks.get('t1').requests[0].status, 'answered');
+  assert.ok(again.tasks.get('t1').used.turns >= used);
+});

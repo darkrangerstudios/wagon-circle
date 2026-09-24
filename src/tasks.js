@@ -135,6 +135,9 @@ class TaskLedger {
     return { ok: true, text: `Task ${t.id} marked complete.` };
   }
 
+  // A human message during a task: logged as a visible revision; the objective itself never changes.
+  noteHuman(text) { const t = this.active(); if (!t) return null; t.revision = (t.revision || 0) + 1; this._log(t, 'human', `rev ${t.revision}: ${clip(text, 100)}`); return t; }
+
   pause(by) { const t = this.active(); if (!t || t.status !== 'active') return false; this._halt(t, 'paused'); t.pausedBy = by; this._log(t, by, 'paused'); return true; }
 
   // Only the human resumes; an agent cannot restart paused or exhausted work.
