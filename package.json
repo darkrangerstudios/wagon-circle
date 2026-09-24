@@ -2,7 +2,7 @@
   "name": "wagon-circle",
   "displayName": "Wagon Circle",
   "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -111,7 +111,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/room.test.js"
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",

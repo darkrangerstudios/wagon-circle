@@ -8,7 +8,7 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 ## Map
 | File | Owns |
 |---|---|
-| `src/room.js` | The router. Who hears what: mention parsing, catch-up deltas, `@both` turn-taking, hand-off detection (`handoffs()`), hop cap, the 2-replies-per-agent limit, steering, history seeding. Pure logic, no I/O; the most heavily tested file. |
+| `src/room.js` | The router. Who hears what: mention parsing, catch-up deltas, `@both` turn-taking, hand-off detection (`handoffs()`: a line starting with `@name`), runs and Stop, delivery receipts (`knownBy`), hop cap, the 2-replies-per-agent limit, steering, history seeding. Pure logic, no I/O; the most heavily tested file. |
 | `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`). Holds the forbidden-method blocklist. |
 | `src/claudeClient.js` | Persistent `claude -p` stream-json session: streaming, thinking and tool activity, clean interrupt (control_request), steer (interrupt, then continue), model/effort/fast restarts on the same session. |
 | `src/claudeBinary.js` | Picks the newest Claude Code CLI on the machine. Old CLIs refuse new models. |
@@ -17,6 +17,7 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 | `src/commands.js` | Slash commands (grouped Room / Claude / Codex) and the Claude model catalogue. |
 | `src/diffs.js` | Unified-diff parser and in-memory patch applier (never writes to disk). |
 | `src/ideContext.js` | Formats the IDE snapshot (active file, selection, tabs, problems). |
+| `src/paths.js` | Containment checks (symlink-aware) for agent-supplied diff paths and the IDE snapshot. |
 | `src/extension.js` | VS Code glue: commands, webview panel and markup, per-room settings, IDE tracking, diff opener, agent briefs (`roomPrompt`). |
 | `media/room.js`, `media/room.css` | The webview UI. |
 | `docs/` | GitHub Pages marketing site. |
@@ -28,6 +29,7 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
   - `node test/live-claude-fork.js <claudeSessionId>`
   - `node test/token-ab.js <scratchCwd>`
   - `node test/live-smoke.js <codexThreadId> <scratchCwd>`
+  - `node test/live-stop.js <scratchCwd>` (Stop and steer against both real CLIs; run after touching either client's lifecycle)
 - UI: launch an Extension Development Host with `code --extensionDevelopmentPath="$PWD" --new-window`. Press Cmd+R in that window to reload after changes. `package.json` `version` and `EXPECT` in `media/room.js` must match (a test enforces this); bump both together.
 
 ## Guardrails (do not weaken without the repo owner's explicit OK)

@@ -145,7 +145,10 @@ class CodexClient extends EventEmitter {
       const onNote = (method, p) => {
         if (p.threadId && p.threadId !== threadId) return;
         if (turnId && p.turnId && p.turnId !== turnId) return;
-        if (method === 'turn/diff/updated' && p.diff) {
+        if (method === 'turn/started' && p.turn && (!turnId || p.turn.id === turnId)) {
+          turnId = active.turnId = p.turn.id; active.started = true;
+          if (active.cancelled) this._interruptTurn(active);
+        } else if (method === 'turn/diff/updated' && p.diff) {
           onActivity({ phase: 'diff', diff: p.diff });
         } else if (method === 'item/started') {
           const a = describeItem(p.item); if (a) onActivity(a);
@@ -167,11 +170,15 @@ class CodexClient extends EventEmitter {
           else reject(new Error((p.turn.error && p.turn.error.message) || lastError || `turn ${status}`));
         }
       };
+      // The active turn exists from now, so a Stop before the turn is running is remembered. The server answers
+      // turn/start with an ID before the turn is live (interrupt then fails: "no active turn"), so a held Stop
+      // is sent once turn/started arrives.
+      const active = { threadId, turnId: null, started: false, cancelled: false }; this.currentTurn = active;
       const onExit = (err) => { cleanup(); reject(err); };
-      const cleanup = () => { this.off('notification', onNote); this.off('exit', onExit); };
+      const cleanup = () => { this.off('notification', onNote); this.off('exit', onExit); if (this.currentTurn === active) this.currentTurn = null; };
       this.on('notification', onNote); this.once('exit', onExit);
       this.request('turn/start', { threadId, input: toCodexInput(text, attachments), ...(opts.model ? { model: opts.model } : {}), ...(opts.effort ? { effort: opts.effort } : {}), ...(opts.fast ? { serviceTierForTurn: 'priority' } : {}) })
-        .then((r) => { turnId = r && r.turn && r.turn.id; this.currentTurn = { threadId, turnId }; })
+        .then((r) => { if (!turnId) turnId = active.turnId = r && r.turn && r.turn.id; if (active.cancelled && active.started) this._interruptTurn(active); })
         .catch((e) => { cleanup(); reject(e); });
     });
   }
@@ -179,14 +186,21 @@ class CodexClient extends EventEmitter {
   // Steer: add input to the running turn (Codex's native turn/steer). The same turn keeps going.
   async steer(threadId, text, attachments = []) {
     const t = this.currentTurn;
-    if (!t || !t.turnId || t.threadId !== threadId) return false;
+    if (!t || !t.started || t.cancelled || t.threadId !== threadId) return false;
     await this.request('turn/steer', { threadId, expectedTurnId: t.turnId, input: toCodexInput(text, attachments) }, 20000);
     return true;
   }
 
+  // Stop. Before the turn is live the cancel is held, and sent once (see runTurn).
   async interrupt() {
-    const t = this.currentTurn;
-    if (t && t.turnId) { try { await this.request('turn/interrupt', t, 10000); } catch (e) { this.log(`interrupt: ${e.message}`); } }
+    const t = this.currentTurn; if (!t) return;
+    t.cancelled = true;
+    if (t.started) await this._interruptTurn(t);
+  }
+
+  async _interruptTurn(t) {
+    if (t.interruptSent) return; t.interruptSent = true;
+    try { await this.request('turn/interrupt', { threadId: t.threadId, turnId: t.turnId }, 10000); } catch (e) { this.log(`interrupt: ${e.message}`); }
   }
 
   stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); } }

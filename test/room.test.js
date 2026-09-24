@@ -227,11 +227,18 @@ test('default hop cap of 2 keeps a normal exchange short', async () => {
   assert.strictEqual(claude.inbox.length + codex.inbox.length, 3); // answer, hand-off, hand-back; then waits on Dean
 });
 
-test('handoffs ignores code, quotes and @both', () => {
+test('handoffs: only a line that starts with the other agent\'s name; never code, quotes or @both', () => {
   const { handoffs } = require('../src/room');
-  assert.deepStrictEqual(handoffs('Can you check this, @codex?', 'claude'), ['codex']);
+  assert.deepStrictEqual(handoffs('Found the race.\n@codex can you confirm it on Windows?', 'claude'), ['codex']);
+  assert.deepStrictEqual(handoffs('  @Codex: what\'s your diagnosis?', 'claude'), ['codex']);
   assert.deepStrictEqual(handoffs('the `@codex` tag and "@codex" and @both', 'claude'), []);
   assert.deepStrictEqual(handoffs('```\n@codex\n```', 'claude'), []);
+  // Codex review F4 (2026-09-23): agreement, blockquotes and tilde fences are conversation, not requests.
+  assert.deepStrictEqual(handoffs('I agree with @codex.', 'claude'), []);
+  assert.deepStrictEqual(handoffs('> @codex please check this', 'claude'), []);
+  assert.deepStrictEqual(handoffs('~~~\n@codex\n~~~\nok', 'claude'), []);
+  assert.deepStrictEqual(handoffs('```js\nx()\n```\n@codex over to you', 'claude'), ['codex']);
+  assert.deepStrictEqual(handoffs('@claude note to self', 'claude'), []);
 });
 
 test('steer goes into the busy agent\'s turn, once, and the other agent sees it later', async () => {
@@ -270,4 +277,65 @@ test('stopping shows a calm note, not a failure', async () => {
   room.postFromHuman('@claude go');
   await settle();
   assert.ok(room.state.transcript.some((e) => e.from === 'system' && e.text === 'Claude stopped.' && !e.kind));
+});
+
+// Codex review of v0.4.3 (2026-09-23), F1-F3: cancellation and delivery.
+test('Stop cancels the whole run: a new message cannot revive the stopped @both sequence', async () => {
+  let release; const claude = { inbox: [], send(t) { this.inbox.push(t); return new Promise((r) => { release = r; }); }, interrupt() {} };
+  const codex = fake('ok');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@both OLD_TASK');
+  room.stopAll();
+  room.postFromHuman('@claude NEW_TASK');
+  release('old result'); await settle();
+  assert.strictEqual(codex.inbox.length, 0);  // the old sequence stays stopped
+  assert.strictEqual(claude.inbox.length, 2); // Claude still gets the new message after its turn
+  assert.match(claude.inbox[1], /NEW_TASK/);
+  release('new result'); await settle();
+});
+
+test('a delivery held back by the turn limit is kept for the next one', async () => {
+  const claude = fake('ok'), codex = fake('ok');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex }, maxTurns: 1 });
+  room.postFromHuman('@claude start'); await settle();
+  room._append('codex', 'UNSEEN_FINDING');
+  await room.deliver('claude'); // capped: not sent
+  room.postFromHuman('@claude continue'); await settle();
+  assert.strictEqual(claude.inbox.length, 2);
+  assert.match(claude.inbox[1], /UNSEEN_FINDING/);
+});
+
+test('a failed send leaves its messages deliverable', async () => {
+  let fail = true; const claude = fake(() => 'ok');
+  const send = claude.send; claude.send = (t) => (fail ? Promise.reject(new Error('transport down')) : send(t));
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+  room.postFromHuman('@claude FIRST'); await settle();
+  fail = false;
+  room.postFromHuman('@claude SECOND'); await settle();
+  assert.match(claude.inbox[0], /FIRST[\s\S]*SECOND/);
+});
+
+for (const [how, steer] of [['returns false', () => false], ['throws', () => { throw new Error('no turn'); }], ['rejects', () => Promise.reject(new Error('gone'))]]) {
+  test(`a steer the agent ${how} on reaches it after its turn, and is not marked seen`, async () => {
+    let release; const claude = { inbox: [], send(t) { this.inbox.push(t); return new Promise((r) => { release = r; }); }, steer };
+    const room = new Room({ humanName: 'Dean', agents: { claude, codex: fake('x') } });
+    room.postFromHuman('@claude long job');
+    room.steerFromHuman('LOST_STEER'); await settle();
+    assert.ok(room.state.transcript.some((e) => e.from === 'system' && /Couldn't steer Claude/.test(e.text)));
+    release('done'); await settle();
+    assert.strictEqual(claude.inbox.length, 2);
+    assert.match(claude.inbox[1], /LOST_STEER/);
+    release('ok'); await settle();
+  });
+}
+
+test('a reply that lands after Stop is shown but its hand-off is not followed', async () => {
+  let release; const claude = { send: () => new Promise((r) => { release = r; }), interrupt() {} };
+  const codex = fake('c');
+  const room = new Room({ humanName: 'Dean', agents: { claude, codex } });
+  room.postFromHuman('@claude go'); room.stopAll();
+  room.postFromHuman('@codex unrelated'); await settle();
+  release('@codex please continue the old work'); await settle();
+  assert.strictEqual(codex.inbox.length, 1); // only the new message, no relay from the stopped run
+  assert.ok(room.state.transcript.some((e) => e.from === 'claude' && /old work/.test(e.text)));
 });

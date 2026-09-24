@@ -76,7 +76,7 @@ class ClaudeClient {
     } else if (m.type === 'result') {
       clearTimeout(this.intTimer); this.intTimer = null; // the interrupt (if any) was honoured: disarm the kill fallback
       if (typeof m.total_cost_usd === 'number') this.totalCostUsd = m.total_cost_usd;
-      if (this.steerQueue.length) {
+      if (this.steerQueue.length && !this.cancelling) {
         // A steer interrupted this turn: send the new instruction and keep the same reply open.
         const next = this.steerQueue.splice(0);
         w.onActivity({ phase: 'waiting', label: 'redirected by you' });
@@ -85,7 +85,8 @@ class ClaudeClient {
       }
       if (m.usage) this.lastUsage = { input: m.usage.input_tokens || 0, cacheWrite: m.usage.cache_creation_input_tokens || 0, cacheRead: m.usage.cache_read_input_tokens || 0, output: m.usage.output_tokens || 0 };
       if (m.session_id) this.sessionId = m.session_id;
-      if (m.is_error && m.subtype === 'error_during_execution' && this.interrupting) { const e = new Error('stopped'); e.stopped = true; this.interrupting = false; this._settle(e); }
+      const cancelled = this.cancelling; this.cancelling = false; this.steerQueue = [];
+      if (m.is_error && m.subtype === 'error_during_execution' && cancelled) { const e = new Error('stopped'); e.stopped = true; this._settle(e); }
       else if (m.is_error) this._settle(new Error(m.result || m.subtype || 'Claude error'));
       else this._settle(null, (m.result || w.blocks.join('\n\n')).trim());
     }
@@ -111,11 +112,16 @@ class ClaudeClient {
 
   compact() { return this.send('/compact'); }
 
-  // Clean interrupt over stream-json: the turn ends, the session and process stay alive.
-  // Falls back to killing the process if the CLI doesn't answer within 3 seconds.
+  // Stop (the user's cancel): the turn ends and queued steers are dropped; the session and process stay alive.
   interrupt() {
     if (!this.proc || !this.waiter) return;
-    const proc = this.proc; this.interrupting = !this.steerQueue.length;
+    this.cancelling = true; this.steerQueue = [];
+    this._interrupt();
+  }
+
+  // Clean interrupt over stream-json. Falls back to killing the process if the CLI doesn't answer within 3 seconds.
+  _interrupt() {
+    const proc = this.proc;
     proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: `wc-int-${++this.reqId}`, request: { subtype: 'interrupt' } }) + '\n');
     clearTimeout(this.intTimer);
     this.intTimer = setTimeout(() => { this.intTimer = null; if (this.waiter && this.proc === proc) proc.kill(); }, 3000);
@@ -124,9 +130,9 @@ class ClaudeClient {
   // Steer: stop the current turn at once and continue it with the new instruction (same reply, same session).
   // Mid-turn injection exists too, but in testing Sonnet 5 ignored it; interrupt-and-redirect was reliable.
   steer(text, attachments = []) {
-    if (!this.waiter) return false;
+    if (!this.waiter || !this.proc || this.cancelling) return false;
     this.steerQueue.push({ text, attachments });
-    if (this.steerQueue.length === 1) this.interrupt();
+    if (this.steerQueue.length === 1) this._interrupt();
     return true;
   }
 
