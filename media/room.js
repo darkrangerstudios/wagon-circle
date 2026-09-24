@@ -250,7 +250,6 @@
     const head = el('div', 'taskhead');
     const title = el('div', 'tasktitle');
     title.appendChild(el('span', `badge ${t.status}`, STATUS[t.status] || t.status));
-    title.appendChild(el('span', 'obj', t.objective || t.id));
     head.appendChild(title);
     const btns = el('div', 'taskbtns');
     const b = (label, fn, cls, tip) => { const x = el('button', `tbtn${cls ? ' ' + cls : ''}`, label); x.title = tip || label; x.addEventListener('click', fn); btns.appendChild(x); };
@@ -259,6 +258,10 @@
     b('Controls', () => openTaskControls(), '', 'Task allowances and mode');
     b('Stop', () => cmd('/stop'), 'danger', 'Stop the task and everything running under it');
     head.appendChild(btns); box.appendChild(head);
+    // Keep controls visible while long requests and activity scroll inside the card.
+    const detail = el('div', 'taskbody');
+    detail.tabIndex = 0; detail.setAttribute('role', 'region'); detail.setAttribute('aria-label', 'Task details');
+    detail.appendChild(el('div', 'obj', t.objective || t.id)); box.appendChild(detail);
     const m = el('div', 'taskmeta');
     // Numbers, not only colour: turns and minutes as used / allowed, plus what stays reserved.
     m.appendChild(el('span', null, `${t.turns}/${t.limits.turns} turns${t.limits.reserve ? ` (${t.limits.reserve} kept for wrap-up)` : ''}`));
@@ -266,20 +269,20 @@
     m.appendChild(el('span', null, `lead ${NAMES[t.lead]}`));
     m.appendChild(el('span', null, 'read-only'));
     m.appendChild(el('span', null, `${t.answered} answered · ${t.open.length} open`));
-    box.appendChild(m);
+    detail.appendChild(m);
     const us = Object.entries(t.usage || {});
     if (us.length) {
       const tk = el('div', 'taskmeta');
       tk.appendChild(el('span', null, `Tokens: ${us.map(([n, x]) => `${NAMES[n] || n} ${k(x.fresh + x.cacheWrite)} new · ${k(x.cached)} cached · ${k(x.output)} out${x.unreported ? ` (+${x.unreported} turn${x.unreported > 1 ? 's' : ''} unreported)` : ''}`).join(' · ')}`));
-      box.appendChild(tk);
+      detail.appendChild(tk);
     }
     if (t.open.length || (t.log && t.log.length)) {
       const d = el('details', 'fold'); d.appendChild(el('summary', null, t.open.length ? t.open.map((r) => `${r.id} ${NAMES[r.from]} → ${NAMES[r.to]} · ${r.purpose} · ${r.status === 'delivered' ? 'with ' + NAMES[r.to] : 'waiting'}`).join('   ') : 'Activity'));
       const ol = el('ol'); for (const r of t.open) ol.appendChild(el('li', null, `${r.id}: ${r.question}`));
       for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${stamp(x.at)} ${x.actor === 'host' ? 'Wagon Wheel' : NAMES[x.actor] || x.actor}: ${x.text}`));
-      d.appendChild(ol); box.appendChild(d);
+      d.appendChild(ol); detail.appendChild(d);
     }
-    if (t.summary) box.appendChild(el('div', 'tasksum', t.summary));
+    if (t.summary) detail.appendChild(el('div', 'tasksum', t.summary));
   }
   function openTaskControls() {
     const pop = $('pop');
