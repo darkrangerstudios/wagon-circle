@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.4.2';
+  const EXPECT = '0.4.3';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -171,7 +171,11 @@
     }
     const ideBtn = $('ide'); ideBtn.textContent = ideSummary ? `📍 ${ideSummary}` : '';
     ideBtn.classList.toggle('off', meta.ideContext === false);
-    $('deftarget').textContent = meta.defaultTarget === 'both' ? 'both agents, in turn' : (NAMES[meta.defaultTarget || 'claude']);
+    const lead = meta.defaultTarget || 'claude';
+    $('deftarget').textContent = lead === 'both' ? 'both agents, in turn' : NAMES[lead];
+    const lb = $('lead'); lb.textContent = '';
+    lb.appendChild(el('span', 'muted', 'Lead')); lb.appendChild(el('span', `glyph ${lead}`, lead === 'both' ? '✳ >_' : GLYPH[lead]));
+    lb.appendChild(el('span', null, lead === 'both' ? 'Both' : NAMES[lead]));
   }
   function renderQuota() {
     const box = $('quota'); box.textContent = '';
@@ -225,6 +229,9 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
+    const save = el('button', 'link', 'Use these settings for new rooms');
+    save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
+    pop.appendChild(save);
     if (name === 'codex') pop.style.left = 'auto', pop.style.right = '0'; else pop.style.left = '0', pop.style.right = 'auto';
   }
 
@@ -338,7 +345,19 @@
   $('ide').addEventListener('click', () => vscode.postMessage({ type: 'toggleIde', on: meta.ideContext === false }));
   $('vc-claude').addEventListener('click', () => openPop('claude'));
   $('vc-codex').addEventListener('click', () => openPop('codex'));
-  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor')) closePop(); });
+  // Lead picker: who drives the work and hears untagged messages.
+  $('lead').addEventListener('click', () => {
+    const pop = $('pop');
+    if (!pop.hidden && pop.dataset.for === 'lead') return closePop();
+    pop.dataset.for = 'lead'; pop.textContent = ''; pop.hidden = false; pop.style.left = 'auto'; pop.style.right = '0';
+    const h = el('h4'); h.appendChild(el('span', null, 'Who leads?')); h.appendChild(el('small', null, 'untagged messages go to the lead')); pop.appendChild(h);
+    const cur = meta.defaultTarget || 'claude';
+    for (const [v, label, note] of [['claude', '✳  Claude', 'Claude drives; Codex helps when asked'], ['codex', '>_  Codex', 'Codex drives; Claude helps when asked'], ['both', '✳ >_  Both', 'Both answer, taking turns']]) {
+      const b = el('button', `opt${v === cur ? ' on' : ''}`); const l = el('span', null, label); l.appendChild(el('small', null, `  ${note}`)); b.appendChild(l);
+      b.addEventListener('click', () => { cmd(`/default ${v}`); closePop(); }); pop.appendChild(b);
+    }
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead')) closePop(); });
   document.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dropping'); });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
   document.addEventListener('drop', (e) => {

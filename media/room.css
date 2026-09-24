@@ -116,6 +116,10 @@ textarea::placeholder { color: var(--muted); }
 .chip .glyph { font-weight: 700; }
 .chip.claude .glyph { color: var(--claude); } .chip.codex .glyph { color: var(--codex); font-family: var(--mono); font-size: .9em; }
 .chip .bolt { color: #e3b341; }
+.chip.lead .muted { color: var(--muted); }
+.chip.lead .glyph.claude { color: var(--claude); } .chip.lead .glyph.codex { color: var(--codex); font-family: var(--mono); font-size: .9em; } .chip.lead .glyph.both { font-size: .85em; }
+.pop .link { justify-self: start; color: var(--vscode-textLink-foreground, var(--focus)); font-size: .86em; padding: 2px 0; }
+.pop .link:hover { text-decoration: underline; }
 .chip.ide.off { opacity: .5; text-decoration: line-through; }
 .chip.ide:empty { display: none; }
 .icon { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); font-size: 18px; line-height: 1; display: grid; place-items: center; }

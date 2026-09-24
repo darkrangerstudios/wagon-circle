@@ -58,6 +58,9 @@ function settings() {
     hopCap: c.get('hopCap'),
     userName: (c.get('userName') || '').trim() || defaultName(),
     defaultTarget: c.get('defaultTarget') || 'claude',
+    claudeEffort: c.get('claudeEffort') || null,
+    codexModel: c.get('codexModel') || null,
+    codexEffort: c.get('codexEffort') || null,
     bothMode: c.get('bothMode') || 'sequential',
     cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home)
   };
@@ -83,6 +86,9 @@ class RoomSession {
     const human = s.userName;
     const m = this.meta;
     if (m.claudeModel === undefined) m.claudeModel = s.claudeModel;
+    if (m.claudeEffort === undefined) m.claudeEffort = s.claudeEffort;
+    if (m.codexModel === undefined) m.codexModel = s.codexModel;
+    if (m.codexEffort === undefined) m.codexEffort = s.codexEffort;
     if (m.ideContext === undefined) m.ideContext = c_ide();
     this.claudeVersion = s.claude.version;
     if (m.defaultTarget === undefined) m.defaultTarget = s.defaultTarget;
@@ -153,6 +159,15 @@ class RoomSession {
     this.postMeta();
   }
 
+  // Save this room's model and effort for a vendor as the defaults for new rooms (user settings).
+  async saveDefaults(vendor) {
+    const cfg = vscode.workspace.getConfiguration('wagonCircle'), m = this.meta, G = vscode.ConfigurationTarget.Global;
+    if (vendor === 'claude') { await cfg.update('claudeModel', m.claudeModel || '', G); await cfg.update('claudeEffort', m.claudeEffort || '', G); }
+    else { await cfg.update('codexModel', m.codexModel || '', G); await cfg.update('codexEffort', m.codexEffort || '', G); }
+    const c = this.controls()[vendor], x = c.models.find((y) => y.id === c.model);
+    this.room.note(`Saved: new rooms start ${vendor === 'claude' ? 'Claude' : 'Codex'} on ${x ? x.name || x.id : c.model || 'its default model'} · ${c.effort || 'default effort'}.`);
+  }
+
   async refreshQuota() {
     const r = await this.codex.rateLimits();
     if (!r) return;
@@ -174,6 +189,7 @@ class RoomSession {
         if (m.type === 'steer') this.room.steerFromHuman(m.text.trim(), files, ide);
         else this.room.postFromHuman(m.text.trim(), files, ide);
       }
+      else if (m.type === 'saveDefaults' && (m.vendor === 'claude' || m.vendor === 'codex')) this.saveDefaults(m.vendor);
       else if (m.type === 'toggleIde') { this.meta.ideContext = !!m.on; this.postMeta(); }
       else if (m.type === 'openDiff' && typeof m.diff === 'string') openDiff(m.diff, this.meta.cwd);
       else if (m.type === 'command' && this.room && typeof m.text === 'string') this.runCommand(m.text);
@@ -220,7 +236,13 @@ class RoomSession {
         say(lines.join('\n')); return;
       }
       case '/stop': room.stopAll(); return;
-      case '/default': room.defaultTarget = m.defaultTarget = arg; say(`Messages with no @mention now go to ${arg === 'both' ? 'both agents' : arg[0].toUpperCase() + arg.slice(1)}.`); break;
+      case '/default': {
+        room.defaultTarget = m.defaultTarget = arg;
+        const L = { claude: 'Claude', codex: 'Codex' };
+        say(arg === 'both' ? 'Both agents now lead together: messages with no @mention go to both, taking turns.'
+          : `${L[arg]} is now the lead: messages with no @mention go to ${L[arg]}, and ${L[arg]} drives the work. ${L[arg === 'claude' ? 'codex' : 'claude']} helps when asked or handed something.`);
+        break;
+      }
       case '/both': room.bothMode = m.bothMode = arg; say(arg === 'sequential' ? '@both now takes turns: the second agent sees the first answer and builds on it.' : '@both now answers at once; the agents do not see each other\'s replies until later.'); break;
       case '/hops': room.hopCap = m.hopCap = Number(arg); say(`Agent-to-agent hand-offs are now capped at ${arg} per message.`); break;
       case '/claude fast': {
@@ -343,11 +365,12 @@ function panelHtml(webview, extUri) {
 <button id="ide" class="chip ide" title="IDE context: what you are looking at in VS Code is attached to your message. Click to turn off."></button>
 <button id="vc-claude" class="chip vendor claude" aria-haspopup="true"></button>
 <button id="vc-codex" class="chip vendor codex" aria-haspopup="true"></button>
+<button id="lead" class="chip lead" aria-haspopup="true" title="Who leads: messages without an @mention go to the lead"></button>
 <span id="who"></span>
 <button id="stop" class="round stop" title="Stop both agents" aria-label="Stop" hidden>■</button>
 <button id="send" class="round send" title="Send (Enter)" aria-label="Send">↑</button>
 </div></div></div>
-<div class="hint">Replies go to <span id="deftarget">Claude</span> unless you @mention · Enter to send, Shift+Enter for a new line</div>
+<div class="hint">Untagged messages go to <span id="deftarget">Claude</span> · @ to mention · / for commands · Enter to send, Shift+Enter for a new line</div>
 </div></footer>
 <script nonce="${nonce}" src="${js}"></script></body></html>`;
 }

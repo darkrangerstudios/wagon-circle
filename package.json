@@ -2,7 +2,7 @@
   "name": "wagon-circle",
   "displayName": "Wagon Circle",
   "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -69,7 +69,7 @@
             "both"
           ],
           "default": "claude",
-          "description": "Who answers a message with no @mention. Change per room with /default."
+          "description": "Who leads new rooms: messages with no @mention go to the lead. Change per room with the Lead chip or /default."
         },
         "wagonCircle.bothMode": {
           "type": "string",
@@ -84,6 +84,28 @@
           "type": "boolean",
           "default": true,
           "description": "Attach what you are looking at in VS Code (active file, selection or visible lines, open tabs, problems) to each message. Toggle per room with the \ud83d\udccd chip."
+        },
+        "wagonCircle.claudeEffort": {
+          "type": "string",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "default": "",
+          "description": "Claude effort for new rooms. Empty = Claude Code default. Set from a room with \"Use for new rooms\"."
+        },
+        "wagonCircle.codexModel": {
+          "type": "string",
+          "default": "",
+          "description": "Codex model for new rooms (e.g. gpt-6-astra). Empty = your Codex config default. Set from a room with \"Use for new rooms\"."
+        },
+        "wagonCircle.codexEffort": {
+          "type": "string",
+          "default": "",
+          "description": "Codex reasoning effort for new rooms. Empty = the model default."
         }
       }
     }
