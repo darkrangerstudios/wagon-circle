@@ -1,6 +1,6 @@
 {
-  "name": "wagon-circle",
-  "displayName": "Wagon Circle",
+  "name": "wagon-wheel",
+  "displayName": "Wagon Wheel",
   "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
   "version": "0.5.0",
   "publisher": "darkrangerstudios",
@@ -14,58 +14,58 @@
   "contributes": {
     "commands": [
       {
-        "command": "wagonCircle.newRoom",
-        "title": "Wagon Circle: New Room"
+        "command": "wagonWheel.newRoom",
+        "title": "Wagon Wheel: New Room"
       },
       {
-        "command": "wagonCircle.joinExisting",
-        "title": "Wagon Circle: Join Existing Conversations (fork)"
+        "command": "wagonWheel.joinExisting",
+        "title": "Wagon Wheel: Join Existing Conversations (fork)"
       },
       {
-        "command": "wagonCircle.openRoom",
-        "title": "Wagon Circle: Reopen a Room"
+        "command": "wagonWheel.openRoom",
+        "title": "Wagon Wheel: Reopen a Room"
       },
       {
-        "command": "wagonCircle.checkSetup",
-        "title": "Wagon Circle: Check Setup"
+        "command": "wagonWheel.checkSetup",
+        "title": "Wagon Wheel: Check Setup"
       }
     ],
     "configuration": {
-      "title": "Wagon Circle",
+      "title": "Wagon Wheel",
       "properties": {
-        "wagonCircle.userName": {
+        "wagonWheel.userName": {
           "type": "string",
           "default": "",
           "description": "Your name as the agents see it and as the room labels your messages. Empty = first name from git config user.name, else your login name."
         },
-        "wagonCircle.claudeModel": {
+        "wagonWheel.claudeModel": {
           "type": "string",
           "default": "claude-sonnet-5",
           "description": "Model alias or id passed to claude --model."
         },
-        "wagonCircle.claudePath": {
+        "wagonWheel.claudePath": {
           "type": "string",
           "default": "",
           "description": "Path to the claude CLI. Empty = the newest one found (the VS Code Claude extension's bundled CLI or ~/.local/bin/claude)."
         },
-        "wagonCircle.codexPath": {
+        "wagonWheel.codexPath": {
           "type": "string",
           "default": "",
           "description": "Path to the codex CLI. Empty = ~/.local/bin/codex, then the standalone install, then PATH."
         },
-        "wagonCircle.hopCap": {
+        "wagonWheel.hopCap": {
           "type": "number",
           "default": 2,
           "minimum": 0,
           "maximum": 20,
           "description": "Max agent-to-agent hand-offs per message you send."
         },
-        "wagonCircle.cwd": {
+        "wagonWheel.cwd": {
           "type": "string",
           "default": "",
           "description": "Working folder both agents may read. Empty = first workspace folder."
         },
-        "wagonCircle.defaultTarget": {
+        "wagonWheel.defaultTarget": {
           "type": "string",
           "enum": [
             "claude",
@@ -75,7 +75,7 @@
           "default": "claude",
           "description": "Who leads new rooms: messages with no @mention go to the lead. Change per room with the Lead chip or /default."
         },
-        "wagonCircle.bothMode": {
+        "wagonWheel.bothMode": {
           "type": "string",
           "enum": [
             "sequential",
@@ -84,12 +84,12 @@
           "default": "sequential",
           "description": "How @both works: sequential = take turns, the second sees the first answer; parallel = answer at once. Change per room with /both."
         },
-        "wagonCircle.ideContext": {
+        "wagonWheel.ideContext": {
           "type": "boolean",
           "default": true,
           "description": "Attach what you are looking at in VS Code (active file, selection or visible lines, open tabs, problems) to each message. Toggle per room with the \ud83d\udccd chip."
         },
-        "wagonCircle.claudeEffort": {
+        "wagonWheel.claudeEffort": {
           "type": "string",
           "enum": [
             "",
@@ -101,12 +101,12 @@
           "default": "",
           "description": "Claude effort for new rooms. Empty = Claude Code default. Set from a room with \"Use for new rooms\"."
         },
-        "wagonCircle.codexModel": {
+        "wagonWheel.codexModel": {
           "type": "string",
           "default": "",
           "description": "Codex model for new rooms (e.g. gpt-6-astra). Empty = your Codex config default. Set from a room with \"Use for new rooms\"."
         },
-        "wagonCircle.taskMode": {
+        "wagonWheel.taskMode": {
           "type": "string",
           "enum": [
             "auto",
@@ -116,7 +116,7 @@
           "default": "auto",
           "description": "Auto: a task starts when an agent asks the other for help. Chat: one consultation per message, no task. Work: every message starts a task."
         },
-        "wagonCircle.taskDefaults": {
+        "wagonWheel.taskDefaults": {
           "type": "object",
           "default": {
             "turns": 20,
@@ -125,7 +125,7 @@
           },
           "description": "Allowances for new tasks: agent turn starts (turns), how many of them are kept for wrapping up (reserve), and active minutes. Set from a room with \"Save as my defaults\"."
         },
-        "wagonCircle.codexEffort": {
+        "wagonWheel.codexEffort": {
           "type": "string",
           "default": "",
           "description": "Codex reasoning effort for new rooms. Empty = the model default."
@@ -134,19 +134,19 @@
     },
     "walkthroughs": [
       {
-        "id": "wagonCircle.start",
-        "title": "Get started with Wagon Circle",
+        "id": "wagonWheel.start",
+        "title": "Get started with Wagon Wheel",
         "description": "Claude and Codex in one room, working on local sessions.",
         "steps": [
           {
             "id": "setup",
             "title": "Get your agents ready",
-            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonCircle.checkSetup)",
+            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonWheel.checkSetup)",
             "media": {
               "markdown": "walkthrough/setup.md"
             },
             "completionEvents": [
-              "onCommand:wagonCircle.checkSetup"
+              "onCommand:wagonWheel.checkSetup"
             ]
           },
           {
@@ -168,12 +168,12 @@
           {
             "id": "try",
             "title": "Try one small handoff",
-            "description": "A small read-only review in a new room.\n[New room](command:wagonCircle.newRoom)",
+            "description": "A small read-only review in a new room.\n[New room](command:wagonWheel.newRoom)",
             "media": {
               "markdown": "walkthrough/try-it.md"
             },
             "completionEvents": [
-              "onCommand:wagonCircle.newRoom"
+              "onCommand:wagonWheel.newRoom"
             ]
           }
         ]

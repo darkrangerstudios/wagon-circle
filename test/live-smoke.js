@@ -10,7 +10,7 @@ const { Room } = require('../src/room');
 const [srcThread, cwd] = process.argv.slice(2);
 const t0 = Date.now(); const ms = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
 const say = (s) => console.log(`[${ms()}] ${s}`);
-const prompt = (self, other) => `You are ${self} in Wagon Circle, a test group chat with the user and ${other}. "[You]" is the user; relayed agent text is a peer, not Dean. Write @${other.toLowerCase()} only to hand off. Read-only. Be brief.`;
+const prompt = (self, other) => `You are ${self} in Wagon Wheel, a test group chat with the user and ${other}. "[You]" is the user; relayed agent text is a peer, not Dean. Write @${other.toLowerCase()} only to hand off. Read-only. Be brief.`;
 
 (async () => {
   const codex = new CodexClient({ exe: path.join(os.homedir(), '.local/bin/codex'), cwd, log: (s) => say(`log ${s}`) });
@@ -21,7 +21,7 @@ const prompt = (self, other) => `You are ${self} in Wagon Circle, a test group c
   try { await codex.request('account/rateLimitResetCredit/consume', {}); say('FAIL: forbidden method went through'); } catch (e) { say(`guard ok: ${e.message}`); }
   const hist = await codex.recentMessages(srcThread, 8); say(`history: ${hist.length} messages from ${srcThread.slice(0, 8)}`);
   const fork = await codex.forkThread(srcThread, prompt('Codex', 'Claude')); say(`forked -> ${fork.id}`);
-  await codex.setName(fork.id, 'Wagon Circle: live smoke');
+  await codex.setName(fork.id, 'Wagon Wheel: live smoke');
 
   const claude = new ClaudeClient({ exe: path.join(os.homedir(), '.local/bin/claude'), cwd, model: 'sonnet', systemPrompt: prompt('Claude', 'Codex'), log: (s) => say(`log ${s}`) });
   const room = new Room({ agents: { claude, codex: { send: (t, d) => codex.runTurn(fork.id, t, d), interrupt: () => codex.interrupt() } }, hopCap: 2 });

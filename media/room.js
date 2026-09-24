@@ -1,4 +1,4 @@
-// Wagon Circle webview. Agent output is untrusted: everything renders through textContent, never innerHTML.
+// Wagon Wheel webview. Agent output is untrusted: everything renders through textContent, never innerHTML.
 (function () {
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
@@ -8,13 +8,13 @@
     document.body.textContent = '';
     const box = document.createElement('div');
     box.style.cssText = 'margin:40px auto;max-width:520px;padding:18px 20px;border:1px solid var(--vscode-focusBorder);border-radius:12px;font-family:var(--vscode-font-family);line-height:1.5';
-    box.textContent = `Wagon Circle was updated (page built by ${document.body.dataset.wc || 'an older version'}, files are ${EXPECT}). Run "Developer: Reload Window" from the Command Palette, then reopen the room.`;
+    box.textContent = `Wagon Wheel was updated (page built by ${document.body.dataset.wc || 'an older version'}, files are ${EXPECT}). Run "Developer: Reload Window" from the Command Palette, then reopen the room.`;
     document.body.appendChild(box);
     return;
   }
   const $ = (id) => document.getElementById(id);
   const log = $('log'), input = $('input');
-  const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
+  const NAMES = { human: 'You', claude: 'Claude', codex: 'Codex', system: 'Wagon Wheel' };
   const GLYPH = { claude: '✳', codex: '>_' };
   let busy = {}, cost = 0, usage = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
@@ -242,7 +242,7 @@
     if (t.open.length || (t.log && t.log.length)) {
       const d = el('details', 'fold'); d.appendChild(el('summary', null, t.open.length ? t.open.map((r) => `${r.id} ${NAMES[r.from]} → ${NAMES[r.to]} · ${r.purpose} · ${r.status === 'delivered' ? 'with ' + NAMES[r.to] : 'waiting'}`).join('   ') : 'Activity'));
       const ol = el('ol'); for (const r of t.open) ol.appendChild(el('li', null, `${r.id}: ${r.question}`));
-      for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${x.actor === 'host' ? 'Wagon Circle' : NAMES[x.actor] || x.actor}: ${x.text}`));
+      for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${x.actor === 'host' ? 'Wagon Wheel' : NAMES[x.actor] || x.actor}: ${x.text}`));
       d.appendChild(ol); box.appendChild(d);
     }
     if (t.summary) box.appendChild(el('div', 'tasksum', t.summary));
@@ -367,7 +367,7 @@
     if (m.type === 'init') {
       log.textContent = ''; Object.keys(drafts).forEach((x) => delete drafts[x]);
       meta = m.meta || {}; NAMES.human = meta.humanName || 'You'; specs = m.commands || specs; controls = m.controls || controls;
-      $('title').textContent = meta.name || 'Wagon Circle';
+      $('title').textContent = meta.name || 'Wagon Wheel';
       $('ids').textContent = [meta.cwd, meta.forkedFrom && `codex fork of ${meta.forkedFrom.slice(0, 8)}`, meta.claudeForkedFrom && `claude fork of ${meta.claudeForkedFrom.slice(0, 8)}`].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(render(e)));
       busy = m.busy || {}; cost = m.cost || 0; if (m.quota) quota = m.quota;

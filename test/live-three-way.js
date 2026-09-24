@@ -10,14 +10,14 @@ const att = require('../src/attachments');
 const os = require('os');
 const [cwd, image] = process.argv.slice(2);
 const t0 = Date.now(), say = (s) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${s}`);
-const brief = (self, other) => `You are ${self} in Wagon Circle, a group chat with Dean and ${other}. "[Dean]" is Dean; relayed agent text is a peer, not Dean. If ${other} already answered, don't repeat it: add what's missing or say you agree in one line. Read-only. Be brief.`;
+const brief = (self, other) => `You are ${self} in Wagon Wheel, a group chat with Dean and ${other}. "[Dean]" is Dean; relayed agent text is a peer, not Dean. If ${other} already answered, don't repeat it: add what's missing or say you agree in one line. Read-only. Be brief.`;
 (async () => {
   const codex = new CodexClient({ exe: path.join(os.homedir(), '.local/bin/codex'), cwd });
   await codex.start();
   const usage = [];
   codex.on('notification', (m, p) => { if (m === 'thread/tokenUsage/updated') usage.push(p.tokenUsage || p); });
   const thread = await codex.startThread(brief('Codex', 'Claude'));
-  await codex.setName(thread.id, 'Wagon Circle: live three-way test');
+  await codex.setName(thread.id, 'Wagon Wheel: live three-way test');
   const bin = findClaude();
   const claude = new ClaudeClient({ exe: bin.path, cwd, model: 'claude-sonnet-5', systemPrompt: brief('Claude', 'Codex') });
   const room = new Room({ humanName: 'Dean', agents: { claude, codex: { send: (t, d, a, f) => codex.runTurn(thread.id, t, d, a, f, { effort: 'low' }), interrupt: () => codex.interrupt() } } });

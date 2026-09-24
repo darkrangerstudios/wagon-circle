@@ -2,7 +2,7 @@
 
 Each agent has its own working session. The room is where you ask questions, see results and coordinate help.
 
-Select a new session or an existing local one from the agent's model panel. **Fork** creates a separate conversation and leaves the original untouched. **Continue** writes to the chosen session itself: Wagon Circle warns you first because it cannot see whether another Claude Code or Codex window has that session open, so close it there before continuing. Claude can only continue sessions started in the room's folder.
+Select a new session or an existing local one from the agent's model panel. **Fork** creates a separate conversation and leaves the original untouched. **Continue** writes to the chosen session itself: Wagon Wheel warns you first because it cannot see whether another Claude Code or Codex window has that session open, so close it there before continuing. Claude can only continue sessions started in the room's folder.
 
 **Local sessions only.** Cloud sessions are managed in each provider's own tools.
 

@@ -44,7 +44,7 @@ class CodexClient extends EventEmitter {
     this.proc.on('exit', (code, sig) => this._fail(new Error(`codex app-server exited (${code ?? sig})`)));
     this.proc.stderr.on('data', (d) => this.log(`codex stderr: ${String(d).slice(0, 400)}`));
     readline.createInterface({ input: this.proc.stdout }).on('line', (line) => this._onLine(line));
-    await this.request('initialize', { clientInfo: { name: 'wagon-circle', title: 'Wagon Circle', version: '0.5.0' }, ...(this.tools.length ? { capabilities: { experimentalApi: true } } : {}) });
+    await this.request('initialize', { clientInfo: { name: 'wagon-wheel', title: 'Wagon Wheel', version: '0.5.0' }, ...(this.tools.length ? { capabilities: { experimentalApi: true } } : {}) });
     this._write({ method: 'initialized' });
   }
 
@@ -66,7 +66,7 @@ class CodexClient extends EventEmitter {
     if (m.id !== undefined && m.method) {
       // Server-to-client request (approval, user input). The room never grants anything.
       this.log(`codex asked ${m.method}; declined`);
-      this._write({ id: m.id, error: { code: -32601, message: 'Wagon Circle does not grant approvals or input' } });
+      this._write({ id: m.id, error: { code: -32601, message: 'Wagon Wheel does not grant approvals or input' } });
       return;
     }
     if (m.id !== undefined && this.pending.has(m.id)) {
@@ -90,7 +90,7 @@ class CodexClient extends EventEmitter {
   }
 
   request(method, params, timeoutMs = 120000) {
-    if (FORBIDDEN.has(method)) return Promise.reject(new Error(`${method} is forbidden in Wagon Circle`));
+    if (FORBIDDEN.has(method)) return Promise.reject(new Error(`${method} is forbidden in Wagon Wheel`));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => { this.pending.delete(id); reject(new Error(`${method} timed out`)); }, timeoutMs);

@@ -4,7 +4,7 @@ const { EventEmitter } = require('events');
 const { TaskLedger } = require('./tasks');
 
 const AGENTS = ['claude', 'codex'];
-const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
+const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Wagon Wheel' };
 
 // @claude, @codex, @both / @all. Ignores e-mail-like text (x@codex.com) by requiring a non-word char before '@'.
 function mentions(text) {
@@ -35,15 +35,15 @@ const unmarkKnown = (e, name) => { e.knownBy = [].concat(e.knownBy || []).filter
 function label(entry, human, to) {
   if (entry.kind === 'request') {
     const who = entry.to === to ? 'you' : LABEL[entry.to];
-    return `[Request ${entry.request} from ${LABEL[entry.from]} to ${who} (${entry.purpose})${entry.task ? `, task ${entry.task}` : ''}: relayed by Wagon Circle, not ${human}.${entry.to === to ? ` Your reply goes back to ${LABEL[entry.from]} automatically.` : ''}]`;
+    return `[Request ${entry.request} from ${LABEL[entry.from]} to ${who} (${entry.purpose})${entry.task ? `, task ${entry.task}` : ''}: relayed by Wagon Wheel, not ${human}.${entry.to === to ? ` Your reply goes back to ${LABEL[entry.from]} automatically.` : ''}]`;
   }
   const mine = (entry.answers || []).filter((a) => a.to === to).map((a) => a.request);
-  if (mine.length) return `[${LABEL[entry.from]} — answer to your request ${mine.join(', ')}, relayed by Wagon Circle, not ${human}]`;
+  if (mine.length) return `[${LABEL[entry.from]} — answer to your request ${mine.join(', ')}, relayed by Wagon Wheel, not ${human}]`;
   if (entry.kind === 'history') return `[${entry.from === 'human' ? 'User' : LABEL[entry.from]} — earlier in the forked ${entry.source || 'Codex'} conversation]`;
   if (entry.from === 'human' && entry.kind === 'steer') return `[${human}, to ${entry.steer.map((n) => LABEL[n]).join(' and ')} mid-turn]`;
   if (entry.from === 'human') return `[${human}]`;
-  if (entry.from === 'system') return '[Wagon Circle notice]';
-  return `[${LABEL[entry.from]} — relayed by Wagon Circle, not ${human}]`;
+  if (entry.from === 'system') return '[Wagon Wheel notice]';
+  return `[${LABEL[entry.from]} — relayed by Wagon Wheel, not ${human}]`;
 }
 
 class Room extends EventEmitter {

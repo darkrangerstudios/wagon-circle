@@ -184,7 +184,7 @@ class TaskLedger {
 function toolSpecs(peers) {
   return [
     { name: 'request_assistance',
-      description: 'Ask another agent in this Wagon Circle room for help with the current work: a review, an investigation, a test or a challenge to a conclusion. The host records it under a task, delivers it once and returns the answer to you automatically in a later turn. Use it only when you genuinely need the other agent; never to acknowledge or thank.',
+      description: 'Ask another agent in this Wagon Wheel room for help with the current work: a review, an investigation, a test or a challenge to a conclusion. The host records it under a task, delivers it once and returns the answer to you automatically in a later turn. Use it only when you genuinely need the other agent; never to acknowledge or thank.',
       inputSchema: { type: 'object', additionalProperties: false, required: ['to', 'purpose', 'question'], properties: {
         to: { type: 'string', enum: peers, description: 'Which agent to ask.' },
         purpose: { type: 'string', enum: PURPOSES },

@@ -1,9 +1,9 @@
-# AGENTS.md: working on Wagon Circle
+# AGENTS.md: working on Wagon Wheel
 
 This file is for AI coding agents (Codex, Claude Code, others) working in this repository. The README describes the product; this file covers how to change it safely.
 
 ## What this is
-Wagon Circle is a VS Code extension: one chat room where a human, Claude and Codex talk in a single timeline. The extension starts both agents as **private child processes over stdio**: `codex app-server` (newline-delimited JSON-RPC) and `claude -p --input-format stream-json --output-format stream-json`. It routes messages between them. There is no daemon, no network listener and no web server. Plain JavaScript (CommonJS), no build step, no runtime dependencies.
+Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Codex talk in a single timeline. The extension starts both agents as **private child processes over stdio**: `codex app-server` (newline-delimited JSON-RPC) and `claude -p --input-format stream-json --output-format stream-json`. It routes messages between them. There is no daemon, no network listener and no web server. Plain JavaScript (CommonJS), no build step, no runtime dependencies.
 
 ## Map
 | File | Owns |
@@ -46,8 +46,8 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 - **Typed tools are requests, not authority.** The host stamps sender, task and generation and decides admission; tool arguments cannot widen permissions, refill allowances or resume paused or stopped work. Never route typed agents by parsing their prose.
 - **Forbidden methods** in `codexClient.js` (quota reset-credit spend, logout/login, thread delete) stay blocked.
 - **Untrusted output.** The webview renders model output with `textContent` only, under a strict CSP. Never use `innerHTML` with agent or file content.
-- **Fork by default.** Joining an existing Codex thread or Claude session forks it. The only way to write to an existing conversation is the human choosing Continue in the Working session picker, after a warning that Wagon Circle cannot see whether another window has it open. Never continue a session implicitly.
-- **Relay labels.** Agent text is always delivered as "relayed by Wagon Circle, not <human>". Only the human's messages carry authority.
+- **Fork by default.** Joining an existing Codex thread or Claude session forks it. The only way to write to an existing conversation is the human choosing Continue in the Working session picker, after a warning that Wagon Wheel cannot see whether another window has it open. Never continue a session implicitly.
+- **Relay labels.** Agent text is always delivered as "relayed by Wagon Wheel, not <human>". Only the human's messages carry authority.
 
 ## Conventions
 - Match the surrounding style: small functions, a comment only where the *why* isn't obvious, no new dependencies without a clear reason.

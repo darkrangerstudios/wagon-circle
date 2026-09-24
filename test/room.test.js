@@ -43,7 +43,7 @@ test('@both takes turns: the second agent sees the first answer, in mention orde
   await settle();
   assert.strictEqual(codex.inbox.length, 1);
   assert.doesNotMatch(codex.inbox[0], /use a lock/);
-  assert.match(claude.inbox[0], /\[Codex — relayed by Wagon Circle, not Dean\]\nAgreed/); // Codex went first
+  assert.match(claude.inbox[0], /\[Codex — relayed by Wagon Wheel, not Dean\]\nAgreed/); // Codex went first
 });
 
 test('parallel mode answers independently', async () => {
@@ -63,7 +63,7 @@ test('catch-up delta: agent sees Dean + the other agent, labelled, never its own
   room.postFromHuman('@codex second');
   await settle();
   const last = codex.inbox[1];
-  assert.match(last, /\[Claude — relayed by Wagon Circle, not Dean\]\nClaude answer/);
+  assert.match(last, /\[Claude — relayed by Wagon Wheel, not Dean\]\nClaude answer/);
   assert.match(last, /\[Dean\]\n@codex second/);
   assert.doesNotMatch(last, /Codex answer/);
   assert.doesNotMatch(last, /first/);
@@ -172,7 +172,7 @@ test('the human name is configurable everywhere it is written', async () => {
   assert.match(note.text, /waiting on Darby/);
   room.postFromHuman('@codex go');
   await settle();
-  assert.match(codex.inbox[0], /\[Claude — relayed by Wagon Circle, not Darby\]/);
+  assert.match(codex.inbox[0], /\[Claude — relayed by Wagon Wheel, not Darby\]/);
   assert.doesNotMatch(codex.inbox[0], /Dean/);
 });
 

@@ -31,7 +31,7 @@ module.exports = { Queue };
   await codex.start();
   const usage = []; codex.on('notification', (m, p) => { if (m === 'thread/tokenUsage/updated') usage.push(p.tokenUsage || p); });
   const thread = await codex.startThread(roomPrompt('codex', 'claude', 'Dean', true));
-  await codex.setName(thread.id, 'Wagon Circle: live typed-assistance test');
+  await codex.setName(thread.id, 'Wagon Wheel: live typed-assistance test');
   const bin = findClaude('');
   const claude = new ClaudeClient({ exe: bin.path, cwd, model: claudeModel, systemPrompt: roomPrompt('claude', 'codex', 'Dean', true), tools: toolSpecs(['codex']) });
   const room = new Room({ humanName: 'Dean', agents: { claude, codex: { typed: true, send: (t, d, a, f, onTool) => codex.runTurn(thread.id, t, d, a, f, { model: codexModel, effort: 'low', onTool }), interrupt: () => codex.interrupt() } } });

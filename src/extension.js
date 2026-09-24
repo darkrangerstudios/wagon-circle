@@ -41,8 +41,15 @@ function defaultName() {
   return os.userInfo().username || 'You';
 }
 
+// Settings live under wagonWheel.*; values set under the pre-rename wagonCircle.* still apply until replaced.
+function config() {
+  const c = vscode.workspace.getConfiguration('wagonWheel'), old = vscode.workspace.getConfiguration('wagonCircle');
+  const setHere = (i) => i && [i.globalValue, i.workspaceValue, i.workspaceFolderValue].some((v) => v !== undefined);
+  return { get: (k) => (setHere(c.inspect(k)) || !setHere(old.inspect(k)) ? c.get(k) : old.get(k)), update: (...a) => c.update(...a) };
+}
+
 function settings() {
-  const c = vscode.workspace.getConfiguration('wagonCircle');
+  const c = config();
   const home = os.homedir();
   const ws = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
   return {
@@ -109,7 +116,7 @@ class RoomSession {
       const t = await this.codex.startThread(roomPrompt('codex', 'claude', human, true));
       this.meta.codexThreadId = t.id; this.meta.codexTyped = true; this.meta.codexTypedThreads = [t.id];
     }
-    await this.codex.setName(this.meta.codexThreadId, `Wagon Circle: ${this.meta.name}`);
+    await this.codex.setName(this.meta.codexThreadId, `Wagon Wheel: ${this.meta.name}`);
     this.codexModels = await this.codex.listModels();
 
     // A forked Claude session keeps its full memory (--resume --fork-session); Codex gets its recent text, read from disk.
@@ -144,9 +151,9 @@ class RoomSession {
       this.room.note(`Joined a fork of Claude session ${claudeFrom.id.slice(0, 8)} ("${(claudeFrom.title || claudeFrom.preview || '').slice(0, 60)}"). Claude keeps its full memory; ${claudeSeed.length} recent messages loaded for Codex. The original session is untouched.`);
     }
     // Rooms made before v0.4.4 briefed Codex with the old "any @mention hands off" rule; its thread keeps that brief.
-    if ((this.meta.handoffRule || 0) < 3) {
-      if (this.state.transcript.length) this.room.note(`Agents now ask each other with a typed request, tracked as a task with a turn and time allowance, instead of @mentions.${this.meta.codexTyped ? '' : ' This room\'s Codex thread predates that, so Codex still hands off with a line that starts with @claude; a new room gives Codex the typed request too.'}`);
-      this.meta.handoffRule = 3;
+    if ((this.meta.handoffRule || 0) < 4) {
+      if (this.state.transcript.length) this.room.note(`Wagon Circle is now Wagon Wheel: relayed messages are labelled "relayed by Wagon Wheel". Agents ask each other with a typed request, tracked as a task with a turn and time allowance, instead of @mentions.${this.meta.codexTyped ? '' : ' This room\'s Codex thread predates that, so a line where Codex starts with @claude shows as a suggestion for you to send; a new room gives Codex the typed request too.'}`);
+      this.meta.handoffRule = 4;
     }
     this.room.on('message', (entry) => this.post({ type: 'message', entry: this.view(entry) }));
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
@@ -177,7 +184,7 @@ class RoomSession {
 
   // Save this room's model and effort for a vendor as the defaults for new rooms (user settings).
   async saveDefaults(vendor) {
-    const cfg = vscode.workspace.getConfiguration('wagonCircle'), m = this.meta, G = vscode.ConfigurationTarget.Global;
+    const cfg = config(), m = this.meta, G = vscode.ConfigurationTarget.Global;
     if (vendor === 'claude') { await cfg.update('claudeModel', m.claudeModel || '', G); await cfg.update('claudeEffort', m.claudeEffort || '', G); }
     else { await cfg.update('codexModel', m.codexModel || '', G); await cfg.update('codexEffort', m.codexEffort || '', G); }
     const c = this.controls()[vendor], x = c.models.find((y) => y.id === c.model);
@@ -221,7 +228,7 @@ class RoomSession {
       else if ((m.type === 'taskLimits' || m.type === 'taskDefaults') && this.room && m.limits) {
         const lim = cleanLimits(m.limits);
         if (m.type === 'taskLimits') this.room.setTaskLimits(lim);
-        else { this.room.tasks.setDefaults(lim); vscode.workspace.getConfiguration('wagonCircle').update('taskDefaults', this.room.tasks.defaults, vscode.ConfigurationTarget.Global); this.room.note(`Saved as your defaults for new tasks: ${lim.turns} turns (${lim.reserve} kept for wrapping up), ${lim.minutes} minutes. Tasks already running keep their own settings.`); }
+        else { this.room.tasks.setDefaults(lim); config().update('taskDefaults', this.room.tasks.defaults, vscode.ConfigurationTarget.Global); this.room.note(`Saved as your defaults for new tasks: ${lim.turns} turns (${lim.reserve} kept for wrapping up), ${lim.minutes} minutes. Tasks already running keep their own settings.`); }
         this.postTask();
       }
     });
@@ -245,7 +252,7 @@ class RoomSession {
   }
 
   // Working session picker. New starts fresh; Fork branches a copy (the original is never written); Continue
-  // resumes the chosen session itself, so the human is warned first: Wagon Circle cannot see whether another
+  // resumes the chosen session itself, so the human is warned first: Wagon Wheel cannot see whether another
   // Claude Code or Codex window has it open. Switches wait for the agent to be idle; the room's cursor, tasks and
   // allowances stay, and the room history is not replayed into the new session.
   async switchSession(vendor, action) {
@@ -262,7 +269,7 @@ class RoomSession {
       if (action === 'continue') {
         const recent = pick.mtime && Date.now() - pick.mtime < 120000;
         const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" in this room?`,
-          { modal: true, detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}Wagon Circle will write to this ${L} session directly. If another ${L} window has it open, both will write to it and neither sees the other's turns. Close it there first, or fork it instead.` },
+          { modal: true, detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}Wagon Wheel will write to this ${L} session directly. If another ${L} window has it open, both will write to it and neither sees the other's turns. Close it there first, or fork it instead.` },
           'Continue', 'Fork instead');
         if (!go) return;
         if (go === 'Fork instead') action = 'fork';
@@ -429,7 +436,7 @@ const cleanLimits = (l) => {
   return { turns, reserve: n(l.reserve, 0, Math.max(0, turns - 1), 2), minutes: n(l.minutes, 1, 24 * 60, 30) };
 };
 
-const c_ide = () => vscode.workspace.getConfiguration('wagonCircle').get('ideContext') !== false;
+const c_ide = () => config().get('ideContext') !== false;
 
 // Snapshot of the last code editor: file, selection or visible lines, open tabs, problems.
 // Only files inside the room's folder are shared automatically; anything else goes in with + (attach).
@@ -464,14 +471,14 @@ async function openDiff(text, cwd) {
   if (!files.length) { const doc = await vscode.workspace.openTextDocument({ content: text, language: 'diff' }); return vscode.window.showTextDocument(doc, { preview: true }); }
   for (const f of files.slice(0, 5)) {
     const rel = f.newPath || f.oldPath, abs = paths.resolveInside(cwd, rel);
-    if (!abs) { const doc = await vscode.workspace.openTextDocument({ content: text, language: 'diff' }); await vscode.window.showTextDocument(doc, { preview: true }); vscode.window.showWarningMessage(`Wagon Circle: ${rel} is outside the room's folder, so the diff opened as plain text.`); continue; }
+    if (!abs) { const doc = await vscode.workspace.openTextDocument({ content: text, language: 'diff' }); await vscode.window.showTextDocument(doc, { preview: true }); vscode.window.showWarningMessage(`Wagon Wheel: ${rel} is outside the room's folder, so the diff opened as plain text.`); continue; }
     const original = f.oldPath && fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
     const patched = diffs.apply(original, f.hunks);
-    if (patched === null) { const doc = await vscode.workspace.openTextDocument({ content: text, language: 'diff' }); await vscode.window.showTextDocument(doc, { preview: true }); vscode.window.showWarningMessage(`Wagon Circle: the diff for ${rel} no longer matches the file, so it opened as plain text.`); continue; }
+    if (patched === null) { const doc = await vscode.workspace.openTextDocument({ content: text, language: 'diff' }); await vscode.window.showTextDocument(doc, { preview: true }); vscode.window.showWarningMessage(`Wagon Wheel: the diff for ${rel} no longer matches the file, so it opened as plain text.`); continue; }
     const key = `/${Date.now()}-${Math.random().toString(36).slice(2)}/${path.basename(rel)}`;
     proposed.set(key, patched);
-    const left = fs.existsSync(abs) ? vscode.Uri.file(abs) : vscode.Uri.parse(`wagon-circle-proposed:/empty/${path.basename(rel)}`);
-    await vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.parse(`wagon-circle-proposed:${key}`), `${path.basename(rel)} ↔ proposed (Wagon Circle)`);
+    const left = fs.existsSync(abs) ? vscode.Uri.file(abs) : vscode.Uri.parse(`wagon-wheel-proposed:/empty/${path.basename(rel)}`);
+    await vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.parse(`wagon-wheel-proposed:${key}`), `${path.basename(rel)} ↔ proposed (Wagon Wheel)`);
   }
 }
 
@@ -481,7 +488,7 @@ function panelHtml(webview, extUri) {
   const css = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', 'room.css'));
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource};">
-<meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${css}"><title>Wagon Circle</title></head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${css}"><title>Wagon Wheel</title></head>
 <body data-wc="${require('../package.json').version}"><header id="hdr"><div><div id="title"></div><div id="ids"></div></div><div id="quota"></div></header>
 <main id="log" aria-live="polite"></main>
 <footer><div class="dock">
@@ -507,17 +514,17 @@ function panelHtml(webview, extUri) {
 }
 
 async function openSession(context, session, opts) {
-  const panel = vscode.window.createWebviewPanel('wagonCircle', `Wagon Circle: ${session.meta.name}`, vscode.ViewColumn.Active, {
+  const panel = vscode.window.createWebviewPanel('wagonWheel', `Wagon Wheel: ${session.meta.name}`, vscode.ViewColumn.Active, {
     enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media'), vscode.Uri.joinPath(context.globalStorageUri, 'rooms')]
   });
   panel.webview.html = panelHtml(panel.webview, context.extensionUri);
   session.attach(panel);
   try {
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Circle: starting Codex and Claude…' }, () => session.boot(opts));
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting Codex and Claude…' }, () => session.boot(opts));
     session.postInit();
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
-    vscode.window.showErrorMessage(`Wagon Circle could not start: ${e.message}`);
+    vscode.window.showErrorMessage(`Wagon Wheel could not start: ${e.message}`);
     session.post({ type: 'notice', text: `Could not start: ${e.message}` });
   }
 }
@@ -526,33 +533,44 @@ function newMeta(name) {
   return { id: crypto.randomUUID(), name, cwd: settings().cwd, createdAt: new Date().toISOString(), codexThreadId: null, claudeSessionId: null };
 }
 
+// The rename changed the extension id, and with it the storage folder. Copy (never move) rooms saved under the
+// old id once, so reopening finds them and attachment paths inside them stay valid.
+const LEGACY_IDS = ['darkrangerstudios.wagon-circle']; // earlier extension ids, newest first
+function migrateRooms(context) {
+  const to = path.join(context.globalStorageUri.fsPath, 'rooms');
+  const from = LEGACY_IDS.map((id) => path.join(path.dirname(context.globalStorageUri.fsPath), id, 'rooms')).find((p) => fs.existsSync(p));
+  if (fs.existsSync(to) || !from) return;
+  try { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true }); log(`copied rooms from ${from}`); } catch (e) { log(`room migration failed: ${e.message}`); }
+}
+
 function activate(context) {
-  output = vscode.window.createOutputChannel('Wagon Circle');
+  output = vscode.window.createOutputChannel('Wagon Wheel');
   context.subscriptions.push(output);
-  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('wagon-circle-proposed', { provideTextDocumentContent: (uri) => proposed.get(uri.path) || '' }));
+  migrateRooms(context);
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('wagon-wheel-proposed', { provideTextDocumentContent: (uri) => proposed.get(uri.path) || '' }));
   const track = (ed) => { if (ed && ed.document.uri.scheme === 'file') { lastEditor = ed; broadcastIde(); } };
   track(vscode.window.activeTextEditor);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(track), vscode.window.onDidChangeTextEditorSelection((e) => track(e.textEditor)), vscode.window.onDidChangeTextEditorVisibleRanges((e) => track(e.textEditor)));
 
-  context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.newRoom', async () => {
+  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.newRoom', async () => {
     const name = await vscode.window.showInputBox({ prompt: 'Room name', value: `Room ${new Date().toLocaleDateString()}` });
     if (!name) return;
     await openSession(context, new RoomSession(context, newMeta(name), null), {});
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.joinExisting', async () => {
+  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.joinExisting', async () => {
     const FRESH = { label: '$(add) Start fresh', description: 'no earlier conversation' };
     const probe = new CodexClient({ exe: settings().codexExe, cwd: settings().cwd, log });
     let threads = [];
     try { await probe.start(); threads = await probe.listThreads(null, 30); } catch (e) { log(`codex list: ${e.message}`); } finally { probe.stop(); }
     const cx = await vscode.window.showQuickPick([FRESH, ...threads.map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, description: `codex ${t.id.slice(0, 8)}`, detail: t.cwd, t }))],
-      { title: 'Wagon Circle (1/2): Codex side', placeHolder: 'Fork a Codex thread into the room? The original is never written to.', matchOnDetail: true });
+      { title: 'Wagon Wheel (1/2): Codex side', placeHolder: 'Fork a Codex thread into the room? The original is never written to.', matchOnDetail: true });
     if (!cx) return;
     const sessions = claudeHistory.listSessions(30);
     const cl = await vscode.window.showQuickPick([FRESH, ...sessions.map((s) => ({ label: s.title || s.preview, description: `claude ${s.id.slice(0, 8)} · ${new Date(s.mtime).toLocaleString()}`, detail: s.cwd, s }))],
-      { title: 'Wagon Circle (2/2): Claude side', placeHolder: 'Fork a Claude session into the room? The original is never written to.', matchOnDetail: true });
+      { title: 'Wagon Wheel (2/2): Claude side', placeHolder: 'Fork a Claude session into the room? The original is never written to.', matchOnDetail: true });
     if (!cl) return;
-    if (!cx.t && !cl.s) { vscode.commands.executeCommand('wagonCircle.newRoom'); return; }
+    if (!cx.t && !cl.s) { vscode.commands.executeCommand('wagonWheel.newRoom'); return; }
     // Sharing a conversation's recent messages with the OTHER agent is its own choice, off by default.
     const shareSeed = {};
     for (const [side, picked, other] of [['codex', cx.t, 'Claude'], ['claude', cl.s, 'Codex']]) {
@@ -570,20 +588,20 @@ function activate(context) {
   }));
 
   // First-run check (setup.js): CLI versions and sign-in on this host. No model calls, no installs, no logins.
-  context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.checkSetup', async () => {
+  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.checkSetup', async () => {
     const s = settings();
     const r = await setup.checkSetup({ trusted: vscode.workspace.isTrusted, executionHost: vscode.env.remoteName ? `remote (${vscode.env.remoteName})` : 'this computer', executables: { claude: s.claude.path, codex: s.codexExe } });
-    if (r.state === 'workspace-untrusted') { vscode.window.showWarningMessage('Wagon Circle: trust this workspace before checking the CLIs.'); return; }
+    if (r.state === 'workspace-untrusted') { vscode.window.showWarningMessage('Wagon Wheel: trust this workspace before checking the CLIs.'); return; }
     const W = { claude: 'Claude Code', codex: 'Codex CLI' };
     const line = (p) => `${W[p.provider]}: ${p.installation === 'available' ? `v${p.version}` : p.installation}${p.installation === 'available' ? `, ${p.authentication === 'present' ? 'signed in' : p.authentication === 'signed-out' ? 'signed out' : 'sign-in unknown'}` : ''}${p.issue ? ` (${p.issue})` : ''}`;
     for (const p of r.providers) log(`setup: ${line(p)} [${p.executable}]`);
-    const msg = `Wagon Circle on ${r.executionHost}: ${r.providers.map(line).join('; ')}. ${r.note}`;
+    const msg = `Wagon Wheel on ${r.executionHost}: ${r.providers.map(line).join('; ')}. ${r.note}`;
     const bad = r.providers.filter((p) => p.installation !== 'available' || p.authentication !== 'present');
     if (!bad.length) vscode.window.showInformationMessage(msg);
     else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide)); }
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand('wagonCircle.openRoom', async () => {
+  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.openRoom', async () => {
     const dir = path.join(context.globalStorageUri.fsPath, 'rooms');
     const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
     const rooms = files.map((f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } }).filter(Boolean)
@@ -597,4 +615,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms };

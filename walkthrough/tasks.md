@@ -8,4 +8,4 @@ Empty polling checks do not start a model. A useful new result can wake the wait
 
 The initial core supports read-only collaboration. Editing, test execution and external tools depend on the capability shown for the selected session.
 
-**Local sessions only.** Working sessions and shared history come from Claude Code sessions and Codex threads on this machine. Use `/history add` to give both agents a local session as read-only reference, or share an agent's working session from its model panel. Cloud sessions are managed in each provider's own tools, not in Wagon Circle.
+**Local sessions only.** Working sessions and shared history come from Claude Code sessions and Codex threads on this machine. Use `/history add` to give both agents a local session as read-only reference, or share an agent's working session from its model panel. Cloud sessions are managed in each provider's own tools, not in Wagon Wheel.
