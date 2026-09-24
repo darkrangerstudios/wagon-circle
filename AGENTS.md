@@ -12,6 +12,9 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 | `src/tasks.js` | The task ledger: host-owned tasks, typed requests (`request_assistance`) and results, admission (recipient, duplicates, no bouncing, allowances), `finish_task`, Pause/Stop/generations, limits and presets, and the tool specs both agents get. Pure logic, injected clock. |
 | `src/scheduler.js` | The one host timer: fixed checks and adaptive polls (10 min, hourly after two quiet checks), no overlap, one catch-up after sleep, bounded `update()` for agent schedule changes. |
 | `src/prompts.js` | The standing brief each agent gets (typed and untyped variants). |
+| `src/sessionHistory.js` | Access control for shared history: host-only binding and readers, rebinding revokes grants, text-only Claude and Codex readers. |
+| `src/historySources.js` | Local history as room context: human-added sources, shared working sessions, the read_session_history tool's output. Local sessions only. |
+| `src/setup.js` | Read-only CLI checks for first run (version, sign-in), no model calls. |
 | `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`), typed tools (`dynamicTools` on `thread/start`, answered from `item/tool/call`). Holds the forbidden-method blocklist. |
 | `src/claudeClient.js` | Persistent `claude -p` stream-json session: streaming, thinking and tool activity, clean interrupt (control_request), steer (interrupt, then continue), model/effort/fast restarts on the same session, typed tools as an in-process `sdk` MCP server answered over the same stdio. |
 | `src/claudeBinary.js` | Picks the newest Claude Code CLI on the machine. Old CLIs refuse new models. |
@@ -34,6 +37,7 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
   - `node test/live-smoke.js <codexThreadId> <scratchCwd>`
   - `node test/live-stop.js <scratchCwd>` (Stop and steer against both real CLIs; run after touching either client's lifecycle)
   - `node test/live-tasks.js <scratchCwd>` (typed request → answer → finish_task with both real CLIs; run after touching tools, tasks or prompts)
+  - `node test/live-history.js <scratchCwd>` (each agent reads a local session of the other provider through read_session_history)
 - UI: launch an Extension Development Host with `code --extensionDevelopmentPath="$PWD" --new-window`. Press Cmd+R in that window to reload after changes. `package.json` `version` and `EXPECT` in `media/room.js` must match (a test enforces this); bump both together.
 
 ## Guardrails (do not weaken without the repo owner's explicit OK)
