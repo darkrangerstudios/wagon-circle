@@ -107,35 +107,16 @@
             "order": 6,
             "description": "Path to the codex CLI. Empty: found automatically."
           },
-          "wagonWheel.extraAgents": {
+          "wagonWheel.experimentalAgents": {
             "type": "array",
             "default": [],
-            "markdownDescription": "EXPERIMENTAL. Extra agents that speak the Agent Client Protocol over stdio, e.g. `{ \"id\": \"gemini\", \"label\": \"Gemini\", \"command\": \"gemini\", \"args\": [\"--experimental-acp\"] }`. Each joins new and reopened rooms as a read-only participant: Wagon Wheel rejects its permission requests and gives it no file or terminal access. Nothing is installed or signed in for you.",
             "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "command"
-              ],
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
-                },
-                "label": {
-                  "type": "string"
-                },
-                "command": {
-                  "type": "string"
-                },
-                "args": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
+              "type": "string",
+              "enum": [
+                "gemini"
+              ]
+            },
+            "markdownDescription": "EXPERIMENTAL, off by default. Known agents that join rooms over the Agent Client Protocol: `gemini` runs `gemini --experimental-acp` from your PATH. **Wagon Wheel cannot confine such an agent:** it runs its own tools under its own configuration (for Gemini CLI, its sandbox and approval settings). Wagon Wheel only refuses to lend it file or terminal access and rejects the permission requests it sends. Nothing is installed or signed in for you."
           }
         }
       },

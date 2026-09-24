@@ -1,9 +1,11 @@
 'use strict';
 // An agent that speaks the Agent Client Protocol (ACP: JSON-RPC 2.0, newline-delimited, over stdio), such as
 // Gemini CLI with --experimental-acp. A private child process like the others: no daemon, no port.
-// Read-only in a Wagon Wheel room: we advertise no file-system or terminal capability, and every permission
-// request the agent sends is rejected, so it can use only what its own configuration runs without asking.
-// No typed room tools yet (ACP passes MCP servers as separate processes): its hand-offs show as suggestions.
+// NOT a sandbox. The agent runs its own tools under its own configuration, and Wagon Wheel cannot confine them.
+// What the room does: it advertises no client file-system or terminal capability, and rejects every permission
+// request the agent sends. So the agent gets nothing from Wagon Wheel, but may still do what its own
+// settings allow without asking. No typed room tools yet (ACP passes MCP servers as separate processes), so its
+// hand-offs show as suggestions.
 // EXPERIMENTAL, local branch: verified against a fake ACP agent only, not a live Gemini CLI.
 const { spawn: realSpawn } = require('child_process');
 const readline = require('readline');
@@ -66,7 +68,7 @@ class AcpClient {
       const opts = (m.params && m.params.options) || [];
       const reject = opts.find((o) => o.kind === 'reject_once') || opts.find((o) => o.kind === 'reject_always');
       this.log(`${this.label} asked permission (${m.params && m.params.toolCall && m.params.toolCall.title}); rejected`);
-      if (this.waiter) this.waiter.onActivity({ phase: 'tool', label: 'permission request rejected (read-only room)', step: true });
+      if (this.waiter) this.waiter.onActivity({ phase: 'tool', label: 'permission request rejected by the room', step: true });
       return this._write({ id: m.id, result: { outcome: reject ? { outcome: 'selected', optionId: reject.optionId } : { outcome: 'cancelled' } } });
     }
     this._write({ id: m.id, error: { code: -32601, message: 'Wagon Wheel does not grant file, terminal or other client access' } });

@@ -1,5 +1,5 @@
 'use strict';
-// Live check for an ACP agent (e.g. Gemini CLI) joining a room as a read-only third participant.
+// Live check for an ACP agent (e.g. Gemini CLI) joining a room as a third participant (not sandboxed by Wagon Wheel).
 // Usage: node test/live-acp.js <scratchCwd> <command> [args...]   e.g. node test/live-acp.js /tmp/wc gemini --experimental-acp
 // Spends that provider's quota. Checks: a reply streams back, a write request is rejected, Stop cancels.
 const { AcpClient } = require('../src/acpClient');

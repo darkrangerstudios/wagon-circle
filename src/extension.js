@@ -53,6 +53,10 @@ function defaultName() {
   return os.userInfo().username || 'You';
 }
 
+// Experimental ACP agents, by profile. Each runs its own tools under its own configuration: Wagon Wheel cannot
+// sandbox it, only refuse client file/terminal access and reject the permission requests it receives.
+const ACP_PROFILES = { gemini: { label: 'Gemini', command: 'gemini', args: ['--experimental-acp'] } };
+
 // Settings live under wagonWheel.*; values set under the pre-rename wagonCircle.* still apply until replaced.
 function config() {
   const c = vscode.workspace.getConfiguration('wagonWheel'), old = vscode.workspace.getConfiguration('wagonCircle');
@@ -78,7 +82,8 @@ function settings() {
     // Three plain numbers; a taskDefaults object saved before v0.5 still applies until they are set.
     taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}), ...Object.fromEntries([['turns', 'taskTurns'], ['reserve', 'taskReserve'], ['minutes', 'taskMinutes']].filter(([, key]) => c.isSet(key)).map(([k, key]) => [k, c.get(key)])) }),
     cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home),
-    extraAgents: (c.get('extraAgents') || []).filter((x) => x && /^[a-z][a-z0-9-]{0,31}$/.test(x.id) && !['claude', 'codex', 'both', 'all', 'human', 'system'].includes(x.id) && typeof x.command === 'string' && x.command)
+    // Only known, named profiles: no arbitrary executable from settings (DESIGN.md "Additional agents").
+    extraAgents: [...new Set(c.get('experimentalAgents') || [])].filter((id) => ACP_PROFILES[id]).map((id) => ({ id, ...ACP_PROFILES[id] }))
   };
 }
 
@@ -142,7 +147,7 @@ class RoomSession {
     }
     this.claude = new ClaudeClient({ exe: s.claude.path, cwd: this.meta.cwd, model: m.claudeModel, effort: m.claudeEffort || null, fast: !!m.claudeFast && this.claudeFastOk(m.claudeModel), onNotice: (t) => this.room && this.room.note(`Claude: ${t}`), systemPrompt: roomPrompt('claude', 'codex', human, true, xs), tools: toolSpecs(['codex', ...xs.map((x) => x.id)]), sessionId: this.meta.claudeSessionId || null, forkFrom: claudeFork, addDirs: [this.attDir], log });
 
-    // Experimental ACP participants (wagonWheel.extraAgents). Continue their saved session when they can load
+    // Experimental ACP participants (wagonWheel.experimentalAgents). Continue their saved session when they can load
     // one; otherwise start new and say so.
     m.extra = m.extra || {}; this.extras = [];
     for (const x of s.extraAgents) {
