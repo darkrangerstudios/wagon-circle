@@ -1,6 +1,7 @@
 'use strict';
 // Room router: who hears what, when. Pure logic over agents that expose send(text, onDelta) -> Promise<string>.
 const { EventEmitter } = require('events');
+const { TaskLedger } = require('./tasks');
 
 const AGENTS = ['claude', 'codex'];
 const LABEL = { claude: 'Claude', codex: 'Codex', system: 'Wagon Circle' };
@@ -30,7 +31,14 @@ const knows = (e, name) => (Array.isArray(e.knownBy) ? e.knownBy.includes(name) 
 const markKnown = (e, name) => { if (!knows(e, name)) e.knownBy = [].concat(e.knownBy || [], name); };
 const unmarkKnown = (e, name) => { e.knownBy = [].concat(e.knownBy || []).filter((n) => n !== name); };
 
-function label(entry, human) {
+// Agent-facing label. `to` is the agent receiving the payload (requests and answers read differently to their parties).
+function label(entry, human, to) {
+  if (entry.kind === 'request') {
+    const who = entry.to === to ? 'you' : LABEL[entry.to];
+    return `[Request ${entry.request} from ${LABEL[entry.from]} to ${who} (${entry.purpose})${entry.task ? `, task ${entry.task}` : ''}: relayed by Wagon Circle, not ${human}.${entry.to === to ? ` Your reply goes back to ${LABEL[entry.from]} automatically.` : ''}]`;
+  }
+  const mine = (entry.answers || []).filter((a) => a.to === to).map((a) => a.request);
+  if (mine.length) return `[${LABEL[entry.from]} — answer to your request ${mine.join(', ')}, relayed by Wagon Circle, not ${human}]`;
   if (entry.kind === 'history') return `[${entry.from === 'human' ? 'User' : LABEL[entry.from]} — earlier in the forked ${entry.source || 'Codex'} conversation]`;
   if (entry.from === 'human' && entry.kind === 'steer') return `[${human}, to ${entry.steer.map((n) => LABEL[n]).join(' and ')} mid-turn]`;
   if (entry.from === 'human') return `[${human}]`;
@@ -49,7 +57,9 @@ class Room extends EventEmitter {
   // delivery is capped, rejected or a steer isn't accepted.
   // Runs: each human message starts a run (a number). Stop cancels every run so far; work belonging to a
   // cancelled run (a queued delivery, the rest of an @both sequence, a hand-off) never starts again.
-  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2 }) {
+  // Typed agents (agent.typed) ask each other through the request_assistance tool, under a host-owned task
+  // (tasks.js). Their prose is never routed. Untyped agents keep the line-start @name hand-off rule.
+  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now }) {
     super();
     this.agents = agents; this.hopCap = hopCap; this.human = humanName;
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
@@ -57,7 +67,12 @@ class Room extends EventEmitter {
     this.state = state || { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: [...AGENTS], seq: 0 };
     this.busy = { claude: false, codex: false }; this.pending = { claude: 0, codex: 0 };
     this.hopsLeft = hopCap; this.capNoted = false; this.run = 0; this.cancelledThrough = 0;
+    this.tasks = new TaskLedger({ now, agents: AGENTS, state: this.state.tasks });
+    this.state.tasks = this.tasks.state; // saved with the room; rooms from before tasks start empty
+    this.held = new Set(); this.heldNoted = null; this.lastHuman = null;
   }
+
+  _taskChanged() { this.emit('task', this.tasks.summary()); this.emit('changed', this.state); }
 
   _live(run) { return run > this.cancelledThrough; }
 
@@ -82,7 +97,9 @@ class Room extends EventEmitter {
     const run = ++this.run;
     this.hopsLeft = this.hopCap; this.capNoted = false;
     this.turns = { claude: 0, codex: 0 }; this.turnNoted = {};
-    this._append('human', text, { ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
+    const entry = this._append('human', text, { to: targets, ...(attachments.length ? { attachments } : {}), ...(ide ? { ide } : {}) });
+    this.lastHuman = { id: entry.id, text };
+    if (this.tasks.mode === 'work' && !this.tasks.active()) { this.tasks.start({ objective: text, originId: entry.id, lead: targets[0] }); this._taskChanged(); }
     if (targets.length > 1 && this.bothMode === 'sequential') this._inTurn(targets, run);
     else for (const t of targets) this.deliver(t, run);
     return targets;
@@ -136,7 +153,7 @@ class Room extends EventEmitter {
   payloadFor(name, fresh = this._fresh(name)) {
     const text = fresh.map((e) => {
       const files = (e.attachments || []).map((a) => a.name);
-      return `${label(e, this.human)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${e.ide ? `\n(IDE context from ${this.human}'s editor)\n${e.ide.text}` : ''}`;
+      return `${label(e, this.human, name)}\n${e.text}${files.length ? `\n(attached: ${files.join(', ')})` : ''}${e.ide ? `\n(IDE context from ${this.human}'s editor)\n${e.ide.text}` : ''}`;
     }).join('\n\n');
     return { text, attachments: fresh.flatMap((e) => e.attachments || []) };
   }
@@ -146,32 +163,56 @@ class Room extends EventEmitter {
     if (this.busy[name]) { this.pending[name] = Math.max(this.pending[name], run); return; }
     const fresh = this._fresh(name);
     if (!fresh.length) { this._advance(name); return; }
-    if (this.turns[name] >= this.maxTurns) {
+    // Task work (a request to answer, or an answer to take back) is bounded by the task's allowance, not the
+    // per-message reply cap. The human's own messages always get through and never spend task turns.
+    const requests = fresh.filter((e) => e.kind === 'request' && e.to === name && this.tasks.openFor(name).some((r) => r.id === e.request));
+    const answers = fresh.filter((e) => (e.answers || []).some((a) => a.to === name));
+    const taskTurn = requests.length > 0 || answers.length > 0;
+    // Addressed by the human (entries from before v0.5 carry no recipients: treat them as addressed).
+    const humanTurn = fresh.some((e) => e.from === 'human' && e.kind !== 'history' && (e.kind === 'steer' ? e.steer : e.to || [name]).includes(name));
+    if (taskTurn && !humanTurn) {
+      const adm = this.tasks.admitTurn(name);
+      if (!adm.ok) { this._hold(name, adm.reason); return; }
+    } else if (!taskTurn && this.turns[name] >= this.maxTurns) {
       // Not delivered, so not marked seen: the next delivery to this agent still carries it.
       if (!this.turnNoted[name]) { this.turnNoted[name] = true; this.note(`${LABEL[name]} has had its ${this.maxTurns} turns for this message; waiting on ${this.human}.`); }
       return;
     }
+    this.held.delete(name);
     const payload = this.payloadFor(name, fresh);
     for (const e of fresh) markKnown(e, name);
     this._advance(name);
-    this.turns[name] += 1;
+    if (taskTurn && !humanTurn) this.tasks.recordTurn(name); else this.turns[name] += 1;
+    if (requests.length) this.tasks.markDelivered(requests.map((e) => e.request), name);
+    if (taskTurn) this._taskChanged();
+    const t = this.tasks.active(); const ctx = { run, taskId: t ? t.id : null, generation: t ? t.generation : 0 };
     this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
     const steps = []; let diff = null; const started = Date.now(); const turnStart = this.state.transcript.length;
     const onActivity = (a) => { if (a.phase === 'diff') { diff = a.diff; return; } if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); };
+    const onTool = (tool, args) => this._onTool(name, tool, args, ctx);
     try {
-      const reply = await this.agents[name].send(payload.text, (partial) => this.emit('draft', { name, text: partial }), onActivity, payload.attachments);
+      const reply = await this.agents[name].send(payload.text, (partial) => this.emit('draft', { name, text: partial }), onActivity, payload.attachments, onTool);
       const model = this.labelFor ? this.labelFor(name) : null;
-      const entry = this._append(name, reply || '(no reply)', { took: Date.now() - started, ...(model ? { model } : {}), ...(steps.length ? { steps } : {}), ...(diff ? { diff } : {}) });
-      if (this._live(run)) this._relay(name, entry.text, run); // a reply that lands after Stop is shown, never acted on
+      // This reply answers the requests it was handed; the entry id is the next seq.
+      const back = this._live(run) ? this.tasks.resolveDelivered(name, this.state.seq + 1) : [];
+      const entry = this._append(name, reply || '(no reply)', { took: Date.now() - started, ...(model ? { model } : {}), ...(steps.length ? { steps } : {}), ...(diff ? { diff } : {}), ...(back.length ? { answers: back } : {}) });
+      if (back.length) this._taskChanged();
+      if (this._live(run)) { // a reply that lands after Stop is shown, never acted on
+        if (!this.agents[name].typed) this._relay(name, entry.text, run);
+        for (const to of new Set(back.map((b) => b.to))) this.deliver(to, run);
+      }
     } catch (e) {
-      if (e.stopped) this.note(`${LABEL[name]} stopped.`);
-      else {
+      if (e.stopped) {
+        this.note(`${LABEL[name]} stopped.`);
+        if (this._live(run)) this.tasks.reopen(name); // interrupted by a task limit, not by Stop: keep the request
+      } else {
         // The agent may never have received it: make it deliverable again (a repeat beats a silent loss).
         // Steers accepted during the failed turn may have died with it too.
         const steered = this.state.transcript.slice(turnStart).filter((x) => x.kind === 'steer' && x.steer.includes(name));
         for (const x of fresh.concat(steered)) unmarkKnown(x, name);
         const at = this.state.transcript.indexOf(fresh[0]);
         if (at >= 0) this.state.cursors[name] = Math.min(this.state.cursors[name], at);
+        this.tasks.reopen(name);
         this._append('system', `${LABEL[name]} failed: ${e.message}`, { kind: 'error' });
       }
     } finally {
@@ -179,6 +220,60 @@ class Room extends EventEmitter {
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
     }
+  }
+
+  // Task work that may not start now waits, undelivered, until the human resumes or adds allowance.
+  _hold(name, reason) {
+    this.held.add(name);
+    const t = this.tasks.active(); const key = `${t && t.id}:${reason}`;
+    if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${reason}. ${LABEL[name]}'s pending work waits for ${this.human} (resume, add allowance, or stop).`); }
+    this._taskChanged();
+  }
+
+  // Typed tool calls from an agent's turn. ctx pins the run, task and generation the turn started under.
+  _onTool(name, tool, args, ctx) {
+    if (!this._live(ctx.run)) return { ok: false, text: `Not sent: ${this.human} pressed Stop.` };
+    if (tool === 'request_assistance') {
+      const h = this.lastHuman || { id: null, text: '' };
+      const r = this.tasks.requestAssistance(name, args, { originId: h.id, objective: h.text, run: ctx.run, taskId: ctx.taskId, generation: ctx.generation });
+      if (r.ok) {
+        const q = r.request; const t = q.task && this.tasks.get(q.task);
+        const text = [q.question, q.scope && `Scope: ${q.scope}`, q.expected && `Expected answer: ${q.expected}`, t && `Task objective (from ${this.human}): ${t.objective}`].filter(Boolean).join('\n');
+        this._append(name, text, { kind: 'request', to: q.to, request: q.id, purpose: q.purpose, ...(q.task ? { task: q.task } : {}) });
+        this._taskChanged();
+        this.deliver(q.to, ctx.run);
+      } else if (r.budget) {
+        const t = this.tasks.active(), key = `${t && t.id}:budget`;
+        if (this.heldNoted !== key) { this.heldNoted = key; this.note(`Task ${t ? t.id : ''}: ${LABEL[name]} asked ${LABEL[args && args.to] || 'a peer'} for more, but ${r.text.replace(/^Not sent: /, '').replace(/\.$/, '')}. Add turns or time in Task controls to let them continue.`); }
+      }
+      return r;
+    }
+    if (tool === 'finish_task') {
+      const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary);
+      if (r.ok) { this.note(`Task ${t.id} finished by ${LABEL[name]}: ${t.summary || ''}`); this._taskChanged(); }
+      return r;
+    }
+    return { ok: false, text: `Unknown tool ${tool}.` };
+  }
+
+  pauseTask() { if (this.tasks.pause('human')) { this.note(`Task paused by ${this.human}. Running turns finish; nothing new starts.`); this._taskChanged(); } }
+
+  resumeTask() {
+    if (!this.tasks.resume('human')) return;
+    this.heldNoted = null; this.note(`Task resumed by ${this.human}.`); this._taskChanged();
+    const held = [...this.held]; this.held.clear();
+    for (const n of held) this.deliver(n, this.run);
+  }
+
+  // Adjusting limits never resumes by itself; a raised limit is used when the human resumes.
+  setTaskLimits(limits) { if (this.tasks.setLimits(limits)) this._taskChanged(); }
+
+  // The host clock (scheduler.js): a used-up time allowance cancels running task work.
+  tick() {
+    if (!this.tasks.checkTime()) return;
+    this.note(`Task ${this.tasks.active().id} used its time allowance. Running work is stopped; add time to continue, or finish with what we have.`);
+    for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
+    this._taskChanged();
   }
 
   _relay(from, text, run) {
@@ -194,7 +289,8 @@ class Room extends EventEmitter {
   }
 
   stopAll() {
-    this.cancelledThrough = this.run; this.pending = { claude: 0, codex: 0 };
+    this.cancelledThrough = this.run; this.pending = { claude: 0, codex: 0 }; this.held.clear();
+    if (this.tasks.stop()) this._taskChanged();
     for (const n of AGENTS) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
     this.note(`Stopped by ${this.human}.`);
   }

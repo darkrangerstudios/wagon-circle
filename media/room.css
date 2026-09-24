@@ -164,3 +164,24 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .switch.on { background: #e3b341; } .switch.on::after { left: 19px; background: #1b1b1b; }
 .switch:disabled { opacity: .4; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .act .dot, #who .w::before, .shimmer { animation: none; } }
+
+/* task card and controls */
+.task { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; margin-bottom: 8px; display: grid; gap: 6px; background: var(--bubble); }
+.taskhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tasktitle { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.tasktitle .obj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { font-size: .76em; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.badge.active { border-color: var(--focus); } .badge.paused, .badge.exhausted { border-style: dashed; } .badge.stopped { opacity: .7; }
+.taskbtns { display: flex; gap: 6px; }
+.tbtn { padding: 2px 10px; border-radius: 8px; border: 1px solid var(--line); font-size: .86em; }
+.tbtn:hover { border-color: var(--muted); } .tbtn.danger { color: var(--vscode-editorError-foreground); }
+.taskmeta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .84em; color: var(--muted); }
+.task .fold summary { font-size: .84em; } .task .fold li.muted { color: var(--muted); }
+.tasksum { font-size: .88em; white-space: pre-wrap; }
+.chip.tc .muted { color: var(--muted); }
+.pop .limits { display: grid; grid-template-columns: 1fr 90px; gap: 6px 10px; align-items: center; font-size: .9em; }
+.pop .limits input { width: 100%; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
+.pop .note { color: var(--muted); font-size: .8em; }
+.pop .actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.pop .primary { padding: 4px 12px; border-radius: 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.row.request .reqhead { font-size: .82em; color: var(--muted); margin-bottom: 2px; }

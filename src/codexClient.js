@@ -30,9 +30,11 @@ function describeItem(item) {
 }
 
 class CodexClient extends EventEmitter {
-  constructor({ exe, cwd, log = () => {} }) {
+  // tools: typed room tools, attached to threads this client STARTS (app-server takes dynamicTools only on
+  // thread/start; they persist across thread/resume). Calls go to the running turn's onTool.
+  constructor({ exe, cwd, tools = [], log = () => {} }) {
     super();
-    this.exe = exe; this.cwd = cwd; this.log = log;
+    this.exe = exe; this.cwd = cwd; this.log = log; this.tools = tools;
     this.nextId = 0; this.pending = new Map(); this.proc = null;
   }
 
@@ -42,7 +44,7 @@ class CodexClient extends EventEmitter {
     this.proc.on('exit', (code, sig) => this._fail(new Error(`codex app-server exited (${code ?? sig})`)));
     this.proc.stderr.on('data', (d) => this.log(`codex stderr: ${String(d).slice(0, 400)}`));
     readline.createInterface({ input: this.proc.stdout }).on('line', (line) => this._onLine(line));
-    await this.request('initialize', { clientInfo: { name: 'wagon-circle', title: 'Wagon Circle', version: '0.2.0' } });
+    await this.request('initialize', { clientInfo: { name: 'wagon-circle', title: 'Wagon Circle', version: '0.5.0' }, ...(this.tools.length ? { capabilities: { experimentalApi: true } } : {}) });
     this._write({ method: 'initialized' });
   }
 
@@ -60,6 +62,7 @@ class CodexClient extends EventEmitter {
   _onLine(line) {
     let m;
     try { m = JSON.parse(line); } catch { return; }
+    if (m.id !== undefined && m.method === 'item/tool/call') { this._onToolCall(m); return; }
     if (m.id !== undefined && m.method) {
       // Server-to-client request (approval, user input). The room never grants anything.
       this.log(`codex asked ${m.method}; declined`);
@@ -72,6 +75,15 @@ class CodexClient extends EventEmitter {
       return;
     }
     if (m.method) this.emit('notification', m.method, m.params || {});
+  }
+
+  // A typed room tool, called from inside a turn. Only the running turn on that thread may answer it.
+  async _onToolCall(m) {
+    const p = m.params || {}; const t = this.currentTurn;
+    let r;
+    if (!t || !t.onTool || t.threadId !== p.threadId) r = { ok: false, text: 'Not available: no turn is open on this thread.' };
+    else { try { r = await t.onTool(p.tool, p.arguments || {}); } catch (e) { r = { ok: false, text: `Failed: ${e.message}` }; } }
+    try { this._write({ id: m.id, result: { contentItems: [{ type: 'inputText', text: String(r.text || '') }], success: !!r.ok } }); } catch (e) { this.log(`tool reply: ${e.message}`); }
   }
 
   request(method, params, timeoutMs = 120000) {
@@ -94,7 +106,7 @@ class CodexClient extends EventEmitter {
   }
 
   async startThread(developerInstructions) {
-    const r = await this.request('thread/start', { ...this.safety(developerInstructions), ephemeral: false });
+    const r = await this.request('thread/start', { ...this.safety(developerInstructions), ephemeral: false, ...(this.tools.length ? { dynamicTools: this.tools.map((t) => ({ type: 'function', ...t })) } : {}) });
     return r.thread;
   }
 
@@ -173,7 +185,7 @@ class CodexClient extends EventEmitter {
       // The active turn exists from now, so a Stop before the turn is running is remembered. The server answers
       // turn/start with an ID before the turn is live (interrupt then fails: "no active turn"), so a held Stop
       // is sent once turn/started arrives.
-      const active = { threadId, turnId: null, started: false, cancelled: false }; this.currentTurn = active;
+      const active = { threadId, turnId: null, started: false, cancelled: false, onTool: opts.onTool || null }; this.currentTurn = active;
       const onExit = (err) => { cleanup(); reject(err); };
       const cleanup = () => { this.off('notification', onNote); this.off('exit', onExit); if (this.currentTurn === active) this.currentTurn = null; };
       this.on('notification', onNote); this.once('exit', onExit);

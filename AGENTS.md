@@ -8,9 +8,12 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
 ## Map
 | File | Owns |
 |---|---|
-| `src/room.js` | The router. Who hears what: mention parsing, catch-up deltas, `@both` turn-taking, hand-off detection (`handoffs()`: a line starting with `@name`), runs and Stop, delivery receipts (`knownBy`), hop cap, the 2-replies-per-agent limit, steering, history seeding. Pure logic, no I/O; the most heavily tested file. |
-| `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`). Holds the forbidden-method blocklist. |
-| `src/claudeClient.js` | Persistent `claude -p` stream-json session: streaming, thinking and tool activity, clean interrupt (control_request), steer (interrupt, then continue), model/effort/fast restarts on the same session. |
+| `src/room.js` | The router. Who hears what: mention parsing, catch-up deltas, `@both` turn-taking, typed tool calls (`_onTool`), request/answer delivery and task turn admission, Pause/Resume/time limit, runs and Stop, delivery receipts (`knownBy`), steering, history seeding. Untyped agents only: line-start `@name` hand-offs (`handoffs()`), hop cap and the 2-replies-per-agent limit. Pure logic, no I/O; the most heavily tested file. |
+| `src/tasks.js` | The task ledger: host-owned tasks, typed requests (`request_assistance`) and results, admission (recipient, duplicates, no bouncing, allowances), `finish_task`, Pause/Stop/generations, limits and presets, and the tool specs both agents get. Pure logic, injected clock. |
+| `src/scheduler.js` | The one host timer: fixed checks and adaptive polls (10 min, hourly after two quiet checks), no overlap, one catch-up after sleep, bounded `update()` for agent schedule changes. |
+| `src/prompts.js` | The standing brief each agent gets (typed and untyped variants). |
+| `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`), typed tools (`dynamicTools` on `thread/start`, answered from `item/tool/call`). Holds the forbidden-method blocklist. |
+| `src/claudeClient.js` | Persistent `claude -p` stream-json session: streaming, thinking and tool activity, clean interrupt (control_request), steer (interrupt, then continue), model/effort/fast restarts on the same session, typed tools as an in-process `sdk` MCP server answered over the same stdio. |
 | `src/claudeBinary.js` | Picks the newest Claude Code CLI on the machine. Old CLIs refuse new models. |
 | `src/claudeHistory.js` | Reads saved Claude sessions (`~/.claude/projects/**.jsonl`) for forking and briefing. Read-only. |
 | `src/attachments.js` | Stores files in the room folder; converts them to each agent's native input. |
@@ -30,11 +33,13 @@ Wagon Circle is a VS Code extension: one chat room where a human, Claude and Cod
   - `node test/token-ab.js <scratchCwd>`
   - `node test/live-smoke.js <codexThreadId> <scratchCwd>`
   - `node test/live-stop.js <scratchCwd>` (Stop and steer against both real CLIs; run after touching either client's lifecycle)
+  - `node test/live-tasks.js <scratchCwd>` (typed request → answer → finish_task with both real CLIs; run after touching tools, tasks or prompts)
 - UI: launch an Extension Development Host with `code --extensionDevelopmentPath="$PWD" --new-window`. Press Cmd+R in that window to reload after changes. `package.json` `version` and `EXPECT` in `media/room.js` must match (a test enforces this); bump both together.
 
 ## Guardrails (do not weaken without the repo owner's explicit OK)
 - **No listeners.** Never add a TCP/WebSocket port or a local web server. Agents stay stdio children. A localhost port is reachable by every web page in the user's browser.
-- **Read-only by default.** Codex runs with `sandbox: read-only` and `approvalPolicy: never`, and server-to-client approval requests are auto-declined. Claude runs with `--permission-mode dontAsk`, Read/Glob/Grep only and no MCP servers. Write or shell access is planned work, behind explicit per-agent levels and approvals routed to the human.
+- **Read-only by default.** Codex runs with `sandbox: read-only` and `approvalPolicy: never`, and server-to-client approval requests are auto-declined (only `item/tool/call` for our own typed tools is answered). Claude runs with `--permission-mode dontAsk`, Read/Glob/Grep plus our own typed tools only, and `--strict-mcp-config` with no MCP server except the in-process `wagon` one the extension answers over stdio. Write or shell access is planned work, behind explicit per-agent levels and approvals routed to the human.
+- **Typed tools are requests, not authority.** The host stamps sender, task and generation and decides admission; tool arguments cannot widen permissions, refill allowances or resume paused or stopped work. Never route typed agents by parsing their prose.
 - **Forbidden methods** in `codexClient.js` (quota reset-credit spend, logout/login, thread delete) stay blocked.
 - **Untrusted output.** The webview renders model output with `textContent` only, under a strict CSP. Never use `innerHTML` with agent or file content.
 - **Fork, never share.** Joining an existing Codex thread or Claude session forks it. Never write to a conversation another app may have open.

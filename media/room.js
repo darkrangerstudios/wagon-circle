@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.4.4';
+  const EXPECT = '0.5.0';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -21,6 +21,7 @@
   const drafts = {}, act = {}, since = {};           // in-progress replies per agent
   const menu = { items: [], sel: 0, open: false };
   let ticker = null;
+  let task = null, taskMode = 'auto', taskDefaults = null, presets = {}, typedAgents = {};
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
@@ -107,7 +108,15 @@
       if (entry.ide) row.appendChild(el('div', 'idechip', `📍 ${entry.ide.summary}`));
       return row;
     }
-    const { row, col } = agentShell(entry.from, entry.kind === 'history' ? '' : [entry.model || '', time].filter(Boolean).join(' · '));
+    if (entry.kind === 'request') {
+      const { row, col } = agentShell(entry.from, time);
+      row.classList.add('request');
+      col.appendChild(el('div', 'reqhead', `asks ${NAMES[entry.to]} · ${entry.purpose} · ${entry.request}${entry.task ? ` · task ${entry.task}` : ''}`));
+      col.appendChild(body(entry.text));
+      return row;
+    }
+    const answers = (entry.answers || []).map((a) => a.request);
+    const { row, col } = agentShell(entry.from, entry.kind === 'history' ? '' : [answers.length ? `answers ${answers.join(', ')}` : '', entry.model || '', time].filter(Boolean).join(' · '));
     if (entry.kind === 'history') row.classList.add('history');
     col.appendChild(body(entry.text));
     if (entry.diff) { const d = el('details', 'fold'); d.open = true; d.appendChild(el('summary', null, 'Changes this turn')); d.appendChild(diffCard(entry.diff)); col.appendChild(d); }
@@ -195,6 +204,80 @@
       p.title = 'Billed to your Claude plan, not charged. This is what the same tokens would cost on the API.'; box.appendChild(p);
     }
   }
+  // ---------- task card and controls ----------
+  const STATUS = { active: 'Working', paused: 'Paused', exhausted: 'Allowance used', completed: 'Complete', stopped: 'Stopped' };
+  const mins = (ms) => `${Math.floor(ms / 60000)}m`;
+  function renderTask() {
+    const box = $('task'); box.textContent = '';
+    const tc = $('tc'); tc.textContent = '';
+    tc.appendChild(el('span', 'muted', 'Task')); tc.appendChild(el('span', null, `${taskMode[0].toUpperCase()}${taskMode.slice(1)}`));
+    const t = task; box.hidden = !t; if (!t) return;
+    const head = el('div', 'taskhead');
+    const title = el('div', 'tasktitle');
+    title.appendChild(el('span', `badge ${t.status}`, STATUS[t.status] || t.status));
+    title.appendChild(el('span', 'obj', t.objective || t.id));
+    head.appendChild(title);
+    const btns = el('div', 'taskbtns');
+    const b = (label, fn, cls, tip) => { const x = el('button', `tbtn${cls ? ' ' + cls : ''}`, label); x.title = tip || label; x.addEventListener('click', fn); btns.appendChild(x); };
+    if (t.status === 'active') b('Pause', () => vscode.postMessage({ type: 'taskPause' }), '', 'Pause: running turns finish, nothing new starts');
+    else b('Resume', () => vscode.postMessage({ type: 'taskResume' }), '', 'Resume the task (raise its allowance first if it ran out)');
+    b('Controls', () => openTaskControls(), '', 'Task allowances and mode');
+    b('Stop', () => cmd('/stop'), 'danger', 'Stop the task and everything running under it');
+    head.appendChild(btns); box.appendChild(head);
+    const m = el('div', 'taskmeta');
+    // Numbers, not only colour: turns and minutes as used / allowed, plus what stays reserved.
+    m.appendChild(el('span', null, `${t.turns}/${t.limits.turns} turns${t.limits.reserve ? ` (${t.limits.reserve} kept for wrap-up)` : ''}`));
+    m.appendChild(el('span', null, `${mins(t.usedMs)} of ${t.limits.minutes}m`));
+    m.appendChild(el('span', null, `lead ${NAMES[t.lead]}`));
+    m.appendChild(el('span', null, `${t.answered} answered · ${t.open.length} open`));
+    box.appendChild(m);
+    if (t.open.length || (t.log && t.log.length)) {
+      const d = el('details', 'fold'); d.appendChild(el('summary', null, t.open.length ? t.open.map((r) => `${r.id} ${NAMES[r.from]} → ${NAMES[r.to]} · ${r.purpose} · ${r.status === 'delivered' ? 'with ' + NAMES[r.to] : 'waiting'}`).join('   ') : 'Activity'));
+      const ol = el('ol'); for (const r of t.open) ol.appendChild(el('li', null, `${r.id}: ${r.question}`));
+      for (const x of t.log || []) ol.appendChild(el('li', 'muted', `${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${x.actor === 'host' ? 'Wagon Circle' : NAMES[x.actor] || x.actor}: ${x.text}`));
+      d.appendChild(ol); box.appendChild(d);
+    }
+    if (t.summary) box.appendChild(el('div', 'tasksum', t.summary));
+  }
+  function openTaskControls() {
+    const pop = $('pop');
+    if (!pop.hidden && pop.dataset.for === 'task') return closePop();
+    pop.dataset.for = 'task'; pop.textContent = ''; pop.hidden = false; pop.style.left = 'auto'; pop.style.right = '0';
+    const h = el('h4'); h.appendChild(el('span', null, 'Task controls')); h.appendChild(el('small', null, task ? `task ${task.id}` : 'for new tasks')); pop.appendChild(h);
+    const md = el('div'); md.appendChild(el('div', 'lbl', 'Mode'));
+    const seg = el('div', 'seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Mode');
+    for (const [v, tip] of [['auto', 'A task starts when an agent asks the other for help'], ['chat', 'One consultation per message, no task'], ['work', 'Every message starts a task']]) {
+      const x = el('button', v === taskMode ? 'on' : '', v[0].toUpperCase() + v.slice(1)); x.title = tip; x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', String(v === taskMode));
+      x.addEventListener('click', () => { vscode.postMessage({ type: 'taskMode', mode: v }); closePop(); }); seg.appendChild(x);
+    }
+    md.appendChild(seg); pop.appendChild(md);
+    const cur = { ...(task ? task.limits : taskDefaults || presets.balanced || { turns: 20, reserve: 2, minutes: 30 }) };
+    const fields = {};
+    const ps = el('div'); ps.appendChild(el('div', 'lbl', 'Preset'));
+    const pseg = el('div', 'seg');
+    const same = (a, b2) => a && b2 && a.turns === b2.turns && a.reserve === b2.reserve && a.minutes === b2.minutes;
+    const mark = () => { const v = read(); for (const x of pseg.children) x.classList.toggle('on', x.dataset.p === 'custom' ? !Object.values(presets).some((p) => same(p, v)) : same(presets[x.dataset.p], v)); };
+    for (const name of ['economy', 'balanced', 'thorough', 'custom']) {
+      const p = presets[name]; const x = el('button', '', name[0].toUpperCase() + name.slice(1)); x.dataset.p = name;
+      if (p) x.title = `${p.turns} turns, ${p.minutes} minutes`;
+      x.addEventListener('click', () => { if (p) for (const k2 of Object.keys(fields)) fields[k2].value = p[k2]; mark(); }); pseg.appendChild(x);
+    }
+    ps.appendChild(pseg); pop.appendChild(ps);
+    const grid = el('div', 'limits');
+    for (const [key, label, help, max] of [['turns', 'Agent turns', 'Turn starts for this task across both agents, including retries', 200], ['reserve', 'Kept for wrap-up', 'Turns new requests may not use, so answers can come back', 50], ['minutes', 'Minutes', 'Active time; paused time does not count. At the limit running work stops', 1440]]) {
+      const id = `lim-${key}`; const lab = el('label', null, label); lab.htmlFor = id; lab.title = help;
+      const inp = document.createElement('input'); inp.type = 'number'; inp.id = id; inp.min = key === 'reserve' ? '0' : '1'; inp.max = String(max); inp.value = cur[key]; inp.title = help;
+      inp.addEventListener('input', mark); fields[key] = inp; grid.appendChild(lab); grid.appendChild(inp);
+    }
+    pop.appendChild(grid); mark();
+    function read() { return Object.fromEntries(Object.entries(fields).map(([k2, i]) => [k2, Number(i.value)])); }
+    pop.appendChild(el('small', 'note', 'Token and dollar limits are not offered: usage arrives only after a turn. Presets never change the model, fast mode or permissions (read-only).'));
+    const acts = el('div', 'actions');
+    if (task && !['completed', 'stopped'].includes(task.status)) { const a = el('button', 'primary', 'Apply to this task'); a.addEventListener('click', () => { vscode.postMessage({ type: 'taskLimits', limits: read() }); closePop(); }); acts.appendChild(a); }
+    const sv = el('button', 'link', 'Save as my defaults'); sv.title = 'New tasks start with these; tasks already running keep theirs';
+    sv.addEventListener('click', () => { vscode.postMessage({ type: 'taskDefaults', limits: read() }); closePop(); }); acts.appendChild(sv);
+    pop.appendChild(acts);
+  }
   function closePop() { $('pop').hidden = true; }
   function cmd(text) { vscode.postMessage({ type: 'command', text }); }
   function openPop(name) {
@@ -265,6 +348,7 @@
       renderWho(); renderQuota();
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
+    else if (m.type === 'task') { task = m.task; taskMode = m.mode || 'auto'; taskDefaults = m.defaults; presets = m.presets || presets; typedAgents = m.typed || {}; renderTask(); }
     else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
     else if (m.type === 'meta') { meta = m.meta; specs = m.commands || specs; controls = m.controls || controls; renderChips(); }
     else if (m.type === 'ide') { ideSummary = m.summary; renderChips(); }
@@ -345,6 +429,7 @@
   $('ide').addEventListener('click', () => vscode.postMessage({ type: 'toggleIde', on: meta.ideContext === false }));
   $('vc-claude').addEventListener('click', () => openPop('claude'));
   $('vc-codex').addEventListener('click', () => openPop('codex'));
+  $('tc').addEventListener('click', () => openTaskControls());
   // Lead picker: who drives the work and hears untagged messages.
   $('lead').addEventListener('click', () => {
     const pop = $('pop');
@@ -357,7 +442,7 @@
       b.addEventListener('click', () => { cmd(`/default ${v}`); closePop(); }); pop.appendChild(b);
     }
   });
-  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead')) closePop(); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead') && !e.target.closest('#tc') && !e.target.closest('#task')) closePop(); });
   document.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dropping'); });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
   document.addEventListener('drop', (e) => {
@@ -367,6 +452,6 @@
     const uris = (dt.getData('text/uri-list') || '').split(/\r?\n/).filter((u) => u && !u.startsWith('#'));
     if (uris.length) vscode.postMessage({ type: 'attachUris', uris });
   });
-  renderChips(); renderWho(); grow();
+  renderChips(); renderWho(); renderTask(); grow();
   vscode.postMessage({ type: 'ready' });
 })();

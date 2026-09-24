@@ -2,7 +2,7 @@
   "name": "wagon-circle",
   "displayName": "Wagon Circle",
   "description": "One VS Code room for you, Claude and Codex. Both agents run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -101,6 +101,17 @@
           "type": "string",
           "default": "",
           "description": "Codex model for new rooms (e.g. gpt-6-astra). Empty = your Codex config default. Set from a room with \"Use for new rooms\"."
+        },
+        "wagonCircle.taskMode": {
+          "type": "string",
+          "enum": ["auto", "chat", "work"],
+          "default": "auto",
+          "description": "Auto: a task starts when an agent asks the other for help. Chat: one consultation per message, no task. Work: every message starts a task."
+        },
+        "wagonCircle.taskDefaults": {
+          "type": "object",
+          "default": { "turns": 20, "reserve": 2, "minutes": 30 },
+          "description": "Allowances for new tasks: agent turn starts (turns), how many of them are kept for wrapping up (reserve), and active minutes. Set from a room with \"Save as my defaults\"."
         },
         "wagonCircle.codexEffort": {
           "type": "string",

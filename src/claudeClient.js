@@ -5,12 +5,15 @@ const readline = require('readline');
 const { toClaudeContent } = require('./attachments');
 
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
+const SERVER = 'wagon'; // in-process MCP server answered over this process's own stdio (no extra process, no port)
 
 const clip = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const base = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
 
 // A human-readable line for a tool call, e.g. "reading room.js".
 function describeTool(name, input = {}) {
+  if (name === `mcp__${SERVER}__request_assistance`) return `asking ${input.to || 'a peer'} (${input.purpose || 'help'})`;
+  if (name === `mcp__${SERVER}__finish_task`) return 'proposing the task is done';
   if (name === 'Read') return `reading ${base(input.file_path)}`;
   if (name === 'Grep') return `searching for "${clip(input.pattern, 40)}"`;
   if (name === 'Glob') return `listing ${clip(input.pattern, 40)}`;
@@ -18,15 +21,17 @@ function describeTool(name, input = {}) {
 }
 
 class ClaudeClient {
-  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], log = () => {}, onNotice = () => {} }) {
-    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, log, onNotice });
+  // tools: typed room tools ([{name, description, inputSchema}]), answered by the current send()'s onTool.
+  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], tools = [], log = () => {}, onNotice = () => {} }) {
+    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, tools, log, onNotice });
+    this.typed = tools.length > 0;
     this.proc = null; this.waiter = null; this.totalCostUsd = 0; this.steerQueue = []; this.reqId = 0;
   }
 
   _args() {
     const a = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--include-partial-messages', '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.join(','),
-      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--append-system-prompt', this.systemPrompt];
+      '--include-partial-messages', '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
+      '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: this.typed ? { [SERVER]: { type: 'sdk', name: SERVER } } : {} }), '--append-system-prompt', this.systemPrompt];
     if (this.model) a.push('--model', this.model);
     if (this.effort) a.push('--effort', this.effort);
     if (this.fast) a.push('--settings', JSON.stringify({ fastMode: true })); // Opus fast mode; billed to usage credits
@@ -44,6 +49,26 @@ class ClaudeClient {
     proc.on('error', (e) => { if (this.proc === proc) this._settle(e); });
     proc.on('exit', (code, sig) => { if (this.proc !== proc) return; this.proc = null; this._settle(new Error(`claude exited (${code ?? sig})`)); });
     readline.createInterface({ input: proc.stdout }).on('line', (line) => { if (this.proc === proc) this._onLine(line); });
+    if (this.typed) this._write({ type: 'control_request', request_id: `wc-init-${++this.reqId}`, request: { subtype: 'initialize', sdkMcpServers: [SERVER] } });
+  }
+
+  _write(o) { if (this.proc) this.proc.stdin.write(JSON.stringify(o) + '\n'); }
+
+  // The CLI's MCP traffic for our in-process server. tools/call goes to the reply in progress; with none open
+  // (a late call after Stop or a restart), it is refused.
+  async _onMcp(m) {
+    const msg = m.request.message || {}; const proc = this.proc;
+    let result = {};
+    if (msg.method === 'initialize') result = { protocolVersion: (msg.params && msg.params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: SERVER, version: '1' } };
+    else if (msg.method === 'tools/list') result = { tools: this.tools };
+    else if (msg.method === 'tools/call') {
+      const w = this.waiter, p = msg.params || {};
+      let r; try { r = w && w.onTool ? await w.onTool(p.name, p.arguments || {}) : { ok: false, text: 'Not available: no reply is open.' }; } catch (e) { r = { ok: false, text: `Failed: ${e.message}` }; }
+      result = { content: [{ type: 'text', text: String(r.text || '') }], ...(r.ok ? {} : { isError: true }) };
+    }
+    if (this.proc !== proc) return; // answered by a process we already replaced
+    const resp = msg.id === undefined ? { jsonrpc: '2.0', result: {}, id: 0 } : { jsonrpc: '2.0', id: msg.id, result };
+    this._write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { mcp_response: resp } } });
   }
 
   // Every way a turn ends (result, exit, kill fallback, spawn error) clears its Stop and steer state, so none
@@ -63,6 +88,7 @@ class ClaudeClient {
     try { m = JSON.parse(line); } catch { return; }
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; }
     if (m.type === 'system' && m.subtype === 'notification' && m.text) this.onNotice(m.text); // e.g. fast mode out of credits
+    if (m.type === 'control_request' && m.request && m.request.subtype === 'mcp_message' && m.request.server_name === SERVER) { this._onMcp(m); return; }
     const w = this.waiter; if (!w) return;
     const ev = m.type === 'stream_event' ? m.event : null;
     if (ev && ev.type === 'content_block_start' && ev.content_block) {
@@ -95,11 +121,11 @@ class ClaudeClient {
     }
   }
 
-  send(text, onDelta = () => {}, onActivity = () => {}, attachments = []) {
+  send(text, onDelta = () => {}, onActivity = () => {}, attachments = [], onTool = null) {
     if (this.waiter) return Promise.reject(new Error('Claude is already answering'));
     if (!this.proc) this._spawn();
     return new Promise((resolve, reject) => {
-      this.waiter = { resolve, reject, onDelta, onActivity, partial: '', blocks: [], thinking: '' };
+      this.waiter = { resolve, reject, onDelta, onActivity, onTool, partial: '', blocks: [], thinking: '' };
       onActivity({ phase: 'waiting', label: 'waiting for the model' });
       this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: toClaudeContent(text, attachments) } }) + '\n');
     });
