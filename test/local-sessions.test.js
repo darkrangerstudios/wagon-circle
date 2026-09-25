@@ -135,6 +135,10 @@ async function settle(session) {
   }
   assert.fail('synthetic room did not become idle');
 }
+function fakePanel() {
+  const posted = []; let onDispose = null;
+  return { posted, close: () => onDispose && onDispose(), webview: { postMessage: (m) => posted.push(m), onDidReceiveMessage() {} }, onDidDispose: (fn) => { onDispose = fn; } };
+}
 const peerEnum = (client) => client.options.tools.find((tool) => tool.name === 'request_assistance').inputSchema.properties.to.enum;
 
 for (const provider of ['codex', 'claude']) test(`two ${provider} seats use independent clients, settings, folders and peer tools`, async (t) => {
@@ -365,8 +369,10 @@ test('the same all-Claude saved room cannot open twice before any session ids ex
 test('closing a rejected duplicate room cannot overwrite the active owner checkpoint', async (t) => {
   const f = fixture(t, ['claude', 'claude']), owner = f.create(); await owner.boot();
   const saved = JSON.parse(fs.readFileSync(owner.file, 'utf8'));
-  const duplicate = f.create(saved.meta, saved.state);
+  const duplicate = f.create(saved.meta, saved.state), panel = fakePanel(); duplicate.attach(panel);
   await assert.rejects(duplicate.boot(), /room is already open/);
+  assert.ok(panel.posted.some((m) => m.type === 'notice' && /Could not start: This room is already open/.test(m.text))); // the panel says why
+  assert.equal(duplicate.disposed, false); // it may still boot here once the owner closes
   owner.room.note('LATEST_OWNER_CHECKPOINT');
   const checkpoint = fs.readFileSync(owner.file, 'utf8');
   duplicate.dispose();
@@ -446,10 +452,6 @@ test('history source added during consent picker cannot produce a false success 
 });
 
 // ---------- session claims at the moment the CLI reports an id (Kestrel peer review of 3905948, P2) ----------
-function fakePanel() {
-  const posted = []; let onDispose = null;
-  return { posted, close: () => onDispose && onDispose(), webview: { postMessage: (m) => posted.push(m), onDidReceiveMessage() {} }, onDidDispose: (fn) => { onDispose = fn; } };
-}
 
 test('a Claude seat claims its session the moment the CLI reports it, so a sibling cannot Continue it mid-turn', async (t) => {
   const f = fixture(t, ['claude', 'claude']); f.seats[1].cwd = f.seats[0].cwd;

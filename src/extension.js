@@ -172,7 +172,11 @@ class RoomSession {
   async boot(opts = {}) {
     if (this.disposed || this.room) return;
     if (this.booting) return this.booting;
-    if (roomClaims.has(this.file) && roomClaims.get(this.file) !== this) throw new Error('This room is already open in this extension host. Use its existing panel.');
+    if (roomClaims.has(this.file) && roomClaims.get(this.file) !== this) {
+      // Not disposed: the panel closing cleans up, and the room may boot here once the owner closes.
+      const msg = 'This room is already open in this extension host. Use its existing panel.';
+      this.post({ type: 'notice', text: `Could not start: ${msg}` }); throw new Error(msg);
+    }
     roomClaims.set(this.file, this);
     this.booting = this.bootSeats(opts);
     try { await this.booting; }
