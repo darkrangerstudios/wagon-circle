@@ -150,10 +150,15 @@ test('past the name cap, the most-called tools are kept and the rest fold into "
   assert.strictEqual(t.tools.Popular.calls, 5);
   assert.strictEqual(Object.keys(t.tools).length, 61); // 60 kept + other
   assert.strictEqual(t.tools.other.calls, 11); assert.strictEqual(t.toolCalls, 75); // 71 names: Popular + 59 rare kept, 11 rare folded
+  // A real tool named "other" keeps its own counts under the fold.
+  fs.appendFileSync(path.join(dir, 's1.jsonl'), claudeFull('o1', NOW - H, { content: [1, 2, 3, 4, 5, 6].map((i) => ({ type: 'tool_use', id: `o${i}`, name: 'other' })) }));
+  const t2 = (await new LocalUsage({ home: h, now: () => NOW }).scan()).claude.detail.today;
+  assert.strictEqual(t2.tools.other.calls, 6 + 12); assert.strictEqual(t2.toolCalls, 81); // 72 names: Popular, other and 58 rare kept; 12 rare fold into other
+  assert.strictEqual(Object.values(t2.tools).reduce((n, x) => n + x.calls, 0), 81);
 });
 
 test('the subagent lane is judged below the projects root, and old events are pruned from memory', async () => {
-  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'subagents-')); // a home folder named like the marker
+  const h = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wwlu-')), 'subagents', 'home'); // a real "subagents" segment above the root
   const dir = path.join(h, '.claude', 'projects', 'proj'); fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(dir, 's1', 'subagents'), { recursive: true });
   fs.writeFileSync(path.join(dir, 's1.jsonl'), claudeFull('m1', NOW - H, {}, [10, 0, 0, 1]) + claudeFull('m0', NOW - 20 * 24 * H, {}, [99, 0, 0, 9]));

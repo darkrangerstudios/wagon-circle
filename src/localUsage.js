@@ -111,8 +111,8 @@ function breakdown(files, from) {
   }
   if (tools.size > MAX_TOOL_NAMES) {
     const rest = [...tools.entries()].sort((a, b) => b[1].calls - a[1].calls).slice(MAX_TOOL_NAMES);
-    const other = { calls: 0, chars: 0, unsized: 0 };
-    for (const [name, x] of rest) { tools.delete(name); other.calls += x.calls; other.chars += x.chars; other.unsized += x.unsized; }
+    const other = tools.get('other') || { calls: 0, chars: 0, unsized: 0 }; // a real tool named "other" keeps its counts
+    for (const [name, x] of rest) { tools.delete(name); if (x !== other) { other.calls += x.calls; other.chars += x.chars; other.unsized += x.unsized; } }
     tools.set('other', other);
   }
   return { models: plain(models), ...out, tools: plain(tools) };
