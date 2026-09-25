@@ -253,7 +253,7 @@ class RoomSession {
     // Another VS Code window is a separate extension host: its claim is the lock file next to the room.
     const lock = roomLock.acquire(this.file);
     if (!lock.ok) {
-      const msg = 'This room is open in another VS Code window. Close it there, or use that window.';
+      const msg = `This room is open in another VS Code window. Close it there, or use that window. If no window has it open, delete its lock file: ${roomLock.lockPath(this.file)}`;
       this.refusal = `Could not start: ${msg}`;
       this.post({ type: 'notice', text: this.refusal }); throw new Error(msg);
     }
@@ -804,7 +804,13 @@ async function openRoomById(context, id) {
   const live = [...sessions].find((x) => x.meta.id === id && x.panel);
   if (live) { live.panel.reveal(); return; }
   const file = path.join(context.globalStorageUri.fsPath, 'rooms', `${id}.json`);
-  if (roomLock.holder(file)) { refreshRooms(); vscode.window.showInformationMessage(`Wagon Wheel: this room is open in another VS Code window. Switch to that window to use it. If no window has it open, delete ${id}.lock in the Wagon Wheel rooms folder.`); return; }
+  if (roomLock.holder(file)) {
+    refreshRooms();
+    const lock = roomLock.lockPath(file), REVEAL = 'Reveal lock file';
+    const pick = await vscode.window.showInformationMessage(`Wagon Wheel: this room is open in another VS Code window. Switch to that window to use it. If no window has it open, delete its lock file: ${lock}`, REVEAL);
+    if (pick === REVEAL) vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(lock));
+    return;
+  }
   let saved;
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { refreshRooms(); vscode.window.showWarningMessage(`Wagon Wheel: that room could not be read (${e.code || e.message}).`); return; }
   if (!saved || !saved.meta || saved.meta.id !== id) { vscode.window.showWarningMessage('Wagon Wheel: that file is not a saved room.'); return; }

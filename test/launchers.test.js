@@ -72,7 +72,7 @@ function loadExtension(state = {}) {
       registerTreeDataProvider: (id, p) => { rec.trees[id] = p; return disposable; },
       createStatusBarItem: (id, align, prio) => { const b = { id, align, prio, visible: false, show() { this.visible = true; }, hide() { this.visible = false; }, dispose() {} }; rec.bars.push(b); return b; },
       showWarningMessage: async (m) => { rec.warnings.push(m); },
-      showInformationMessage: async (m) => { rec.infos.push(m); },
+      showInformationMessage: async (m, ...buttons) => { rec.infos.push(m); return state.answer && buttons.includes(state.answer) ? state.answer : undefined; },
       createWebviewPanel: (type, title) => { const p = { type, title, webview: { html: '', cspSource: 'x', asWebviewUri: (u) => u, onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: (fn) => { p.close = fn; }, reveal() { this.revealed = (this.revealed || 0) + 1; } }; rec.panels.push(p); return p; },
       withProgress: async () => {},
     },
@@ -233,6 +233,7 @@ test('a room open in another window is marked in the list, and clicking it opens
   await ext.openRoomById(context, id(4));
   assert.strictEqual(rec.panels.length, 0);
   assert.match(rec.infos[0], /open in another VS Code window/);
+  assert.ok(rec.infos[0].includes(roomLock.lockPath(file)), 'the message names the lock file');
   const s = new ext.RoomSession(context, JSON.parse(fs.readFileSync(file, 'utf8')).meta, null);
   await assert.rejects(s.boot(), /open in another VS Code window/, 'the Reopen a Room path is refused too');
 });
@@ -260,4 +261,21 @@ test('roomLock: pid 0 or negative never counts as a live owner', () => {
     fs.utimesSync(roomLock.lockPath(file), old / 1000, old / 1000);
     assert.strictEqual(roomLock.holder(file, { self: 7, kill: () => {} }), null, `pid ${pid}`);
   }
+});
+
+test('the stuck-room message can reveal the lock file', async () => {
+  const { ext, rec, rooms, context } = loadExtension({ answer: 'Reveal lock file' });
+  fs.mkdirSync(rooms, { recursive: true });
+  const file = writeRoom(rooms, 11, { name: 'stuck' });
+  fs.writeFileSync(roomLock.lockPath(file), JSON.stringify({ pid: process.ppid }));
+  await ext.openRoomById(context, id(11));
+  assert.deepStrictEqual(rec.executed.map((a) => [a[0], a[1].fsPath]), [['revealFileInOS', roomLock.lockPath(file)]]);
+});
+
+test('roomLock: losing the takeover race (another window\'s pid read back) is a refusal, not ownership', () => {
+  const dir = tmp(), file = path.join(dir, `${id(1)}.json`);
+  const fsx = { ...fs, readFileSync: (p, enc) => (p === roomLock.lockPath(file) ? JSON.stringify({ pid: 4242, since: 'x' }) : fs.readFileSync(p, enc)) };
+  const r = roomLock.acquire(file, { fsx, self: 7, kill: () => {} });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.holder.pid, 4242);
 });
