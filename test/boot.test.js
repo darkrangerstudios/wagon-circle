@@ -20,7 +20,8 @@ const stubs = {
     ConfigurationTarget: { Global: 1 }, window: {}, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) } },
 };
 let fakeThreadSeq = 0;
-class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: `th-new-${++fakeThreadSeq}` }; } async resumeThread(id) { return { id }; } async forkThread() { return { id: `th-fork-${++fakeThreadSeq}` }; }
+let resumeFailure = null; // set by a test: what FakeCodex.resumeThread throws
+class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } async start() {} on() {} async startThread() { return { id: `th-new-${++fakeThreadSeq}` }; } async resumeThread(id) { if (resumeFailure) throw resumeFailure; return { id }; } async forkThread() { return { id: `th-fork-${++fakeThreadSeq}` }; }
   async recentMessages() { return [{ role: 'human', text: 'CODEX_SEED_PRIVATE' }]; } async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {
@@ -134,4 +135,38 @@ for (const side of ['codex', 'claude']) test(`Join Existing: ${side} history rea
       if (!share) assert.ok(!JSON.stringify(s.room.state.transcript).includes(marker));
     }
   } finally { for (const s of opened) s.dispose(); experimentalAgents = undefined; acpBehavior = undefined; }
+});
+
+test('a booted room holds its cross-window lock until it closes, and a second window is refused meanwhile', async () => {
+  const roomLock = require('../src/roomLock');
+  const ctx = context(), s = new RoomSession(ctx, newMeta('locked'), null);
+  await s.boot();
+  const lock = roomLock.lockPath(s.file);
+  assert.strictEqual(JSON.parse(fs.readFileSync(lock, 'utf8')).pid, process.pid);
+  assert.strictEqual(roomLock.acquire(s.file, { self: process.pid + 100000, kill: () => {} }).ok, false, 'another window sees it held');
+  s.dispose();
+  assert.ok(!fs.existsSync(lock), 'closing releases it');
+});
+
+test('reopen: a Codex thread that was never written starts fresh when the seat never spoke, and fails when it did', async () => {
+  const noRollout = Object.assign(new Error('Codex room permissions could not be verified: thread/resume failed.'), { roomPermission: true, noRollout: true });
+  try {
+    resumeFailure = noRollout;
+    const meta = { ...newMeta('closed early'), codexThreadId: 'th-never-written', claudeSessionId: null };
+    const quiet = new RoomSession(context(), meta, { transcript: [{ id: 1, from: 'human', text: 'hi', ts: 1 }, { id: 2, from: 'codex', kind: 'history', text: 'seeded', ts: 2 }], cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: 2 });
+    await quiet.boot();
+    assert.notStrictEqual(quiet.slots.codex.seat.sessionId, 'th-never-written', 'a fresh thread replaced the unwritten one');
+    assert.match(quiet.slots.codex.seat.sessionId, /^th-new-/);
+    quiet.dispose();
+
+    const meta2 = { ...newMeta('talked'), codexThreadId: 'th-lost', claudeSessionId: null };
+    const spoke = new RoomSession(context(), meta2, { transcript: [{ id: 1, from: 'codex', text: 'an answer', ts: 1 }], cursors: { claude: 0, codex: 1 }, lastTargets: ['codex'], seq: 1 });
+    const r1 = await spoke.boot().then(() => { spoke.dispose(); return new Error('booted'); }, (e) => e); // never leave a live room behind
+    assert.match(r1.message, /thread\/resume failed/, 'history was expected: refuse instead of starting over');
+
+    resumeFailure = Object.assign(new Error('Codex room permissions could not be verified: thread/resume failed.'), { roomPermission: true, noRollout: false });
+    const other = new RoomSession(context(), { ...newMeta('other'), codexThreadId: 'th-x', claudeSessionId: null }, { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: 0 });
+    const r2 = await other.boot().then(() => { other.dispose(); return new Error('booted'); }, (e) => e);
+    assert.match(r2.message, /thread\/resume failed/, 'other resume failures still fail');
+  } finally { resumeFailure = null; }
 });

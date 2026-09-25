@@ -78,3 +78,19 @@ test('Codex cannot regain verified status after Stop during attachment', async (
   await assert.rejects(attaching, /permissions/);
   await assert.rejects(c.runTurn('verified', 'go'), /permissions/);
 });
+test('a resume that finds no saved thread is flagged (Codex writes a thread only after its first turn); other failures are not', async () => {
+  const { c } = fixture();
+  const base = c.request;
+  c.request = async (method, params) => { if (method === 'thread/resume') throw new Error('no rollout found for thread id 01a0-secret-/Users/x'); return base(method, params); };
+  const e = await c.resumeThread('01a0').catch((x) => x);
+  assert.equal(e.noRollout, true);
+  assert.equal(e.message.includes('/Users/x'), false, 'the raw payload is still not forwarded');
+  const { c: c2 } = fixture();
+  const base2 = c2.request;
+  c2.request = async (method, params) => { if (method === 'thread/resume') throw new Error('permission denied'); return base2(method, params); };
+  assert.equal((await c2.resumeThread('01a0').catch((x) => x)).noRollout, false);
+  const { c: c3 } = fixture();
+  const base3 = c3.request;
+  c3.request = async (method, params) => { if (method === 'thread/fork') throw new Error('no rollout found'); return base3(method, params); };
+  assert.equal((await c3.forkThread('01a0', 'brief').catch((x) => x)).noRollout, false, 'only resume can fall back');
+});

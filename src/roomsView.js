@@ -5,18 +5,26 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // rooms are <crypto.randomUUID()>.json
+const LARGE = 25 * 1024 * 1024; // bigger room files are listed without being parsed on the extension host
+const UNSAFE = /[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g; // controls, separators, bidi overrides
 
 function readRoom(file, fsx) {
   const r = JSON.parse(fsx.readFileSync(file, 'utf8'));
   const m = r && r.meta;
   if (!m || typeof m.id !== 'string' || !ROOM_ID.test(m.id) || `${m.id}.json` !== path.basename(file)) return null;
   const seats = Array.isArray(m.participants) ? m.participants : Array.isArray(m.seats) ? m.seats : null;
-  const text = (v, max) => (typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '');
+  const text = (v, max) => (typeof v === 'string' ? v.replace(UNSAFE, ' ').slice(0, max) : '');
+  // Last activity is the newest message, not the file time: opening and closing a room saves it without activity.
+  const t = r.state && Array.isArray(r.state.transcript) ? r.state.transcript : [];
+  let last = null;
+  for (let i = t.length - 1; i >= 0 && i >= t.length - 50; i--) if (t[i] && Number.isFinite(t[i].ts)) { last = t[i].ts; break; }
+  const created = typeof m.createdAt === 'string' && Number.isFinite(Date.parse(m.createdAt)) ? Date.parse(m.createdAt) : null;
   return {
     id: m.id,
     name: text(m.name, 120) || 'Untitled room',
     cwd: text(m.cwd, 400),
     createdAt: typeof m.createdAt === 'string' ? m.createdAt : null,
+    lastActivity: last != null ? last : created,
     seats: seats ? seats.filter((p) => p && typeof p === 'object').map((p) => ({ label: text(p.label || p.id, 60), provider: text(p.provider, 20) }))
       : [{ label: 'Claude', provider: 'claude' }, { label: 'Codex', provider: 'codex' }], // rooms saved before named seats
   };
@@ -35,10 +43,11 @@ function listRooms(dir, cache = new Map(), fsx = fs) {
     const hit = cache.get(file);
     let room = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit.room : undefined;
     if (room === undefined) {
-      try { room = readRoom(file, fsx); } catch { room = null; } // a half-written or foreign file is skipped, not fatal
+      if (st.size > LARGE) room = { id: n.slice(0, -5), name: 'Large room (details not loaded)', cwd: '', createdAt: null, lastActivity: null, seats: [] };
+      else { try { room = readRoom(file, fsx); } catch { room = null; } } // a half-written or foreign file is skipped, not fatal
       cache.set(file, { mtimeMs: st.mtimeMs, size: st.size, room });
     }
-    if (room) rooms.push({ ...room, updatedAt: st.mtimeMs });
+    if (room) rooms.push({ ...room, file, updatedAt: room.lastActivity != null ? room.lastActivity : st.mtimeMs });
   }
   for (const k of cache.keys()) if (!seen.has(k)) cache.delete(k);
   return rooms.sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name));
@@ -54,15 +63,16 @@ function ago(ms, now = Date.now()) {
   return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-// What the tree row shows: seat names and when the room was last used.
+// What the tree row shows: seat names and when the room was last used. open: false, 'here' or 'elsewhere'.
 function describe(room, { open = false, now = Date.now() } = {}) {
   const seats = room.seats.map((p) => p.label).filter(Boolean).join(', ');
+  const state = open === 'elsewhere' ? 'open in another window' : open ? 'open' : ago(room.updatedAt, now);
+  const hint = open === 'elsewhere' ? 'Open in another VS Code window: switch to that window to use it.' : open ? 'Open now: click to show it.' : 'Click to reopen.';
   return {
     label: room.name,
-    description: [open ? 'open' : ago(room.updatedAt, now), seats].filter(Boolean).join(' · '),
-    tooltip: [room.name, seats && `Seats: ${seats}`, room.cwd && `Folder: ${room.cwd}`, `Last activity: ${new Date(room.updatedAt).toLocaleString()}`,
-      open ? 'Open now: click to show it.' : 'Click to reopen.'].filter(Boolean).join('\n'),
+    description: [state, seats].filter(Boolean).join(' · '),
+    tooltip: [room.name, seats && `Seats: ${seats}`, room.cwd && `Folder: ${room.cwd}`, `Last activity: ${new Date(room.updatedAt).toLocaleString()}`, hint].filter(Boolean).join('\n'),
   };
 }
 
-module.exports = { listRooms, readRoom, describe, ago, ROOM_ID };
+module.exports = { listRooms, readRoom, describe, ago, ROOM_ID, LARGE };

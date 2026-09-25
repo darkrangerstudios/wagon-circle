@@ -138,8 +138,11 @@ class CodexClient extends EventEmitter {
       return r.thread;
     } catch (e) {
       this.stop();
-      // Config and CLI failures can contain personal paths/settings. Do not forward their raw payload.
-      throw e.roomPermission ? e : permissionError(`${stage} failed`);
+      // Config and CLI failures can contain personal paths/settings. Do not forward their raw payload. One fact is
+      // kept: Codex writes a thread to disk only after its first turn, so resuming a thread that never had one says
+      // "no rollout found". The room can then start a fresh thread instead (extension.js bootSeats).
+      if (e.roomPermission) throw e;
+      throw Object.assign(permissionError(`${stage} failed`), { noRollout: stage === 'thread/resume' && /\bno rollout found\b/i.test(String(e && e.message)) });
     }
   }
 

@@ -19,6 +19,7 @@ const setup = require('./setup');
 const { LocalUsage } = require('./localUsage');
 const feedback = require('./feedback');
 const roomsView = require('./roomsView');
+const roomLock = require('./roomLock');
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -249,6 +250,13 @@ class RoomSession {
       this.refusal = `Could not start: ${msg}`;
       this.post({ type: 'notice', text: this.refusal }); throw new Error(msg);
     }
+    // Another VS Code window is a separate extension host: its claim is the lock file next to the room.
+    const lock = roomLock.acquire(this.file);
+    if (!lock.ok) {
+      const msg = 'This room is open in another VS Code window. Close it there, or use that window.';
+      this.refusal = `Could not start: ${msg}`;
+      this.post({ type: 'notice', text: this.refusal }); throw new Error(msg);
+    }
     roomClaims.set(this.file, this);
     this.booting = this.bootSeats(opts);
     try { await this.booting; }
@@ -259,6 +267,9 @@ class RoomSession {
     }
     finally { this.booting = null; }
   }
+
+  // Whether a seat ever answered in this room's saved transcript (seeded history from other sessions does not count).
+  seatSpoke(id) { return !!(this.state && Array.isArray(this.state.transcript) && this.state.transcript.some((e) => e && e.from === id && e.kind !== 'history')); }
 
   // A roster is fixed before creating any thread: Codex dynamic-tool peer enums are immutable on a thread.
   async bootSeats({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
@@ -280,8 +291,15 @@ class RoomSession {
       const p = r.seat;
       if (p.provider === 'codex') {
         const join = p.id === 'codex' && !p.sessionId && forkFrom;
-        const action = p.sessionId ? 'continue' : join ? 'fork' : 'new';
-        const made = await this.makeCodex(r, action, p.sessionId || (join && join.id));
+        let action = p.sessionId ? 'continue' : join ? 'fork' : 'new', made;
+        try { made = await this.makeCodex(r, action, p.sessionId || (join && join.id)); }
+        catch (e) {
+          // Codex saves a thread only after its first turn, so a room closed before this seat ever took one has
+          // nothing to resume. Start a fresh thread then. A seat that did speak keeps failing: never drop history.
+          if (!(action === 'continue' && e.noRollout && !this.seatSpoke(p.id)) || this.disposed) throw e;
+          log(`${p.id}: its saved Codex thread was never written (no turn yet); starting a fresh thread`);
+          action = 'new'; made = await this.makeCodex(r, 'new');
+        }
         if (this.disposed) return;
         r.client = made.client; r.models = made.models; this.bindId(r, made.id);
         if (action === 'new') { p.typed = true; p.typedThreads = [...(p.typedThreads || []), made.id]; }
@@ -352,7 +370,7 @@ class RoomSession {
     for (const c of this.ownedClients) c.stop(); this.ownedClients.clear();
     for (const c of this.extraClients) c.stop(); this.extraClients.clear();
     for (const r of Object.values(this.slots)) sessionClaims.releaseOwner(r.owner);
-    if (roomClaims.get(this.file) === this) roomClaims.delete(this.file);
+    if (roomClaims.get(this.file) === this) { roomClaims.delete(this.file); roomLock.release(this.file); }
   }
 
   // Claude plan usage via headless `/usage` (no model call, free). Throttled; refreshed after Claude replies.
@@ -642,7 +660,7 @@ class RoomSession {
 
   dispose() {
     // A session whose boot failed is already disposed, but its panel is closing now: forget it either way.
-    if (this.disposed) { sessions.delete(this); this.panel = null; return; }
+    if (this.disposed) { sessions.delete(this); this.panel = null; refreshRooms(); return; } // e.g. a room that failed to start
     // Save the closing checkpoint once; late boot/turn/usage completions may never save again.
     try { this.save(); } finally {
       this.disposed = true;
@@ -767,11 +785,11 @@ class RoomsTree {
   refresh() { this.emitter.fire(); }
   getChildren(el) { return el ? [] : roomsView.listRooms(this.dir, this.cache); }
   getTreeItem(room) {
-    const open = [...sessions].some((x) => x.meta.id === room.id && x.panel);
+    const open = [...sessions].some((x) => x.meta.id === room.id && x.panel) ? 'here' : roomLock.holder(room.file) ? 'elsewhere' : false;
     const d = roomsView.describe(room, { open });
     const item = new vscode.TreeItem(d.label, vscode.TreeItemCollapsibleState.None);
     item.id = room.id; item.description = d.description; item.tooltip = d.tooltip; item.contextValue = 'wagonWheel.room';
-    item.iconPath = new vscode.ThemeIcon(open ? 'circle-filled' : 'comment-discussion');
+    item.iconPath = new vscode.ThemeIcon(open === 'here' ? 'circle-filled' : open ? 'window' : 'comment-discussion');
     item.command = { command: 'wagonWheel.openRoomById', title: 'Open room', arguments: [room.id] };
     return item;
   }
@@ -783,6 +801,7 @@ async function openRoomById(context, id) {
   const live = [...sessions].find((x) => x.meta.id === id && x.panel);
   if (live) { live.panel.reveal(); return; }
   const file = path.join(context.globalStorageUri.fsPath, 'rooms', `${id}.json`);
+  if (roomLock.holder(file)) { refreshRooms(); vscode.window.showInformationMessage('Wagon Wheel: this room is open in another VS Code window. Switch to that window to use it.'); return; }
   let saved;
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { refreshRooms(); vscode.window.showWarningMessage(`Wagon Wheel: that room could not be read (${e.code || e.message}).`); return; }
   if (!saved || !saved.meta || saved.meta.id !== id) { vscode.window.showWarningMessage('Wagon Wheel: that file is not a saved room.'); return; }
@@ -934,7 +953,7 @@ function activate(context) {
   }));
 
   roomsTree = new RoomsTree(context);
-  context.subscriptions.push(
+  context.subscriptions.push(roomsTree.emitter,
     vscode.window.registerTreeDataProvider('wagonWheel.start', emptyTree),
     vscode.window.registerTreeDataProvider('wagonWheel.rooms', roomsTree),
     vscode.commands.registerCommand('wagonWheel.openRoomById', (id) => openRoomById(context, id)),
@@ -958,6 +977,7 @@ function activate(context) {
   }));
 }
 
-function deactivate() {}
+// Closing the window may skip panel disposal: release this host's room locks so other windows can open them now.
+function deactivate() { for (const x of sessions) if (roomClaims.get(x.file) === x) roomLock.release(x.file); }
 
 module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants, firstRunCheck, reportProblem, openRoomById, RoomsTree };

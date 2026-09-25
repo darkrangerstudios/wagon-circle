@@ -5,14 +5,15 @@ const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
 const Module = require('module');
 const roomsView = require('../src/roomsView');
+const roomLock = require('../src/roomLock');
 const pkg = require('../package.json');
 const root = path.join(__dirname, '..');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wwrooms-'));
 const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-function writeRoom(dir, n, meta, mtime) {
+function writeRoom(dir, n, meta, mtime, transcript = [{ from: 'human', text: 'PRIVATE_TRANSCRIPT' }]) {
   const file = path.join(dir, `${meta.id || id(n)}.json`);
-  fs.writeFileSync(file, JSON.stringify({ meta: { id: id(n), createdAt: '2026-09-25T10:00:00Z', ...meta }, state: { transcript: [{ from: 'human', text: 'PRIVATE_TRANSCRIPT' }] } }));
+  fs.writeFileSync(file, JSON.stringify({ meta: { id: id(n), createdAt: '2026-09-25T10:00:00Z', ...meta }, state: { transcript } }));
   if (mtime) fs.utimesSync(file, mtime / 1000, mtime / 1000);
   return file;
 }
@@ -60,7 +61,7 @@ test('describe: open rooms say so, others say when they were last used', () => {
 // Extension glue with a VS Code stub that records what activate() registers.
 function loadExtension(state = {}) {
   const disposable = { dispose() {} };
-  const rec = { trees: {}, commands: {}, bars: [], warnings: [], panels: [], configListeners: [], executed: [] };
+  const rec = { trees: {}, commands: {}, bars: [], warnings: [], infos: [], panels: [], configListeners: [], executed: [] };
   const settings = { ...state.settings };
   const vscode = {
     workspace: { getConfiguration: () => ({ get: (k) => settings[k], inspect: (k) => (k in settings ? { globalValue: settings[k] } : undefined), update: async () => {} }), workspaceFolders: undefined, isTrusted: true,
@@ -71,7 +72,8 @@ function loadExtension(state = {}) {
       registerTreeDataProvider: (id, p) => { rec.trees[id] = p; return disposable; },
       createStatusBarItem: (id, align, prio) => { const b = { id, align, prio, visible: false, show() { this.visible = true; }, hide() { this.visible = false; }, dispose() {} }; rec.bars.push(b); return b; },
       showWarningMessage: async (m) => { rec.warnings.push(m); },
-      createWebviewPanel: (type, title) => { const p = { type, title, webview: { html: '', cspSource: 'x', asWebviewUri: (u) => u, onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: () => {}, reveal() { this.revealed = (this.revealed || 0) + 1; } }; rec.panels.push(p); return p; },
+      showInformationMessage: async (m) => { rec.infos.push(m); },
+      createWebviewPanel: (type, title) => { const p = { type, title, webview: { html: '', cspSource: 'x', asWebviewUri: (u) => u, onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: (fn) => { p.close = fn; }, reveal() { this.revealed = (this.revealed || 0) + 1; } }; rec.panels.push(p); return p; },
       withProgress: async () => {},
     },
     commands: { registerCommand: (cid, fn) => { rec.commands[cid] = fn; return disposable; }, executeCommand: async (...a) => { rec.executed.push(a); } },
@@ -167,4 +169,79 @@ test('manifest: Activity Bar container, both views, welcome buttons, editor titl
   const hidden = c.menus.commandPalette.filter((m) => m.when === 'false').map((m) => m.command).sort();
   assert.deepStrictEqual(hidden, ['wagonWheel.openRoomById', 'wagonWheel.refreshRooms']);
   assert.ok(pkg.activationEvents.includes('onStartupFinished'), 'the status bar button is there before any command runs');
+});
+
+test('last activity is the newest message, so opening and closing a room without talking does not move it', () => {
+  const dir = tmp(), t = Date.parse('2026-09-25T12:00:00Z');
+  writeRoom(dir, 1, { name: 'talked recently' }, t - 86400e3, [{ from: 'human', text: 'x', ts: t - 60e3 }]);
+  writeRoom(dir, 2, { name: 'reopened, no messages' }, t, [{ from: 'human', text: 'x', ts: t - 7200e3 }]); // just saved on close
+  writeRoom(dir, 3, { name: 'never used', createdAt: '2026-09-20T09:00:00Z' }, t, []);
+  const rooms = roomsView.listRooms(dir);
+  assert.deepStrictEqual(rooms.map((r) => r.name), ['talked recently', 'reopened, no messages', 'never used']);
+  assert.strictEqual(rooms[2].updatedAt, Date.parse('2026-09-20T09:00:00Z'), 'no messages: the creation time');
+});
+
+test('room names and seat labels lose control, separator and bidi-override characters; very large files are not parsed', () => {
+  const dir = tmp();
+  writeRoom(dir, 1, { name: 'a‮b c\u0085d', participants: [{ id: 'x', label: 'R⁦x', provider: 'claude' }] });
+  const [room] = roomsView.listRooms(dir);
+  assert.strictEqual(room.name, 'a b c d');
+  assert.strictEqual(room.seats[0].label, 'R x');
+  const big = tmp(), file = writeRoom(big, 2, { name: 'huge' });
+  let reads = 0;
+  const fsx = { ...fs, statSync: (f) => { const st = fs.statSync(f); return f === file ? { ...st, isFile: () => true, size: roomsView.LARGE + 1, mtimeMs: st.mtimeMs } : st; }, readFileSync: (...a) => { reads++; return fs.readFileSync(...a); } };
+  const [large] = roomsView.listRooms(big, new Map(), fsx);
+  assert.strictEqual(reads, 0);
+  assert.strictEqual(large.id, id(2));
+  assert.match(large.name, /Large room/);
+});
+
+test('roomLock: exclusive, respects a live owner, takes over from a dead one, and releases only its own lock', () => {
+  const dir = tmp(), file = path.join(dir, 'rooms', `${id(1)}.json`); // the rooms folder does not exist yet
+  const live = () => {}, dead = () => { const e = new Error('no'); e.code = 'ESRCH'; throw e; }, other = () => { const e = new Error('perm'); e.code = 'EPERM'; throw e; };
+  assert.deepStrictEqual(roomLock.acquire(file, { self: 101 }), { ok: true });
+  assert.strictEqual(JSON.parse(fs.readFileSync(roomLock.lockPath(file), 'utf8')).pid, 101);
+  const busy = roomLock.acquire(file, { self: 202, kill: live });
+  assert.strictEqual(busy.ok, false); assert.strictEqual(busy.holder.pid, 101);
+  assert.strictEqual(roomLock.acquire(file, { self: 202, kill: other }).ok, false, 'EPERM means the process exists');
+  assert.strictEqual(roomLock.holder(file, { self: 101, kill: live }), null, 'our own lock is not someone else holding it');
+  roomLock.release(file, { self: 202 });
+  assert.ok(fs.existsSync(roomLock.lockPath(file)), 'another process cannot release it');
+  assert.deepStrictEqual(roomLock.acquire(file, { self: 202, kill: dead }), { ok: true }, 'a crashed owner is taken over');
+  roomLock.release(file, { self: 202 });
+  assert.ok(!fs.existsSync(roomLock.lockPath(file)));
+});
+
+test('roomLock: a half-written lock counts as held while fresh and as stale when old', () => {
+  const dir = tmp(), file = path.join(dir, `${id(1)}.json`), t = Date.now();
+  fs.writeFileSync(roomLock.lockPath(file), '');
+  assert.strictEqual(roomLock.acquire(file, { self: 5, now: () => t }).ok, false);
+  assert.strictEqual(roomLock.acquire(file, { self: 5, now: () => t + roomLock.FRESH_MS + 1000 }).ok, true);
+});
+
+test('a room open in another window is marked in the list, and clicking it opens nothing', async () => {
+  const { ext, rec, rooms, context } = loadExtension();
+  fs.mkdirSync(rooms, { recursive: true });
+  const file = writeRoom(rooms, 4, { name: 'elsewhere' });
+  fs.writeFileSync(roomLock.lockPath(file), JSON.stringify({ pid: process.ppid, since: new Date().toISOString() })); // a live process that is not us
+  const tree = rec.trees['wagonWheel.rooms'];
+  const item = tree.getTreeItem(tree.getChildren()[0]);
+  assert.strictEqual(item.iconPath.id, 'window');
+  assert.match(item.description, /^open in another window/);
+  await ext.openRoomById(context, id(4));
+  assert.strictEqual(rec.panels.length, 0);
+  assert.match(rec.infos[0], /open in another VS Code window/);
+  const s = new ext.RoomSession(context, JSON.parse(fs.readFileSync(file, 'utf8')).meta, null);
+  await assert.rejects(s.boot(), /open in another VS Code window/, 'the Reopen a Room path is refused too');
+});
+
+test('closing a room panel clears its open mark in the list', async () => {
+  const { ext, rec, rooms, context } = loadExtension();
+  fs.mkdirSync(rooms, { recursive: true });
+  writeRoom(rooms, 5, { name: 'mine' });
+  await ext.openRoomById(context, id(5));
+  const tree = rec.trees['wagonWheel.rooms'];
+  assert.strictEqual(tree.getTreeItem(tree.getChildren()[0]).iconPath.id, 'circle-filled');
+  rec.panels[0].close(); // VS Code's onDidDispose
+  assert.strictEqual(tree.getTreeItem(tree.getChildren()[0]).iconPath.id, 'comment-discussion');
 });
