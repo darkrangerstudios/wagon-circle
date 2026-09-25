@@ -136,8 +136,9 @@ async function settle(session) {
   assert.fail('synthetic room did not become idle');
 }
 function fakePanel() {
-  const posted = []; let onDispose = null;
-  return { posted, close: () => onDispose && onDispose(), webview: { postMessage: (m) => posted.push(m), onDidReceiveMessage() {} }, onDidDispose: (fn) => { onDispose = fn; } };
+  const posted = []; let onDispose = null, onMessage = null;
+  return { posted, close: () => onDispose && onDispose(), receive: (m) => onMessage && onMessage(m),
+    webview: { postMessage: (m) => posted.push(m), onDidReceiveMessage: (fn) => { onMessage = fn; } }, onDidDispose: (fn) => { onDispose = fn; } };
 }
 const peerEnum = (client) => client.options.tools.find((tool) => tool.name === 'request_assistance').inputSchema.properties.to.enum;
 
@@ -373,6 +374,17 @@ test('closing a rejected duplicate room cannot overwrite the active owner checkp
   await assert.rejects(duplicate.boot(), /room is already open/);
   assert.ok(panel.posted.some((m) => m.type === 'notice' && /Could not start: This room is already open/.test(m.text))); // the panel says why
   assert.equal(duplicate.disposed, false); // it may still boot here once the owner closes
+  // The page clears its log on init, so the refusal must arrive again after init once the page is ready.
+  panel.receive({ type: 'ready' });
+  const types = panel.posted.map((m) => m.type);
+  assert.ok(types.lastIndexOf('notice') > types.lastIndexOf('init'), 'the refusal is posted after init');
+  assert.match(panel.posted.at(-1).text, /already open/);
+  // A refused panel is inert: nothing but ready is handled, so no attachment lands in the shared room folder.
+  const before = panel.posted.length;
+  panel.receive({ type: 'attachData', name: 'x.txt', mime: 'text/plain', data: Buffer.from('x').toString('base64') });
+  panel.receive({ type: 'send', text: 'hello' });
+  assert.equal(panel.posted.length, before); assert.equal(duplicate.pendingAtts.size, 0);
+  assert.equal(fs.existsSync(duplicate.attDir), false);
   owner.room.note('LATEST_OWNER_CHECKPOINT');
   const checkpoint = fs.readFileSync(owner.file, 'utf8');
   duplicate.dispose();

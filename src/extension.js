@@ -173,9 +173,11 @@ class RoomSession {
     if (this.disposed || this.room) return;
     if (this.booting) return this.booting;
     if (roomClaims.has(this.file) && roomClaims.get(this.file) !== this) {
-      // Not disposed: the panel closing cleans up, and the room may boot here once the owner closes.
+      // Not disposed: the panel closing cleans up, and the room may boot here once the owner closes. The page
+      // clears its log on init, so the refusal is kept and posted again after init (see postInit).
       const msg = 'This room is already open in this extension host. Use its existing panel.';
-      this.post({ type: 'notice', text: `Could not start: ${msg}` }); throw new Error(msg);
+      this.refusal = `Could not start: ${msg}`;
+      this.post({ type: 'notice', text: this.refusal }); throw new Error(msg);
     }
     roomClaims.set(this.file, this);
     this.booting = this.bootSeats(opts);
@@ -318,6 +320,7 @@ class RoomSession {
     this.panel = panel; sessions.add(this);
     panel.webview.onDidReceiveMessage((m) => {
       if (this.disposed || !m || typeof m !== 'object') return;
+      if (this.refusal && !this.room && m.type !== 'ready') return; // a refused room's panel only shows why
       if (m.type === 'ready') this.postInit();
       else if ((m.type === 'send' || m.type === 'steer') && this.room && typeof m.text === 'string') {
         const files = (Array.isArray(m.attachmentIds) ? m.attachmentIds : []).map((id) => this.pendingAtts.get(id)).filter(Boolean);
@@ -552,6 +555,7 @@ class RoomSession {
     this.post({ type: 'init', meta: this.meta, commands: this.cmdSpecs(), controls: this.room ? this.controls() : null, transcript: this.room ? this.room.state.transcript.map((e) => this.view(e)) : [], busy: this.room ? this.room.busy : {}, quota: this.quota,
       participantUsage: Object.fromEntries(Object.values(this.slots).map((r) => [r.seat.id, r.client?.lastTurnUsage || null])),
       participantCost: Object.fromEntries(Object.values(this.slots).filter((r) => typeof r.client?.totalCostUsd === 'number').map((r) => [r.seat.id, r.client.totalCostUsd])) });
+    if (this.refusal && !this.room) this.post({ type: 'notice', text: this.refusal });
   }
 
   // Webview copy of an attachment: image thumbnails get a webview-safe URL.
