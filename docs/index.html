@@ -144,9 +144,9 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
   <main id="top">
     <div class="hero">
       <div>
-        <div class="eyebrow">VS Code extension · prototype</div>
+        <div class="eyebrow">VS Code extension · prototype 0.5.2</div>
         <h1>Circle the wagons.</h1>
-        <p class="lede">One room where you, Claude and Codex work the same problem in the same conversation. The two agents hand work to each other, and nothing faces out.</p>
+        <p class="lede">One room where you, Claude and Codex work the same problem in the same conversation. The two agents ask each other for help and bring the answers back on their own, without you relaying or typing “continue”.</p>
         <div class="cta">
           <a class="btn primary" href="https://github.com/darkrangerstudios/wagon-wheel">View on GitHub</a>
           <a class="btn ghost" href="#how">How it works</a>
@@ -216,12 +216,15 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
     <h2 id="how-h">How it works</h2>
     <p class="intro">Wagon Wheel is a VS Code extension. It starts Claude Code and Codex as its own private child processes and sits between them, deciding who hears what.</p>
     <div class="grid">
-      <div class="feat"><span class="k">Routing</span><h3>Mention to talk</h3><p><code>@claude</code>, <code>@codex</code> or <code>@both</code>. When one agent starts a line with <code>@</code> the other, the room hands the work across, up to a hop cap you set per message so they can't loop forever. Agreeing with <code>@codex</code> in passing is just conversation.</p></div>
+      <div class="feat"><span class="k">Teamwork</span><h3>They ask each other directly</h3><p>You talk with <code>@claude</code>, <code>@codex</code> or <code>@both</code>. The agents ask each other through a typed request tool, not by writing names in their replies. The room delivers each request once and brings the answer back to whoever asked, with no “thanks, got it” turns in between. Text in a reply is never treated as an instruction to the room.</p></div>
+      <div class="feat"><span class="k">Tasks</span><h3>A task card, with limits you set</h3><p>When the agents start working together, a task card shows the goal, who leads, open requests, and the turns and minutes used. Choose Economy, Balanced or Thorough, or set your own limits. Pause, Resume and Stop work at any point. The lead can close the task only when every request has been answered. Limits count turns and time; token use is reported after each turn, so there is no hard token cap.</p></div>
       <div class="feat"><span class="k">Context</span><h3>Everyone stays caught up</h3><p>Each agent receives exactly what it missed since its last turn, labelled by speaker, and never its own words back. Agent text always arrives marked as relayed, so neither model mistakes the other for you.</p></div>
-      <div class="feat"><span class="k">Memory</span><h3>Fork, never share</h3><p>Bring in an existing Codex thread, an existing Claude Code session, or both. Each is forked, so each agent keeps its full memory and your originals are never touched. Each side's recent history briefs the other, read from disk with no model call.</p></div>
+      <div class="feat"><span class="k">Memory</span><h3>Your sessions, your choice</h3><p>Each agent works in a real Claude Code session or Codex thread on your machine: start a new one, fork an existing one (the original stays untouched), or continue one after a warning. You can also let the agents read earlier local sessions, from either tool, as reference: pick a session, choose whether they see its whole history or only what is said from now on, and remove it at any time. <strong>Local sessions only.</strong> Cloud sessions stay in each provider's own tools.</p></div>
+      <div class="feat"><span class="k">Participants</span><h3>Name your seats</h3><p>New Room offers the default Claude and Codex pair or a custom roster of named local seats, each with its own working folder, model, effort and session. Two seats can use the same provider: a Builder and a Checker both on Codex, or two Claude Code sessions. Mention any seat by its ID.</p></div>
+      <div class="feat"><span class="k">Usage</span><h3>Three views of cost</h3><p>Your account limits from each provider, this computer's tokens across every local Claude Code and Codex session (with a breakdown by model, subagents, thinking, cache tier and tool call, read from the CLIs' own logs with no model call), and each task's reported turns.</p></div>
       <div class="feat"><span class="k">Visibility</span><h3>Watch them work</h3><p>Live status for each agent: thinking, the file it's reading, the command it's running, then writing, with a timer. The thinking text is one click away, and every answer keeps its trail of steps.</p></div>
       <div class="feat"><span class="k">Files</span><h3>Bring your files</h3><p>Paste a screenshot, drop in a log, attach a spec. Images reach both agents as real image input; Markdown, code and data are read inline; PDFs and big files are passed for the agents to open. Whoever missed them gets them on their next turn.</p></div>
-      <div class="feat"><span class="k">Security</span><h3>Nothing faces out</h3><p>The agents talk to the room over stdio, private pipes with no address to dial: no daemon, no localhost port, no web server. Both run read-only by default, and the room blocks quota-credit spending, logout and deletes outright.</p></div>
+      <div class="feat"><span class="k">Security</span><h3>No open ports</h3><p>The agents talk to the room over stdio, private pipes with no address to dial: no daemon, no localhost port, no web server. Their model requests still go to Anthropic and OpenAI, as they always do. Both agents are read-only in this version: they can read and search your project but cannot edit files or run commands, and the room blocks quota-credit spending, logout and deletes outright.</p></div>
     </div>
   </section>
 
@@ -237,7 +240,7 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
         </tbody>
       </table>
     </div>
-    <p class="note">Measured with <code>test/token-ab.js</code>; both runs recalled a turn-1 fact on turn 4. The gap widens with every turn and with larger instruction files. Cache lifetime matches the agents' normal sessions, because these are the same CLIs.</p>
+    <p class="note">Measured with <code>test/token-ab.js</code> on Claude Sonnet; both runs recalled a turn-1 fact on turn 4. The comparison is against restarting the agent every turn with the whole transcript, not against a normal Claude Code session, which also keeps its context. Dollar figures are what the same tokens would cost at API rates; on a subscription they count against your plan instead. The gap widens with every turn and with larger instruction files.</p>
   </section>
 
   <section id="start" aria-labelledby="start-h">
@@ -246,7 +249,7 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
     <ol class="steps">
       <li><div><h3>Have both CLIs signed in</h3><p>Install <a href="https://code.claude.com/docs/en/overview">Claude Code</a> and the <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a>, and sign each in to your own subscription. Wagon Wheel uses them as-is.</p></div></li>
       <li><div><h3>Clone the repo</h3><pre>git clone https://github.com/darkrangerstudios/wagon-wheel.git</pre></div></li>
-      <li><div><h3>Launch it in VS Code</h3><pre>code --extensionDevelopmentPath="$PWD/wagon-wheel" --new-window</pre><p style="margin-top:8px">Then run <strong>Wagon Wheel: New Room</strong> or <strong>Wagon Wheel: Join Existing Conversations</strong> from the Command Palette. Set <code>wagonWheel.userName</code> if the agents should know you by a different name.</p></div></li>
+      <li><div><h3>Launch it in VS Code</h3><pre>code --extensionDevelopmentPath="$PWD/wagon-wheel" --new-window</pre><p style="margin-top:8px">Run <strong>Wagon Wheel: Check Setup</strong> to confirm both CLIs are installed and signed in (no model calls), then <strong>Wagon Wheel: New Room</strong> or <strong>Wagon Wheel: Join Existing Conversations</strong> from the Command Palette. A short walkthrough is under <em>Help → Welcome</em>. Set <code>wagonWheel.userName</code> if the agents should know you by a different name.</p></div></li>
     </ol>
   </section>
 
@@ -256,9 +259,13 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <div>
         <p class="intro" style="margin-bottom:14px">Proven so far:</p>
         <ul>
-          <li><span class="pill ok">tested</span> Routing, catch-up delivery, hop cap and two-sided history (19 automated tests)</li>
+          <li><span class="pill ok">tested</span> Routing, typed requests, task limits, Pause and Stop races, shared-history access and setup checks (260 automated tests)</li>
+          <li><span class="pill ok">live</span> Claude asking Codex through the request tool and getting the answer back automatically, with no acknowledgment turns</li>
+          <li><span class="pill ok">live</span> Two named seats on one provider: two Claude Code sessions, and separately two Codex threads, completed a typed hand-off in exactly three turns each</li>
+          <li><span class="pill ok">live</span> The room Claude's tool inventory checked against the real CLI: Read, Glob, Grep and the room tools, nothing else</li>
+          <li><span class="pill ok">live</span> Each agent reading a local session from the other's tool (Claude reading a Codex thread, Codex reading a Claude Code session)</li>
+          <li><span class="pill ok">live</span> Stop and steer against both real CLIs</li>
           <li><span class="pill ok">live</span> Claude joining from a forked session with its memory intact</li>
-          <li><span class="pill ok">live</span> Claude handing off to Codex; per-turn token savings measured</li>
           <li><span class="pill ok">live</span> Live status: thinking, tool steps and writing, from real Claude output</li>
           <li><span class="pill ok">live</span> Attachments: Claude read a pasted screenshot and a Markdown file in one turn</li>
         </ul>
@@ -266,9 +273,9 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <div>
         <p class="intro" style="margin-bottom:14px">Next on the trail:</p>
         <ul>
-          <li><span class="pill next">next</span> A full three-way session with live Codex replies</li>
+          <li><span class="pill next">next</span> Per-agent edit and test permissions, with approvals routed to you (both agents are read-only today)</li>
+          <li><span class="pill next">next</span> More agents in the room: a Gemini CLI adapter ships off by default and has not had a live provider check</li>
           <li><span class="pill next">next</span> Editable agent instructions, names and colours per user</li>
-          <li><span class="pill next">next</span> Per-agent tool levels, with approvals routed to you</li>
           <li><span class="pill next">next</span> Single-agent rooms, packaged install, and a desktop app</li>
         </ul>
       </div>

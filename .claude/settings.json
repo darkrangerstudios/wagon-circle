@@ -9,8 +9,6 @@
       "Edit(README.md)",
       "Edit(AGENTS.md)",
       "Bash(npm test)",
-      "Bash(node test/*)",
-      "Bash(node -e *)",
       "Bash(git status *)",
       "Bash(git log *)",
       "Bash(git diff *)",
@@ -38,7 +36,14 @@
       "Bash(git config user.email*)",
       "Bash(rm -rf *)",
       "mcp__github__merge_pull_request",
-      "mcp__github__delete_file"
+      "mcp__github__delete_file",
+      "Bash(git push *:*)",
+      "Bash(git push *--force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *+*)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .*)",
+      "Bash(git switch *--discard*)"
     ]
   }
 }
