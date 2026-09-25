@@ -17,7 +17,8 @@ function readRoom(file, fsx) {
   // Last activity is the newest message, not the file time: opening and closing a room saves it without activity.
   const t = r.state && Array.isArray(r.state.transcript) ? r.state.transcript : [];
   let last = null;
-  for (let i = t.length - 1; i >= 0 && i >= t.length - 50; i--) if (t[i] && Number.isFinite(t[i].ts)) { last = t[i].ts; break; }
+  // Room notes and seeded history are not activity: a boot can add a note without anyone talking.
+  for (let i = t.length - 1; i >= 0 && i >= t.length - 50; i--) if (t[i] && t[i].from !== 'system' && t[i].kind !== 'history' && Number.isFinite(t[i].ts)) { last = t[i].ts; break; }
   const created = typeof m.createdAt === 'string' && Number.isFinite(Date.parse(m.createdAt)) ? Date.parse(m.createdAt) : null;
   return {
     id: m.id,

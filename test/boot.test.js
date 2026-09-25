@@ -40,7 +40,7 @@ Module._load = function (req, parent, ...a) {
   return realLoad.call(this, req, parent, ...a);
 };
 delete require.cache[require.resolve('../src/extension')];
-const { RoomSession, newMeta } = require('../src/extension');
+const { RoomSession, newMeta, deactivate } = require('../src/extension');
 Module._load = realLoad;
 
 const context = () => ({ globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwboot-')) } });
@@ -148,25 +148,53 @@ test('a booted room holds its cross-window lock until it closes, and a second wi
   assert.ok(!fs.existsSync(lock), 'closing releases it');
 });
 
-test('reopen: a Codex thread that was never written starts fresh when the seat never spoke, and fails when it did', async () => {
-  const noRollout = Object.assign(new Error('Codex room permissions could not be verified: thread/resume failed.'), { roomPermission: true, noRollout: true });
+test('reopen: a Codex thread this room created that was never written starts fresh; spoken, forked or other failures refuse', async () => {
+  const roomLock = require('../src/roomLock');
+  const noRollout = () => Object.assign(new Error('Codex room permissions could not be verified: thread/resume failed.'), { roomPermission: true, noRollout: true });
+  const state = (transcript) => ({ transcript, cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: transcript.length });
+  const refused = async (s) => { const r = await s.boot().then(() => { s.dispose(); return new Error('booted'); }, (e) => e); return r.message; };
   try {
-    resumeFailure = noRollout;
-    const meta = { ...newMeta('closed early'), codexThreadId: 'th-never-written', claudeSessionId: null };
-    const quiet = new RoomSession(context(), meta, { transcript: [{ id: 1, from: 'human', text: 'hi', ts: 1 }, { id: 2, from: 'codex', kind: 'history', text: 'seeded', ts: 2 }], cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: 2 });
+    resumeFailure = noRollout();
+    const quiet = new RoomSession(context(), { ...newMeta('closed early'), codexThreadId: 'th-never-written', codexTypedThreads: ['th-never-written'], claudeSessionId: null },
+      state([{ id: 1, from: 'human', text: 'hi', ts: 1 }, { id: 2, from: 'codex', kind: 'history', text: 'seeded', ts: 2 }]));
     await quiet.boot();
-    assert.notStrictEqual(quiet.slots.codex.seat.sessionId, 'th-never-written', 'a fresh thread replaced the unwritten one');
-    assert.match(quiet.slots.codex.seat.sessionId, /^th-new-/);
-    quiet.dispose();
+    const seat = quiet.slots.codex.seat;
+    assert.match(seat.sessionId, /^th-new-/, 'a fresh thread replaced the unwritten one');
+    assert.deepStrictEqual(seat.typedThreads, ['th-never-written', seat.sessionId]);
+    assert.strictEqual(seat.typed, true);
+    assert.ok(quiet.room.state.transcript.some((e) => e.from === 'system' && /was never saved \(it had no turns yet\)/.test(e.text)), 'the person is told');
+    const again = new RoomSession(context(), { ...newMeta('other room'), codexThreadId: 'th-never-written', codexTypedThreads: ['th-never-written'] }, state([]));
+    resumeFailure = null;
+    await again.boot(); // the old id was released, so another room may bind it
+    again.dispose(); quiet.dispose();
 
-    const meta2 = { ...newMeta('talked'), codexThreadId: 'th-lost', claudeSessionId: null };
-    const spoke = new RoomSession(context(), meta2, { transcript: [{ id: 1, from: 'codex', text: 'an answer', ts: 1 }], cursors: { claude: 0, codex: 1 }, lastTargets: ['codex'], seq: 1 });
-    const r1 = await spoke.boot().then(() => { spoke.dispose(); return new Error('booted'); }, (e) => e); // never leave a live room behind
-    assert.match(r1.message, /thread\/resume failed/, 'history was expected: refuse instead of starting over');
+    resumeFailure = noRollout();
+    const spokeCtx = context();
+    const spoke = new RoomSession(spokeCtx, { ...newMeta('talked'), codexThreadId: 'th-lost', codexTypedThreads: ['th-lost'], claudeSessionId: null },
+      state([{ id: 1, from: 'codex', text: 'an answer', ts: 1 }]));
+    assert.match(await refused(spoke), /thread\/resume failed/, 'history was expected: refuse instead of starting over');
+    assert.ok(!fs.existsSync(roomLock.lockPath(spoke.file)), 'a room that failed to start releases its lock');
+
+    const forked = new RoomSession(context(), { ...newMeta('forked'), codexThreadId: 'th-fork', codexTypedThreads: ['th-fork'], forkedFrom: 'th-users-own', claudeSessionId: null }, state([]));
+    assert.match(await refused(forked), /thread\/resume failed/, 'a thread forked from the person\'s own session is never replaced');
+
+    const continued = new RoomSession(context(), { ...newMeta('continued'), codexThreadId: 'th-external', claudeSessionId: null }, state([]));
+    assert.match(await refused(continued), /thread\/resume failed/, 'a continued external thread (not created by this room) is never replaced');
 
     resumeFailure = Object.assign(new Error('Codex room permissions could not be verified: thread/resume failed.'), { roomPermission: true, noRollout: false });
-    const other = new RoomSession(context(), { ...newMeta('other'), codexThreadId: 'th-x', claudeSessionId: null }, { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: 0 });
-    const r2 = await other.boot().then(() => { other.dispose(); return new Error('booted'); }, (e) => e);
-    assert.match(r2.message, /thread\/resume failed/, 'other resume failures still fail');
+    const other = new RoomSession(context(), { ...newMeta('other'), codexThreadId: 'th-x', codexTypedThreads: ['th-x'], claudeSessionId: null }, state([]));
+    assert.match(await refused(other), /thread\/resume failed/, 'other resume failures still fail');
   } finally { resumeFailure = null; }
+});
+
+test('closing the window (deactivate) releases the locks of rooms this window has open', async () => {
+  const roomLock = require('../src/roomLock');
+  const s = new RoomSession(context(), newMeta('open at shutdown'), null);
+  await s.boot();
+  assert.ok(fs.existsSync(roomLock.lockPath(s.file)));
+  // boot() alone does not register the room as open (attach does); register it the way openSession does.
+  s.attach({ webview: { onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: () => {} });
+  deactivate();
+  assert.ok(!fs.existsSync(roomLock.lockPath(s.file)));
+  s.dispose();
 });

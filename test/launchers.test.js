@@ -176,9 +176,11 @@ test('last activity is the newest message, so opening and closing a room without
   writeRoom(dir, 1, { name: 'talked recently' }, t - 86400e3, [{ from: 'human', text: 'x', ts: t - 60e3 }]);
   writeRoom(dir, 2, { name: 'reopened, no messages' }, t, [{ from: 'human', text: 'x', ts: t - 7200e3 }]); // just saved on close
   writeRoom(dir, 3, { name: 'never used', createdAt: '2026-09-20T09:00:00Z' }, t, []);
+  writeRoom(dir, 4, { name: 'only a boot note since' }, t, [{ from: 'human', text: 'x', ts: t - 3 * 86400e3 }, { from: 'system', text: 'Gemini cannot reload…', ts: t }, { from: 'codex', kind: 'history', text: 'seed', ts: t }]);
   const rooms = roomsView.listRooms(dir);
-  assert.deepStrictEqual(rooms.map((r) => r.name), ['talked recently', 'reopened, no messages', 'never used']);
-  assert.strictEqual(rooms[2].updatedAt, Date.parse('2026-09-20T09:00:00Z'), 'no messages: the creation time');
+  assert.deepStrictEqual(rooms.map((r) => r.name), ['talked recently', 'reopened, no messages', 'only a boot note since', 'never used']);
+  assert.strictEqual(rooms[3].updatedAt, Date.parse('2026-09-20T09:00:00Z'), 'no messages: the creation time');
+  assert.strictEqual(rooms[2].updatedAt, t - 3 * 86400e3, 'room notes and seeded history are not activity');
 });
 
 test('room names and seat labels lose control, separator and bidi-override characters; very large files are not parsed', () => {
@@ -244,4 +246,18 @@ test('closing a room panel clears its open mark in the list', async () => {
   assert.strictEqual(tree.getTreeItem(tree.getChildren()[0]).iconPath.id, 'circle-filled');
   rec.panels[0].close(); // VS Code's onDidDispose
   assert.strictEqual(tree.getTreeItem(tree.getChildren()[0]).iconPath.id, 'comment-discussion');
+});
+
+test('the rooms list emitter is disposed with the extension', () => {
+  const { rec, context } = loadExtension();
+  assert.ok(context.subscriptions.includes(rec.trees['wagonWheel.rooms'].emitter));
+});
+
+test('roomLock: pid 0 or negative never counts as a live owner', () => {
+  const dir = tmp(), file = path.join(dir, `${id(1)}.json`), old = Date.now() - 60e3;
+  for (const pid of [0, -1]) {
+    fs.writeFileSync(roomLock.lockPath(file), JSON.stringify({ pid }));
+    fs.utimesSync(roomLock.lockPath(file), old / 1000, old / 1000);
+    assert.strictEqual(roomLock.holder(file, { self: 7, kill: () => {} }), null, `pid ${pid}`);
+  }
 });

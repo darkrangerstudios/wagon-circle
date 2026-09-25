@@ -295,9 +295,12 @@ class RoomSession {
         try { made = await this.makeCodex(r, action, p.sessionId || (join && join.id)); }
         catch (e) {
           // Codex saves a thread only after its first turn, so a room closed before this seat ever took one has
-          // nothing to resume. Start a fresh thread then. A seat that did speak keeps failing: never drop history.
-          if (!(action === 'continue' && e.noRollout && !this.seatSpoke(p.id)) || this.disposed) throw e;
+          // nothing to resume. Only a thread this room created (typedThreads, not forked or continued from the
+          // person's own sessions) that never spoke here may be replaced; everything else keeps failing.
+          const ours = (p.typedThreads || []).includes(p.sessionId) && !p.forkFrom;
+          if (!(action === 'continue' && e.noRollout && ours && !this.seatSpoke(p.id)) || this.disposed) throw e;
           log(`${p.id}: its saved Codex thread was never written (no turn yet); starting a fresh thread`);
+          this.pendingNotes = [...(this.pendingNotes || []), `${p.label}'s earlier Codex thread was never saved (it had no turns yet), so ${p.label} started a new one.`];
           action = 'new'; made = await this.makeCodex(r, 'new');
         }
         if (this.disposed) return;
@@ -801,7 +804,7 @@ async function openRoomById(context, id) {
   const live = [...sessions].find((x) => x.meta.id === id && x.panel);
   if (live) { live.panel.reveal(); return; }
   const file = path.join(context.globalStorageUri.fsPath, 'rooms', `${id}.json`);
-  if (roomLock.holder(file)) { refreshRooms(); vscode.window.showInformationMessage('Wagon Wheel: this room is open in another VS Code window. Switch to that window to use it.'); return; }
+  if (roomLock.holder(file)) { refreshRooms(); vscode.window.showInformationMessage(`Wagon Wheel: this room is open in another VS Code window. Switch to that window to use it. If no window has it open, delete ${id}.lock in the Wagon Wheel rooms folder.`); return; }
   let saved;
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { refreshRooms(); vscode.window.showWarningMessage(`Wagon Wheel: that room could not be read (${e.code || e.message}).`); return; }
   if (!saved || !saved.meta || saved.meta.id !== id) { vscode.window.showWarningMessage('Wagon Wheel: that file is not a saved room.'); return; }

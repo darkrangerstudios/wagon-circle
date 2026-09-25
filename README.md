@@ -55,7 +55,7 @@ You need VS Code 1.90 or later and, for each kind of seat you want, that provide
    ```
    code --install-extension wagon-wheel-0.5.4.vsix
    ```
-3. Start a room from any of these: the wheel icon in the Activity Bar (a side panel with New Room, Join Existing Conversations and your saved rooms), the wheel button in the editor title bar, **Wagon Wheel** in the status bar, or **Wagon Wheel: New Room** in the Command Palette. Settings can hide the editor and status bar buttons. The side panel lists saved rooms by their last message; a room open in another VS Code window is marked there and won't open twice. The first room checks each CLI it needs and tells you what is missing before any turn is spent. **Wagon Wheel: Check Setup** runs the same check any time.
+3. Start a room from any of these: the wheel icon in the Activity Bar (a side panel with New Room, Join Existing Conversations and your saved rooms), the wheel button in the editor title bar, **Wagon Wheel** in the status bar, or **Wagon Wheel: New Room** in the Command Palette. Settings can hide the editor and status bar buttons. The side panel lists saved rooms by their last message; a room open in another VS Code window is marked there and won't open twice. Codex saves a thread only after its first turn, so if you close a room before its Codex seat ever answered, reopening starts that seat on a fresh thread and says so. A seat that did answer, or was forked from one of your own sessions, is never silently replaced. The first room checks each CLI it needs and tells you what is missing before any turn is spent. **Wagon Wheel: Check Setup** runs the same check any time.
 
 Tested on macOS. Linux should work but is untested; Windows is not supported yet. Logs appear in Output → Wagon Wheel.
 
