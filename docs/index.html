@@ -180,7 +180,7 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
   <main id="top">
     <div class="hero">
       <div>
-        <div class="eyebrow">VS Code extension · prototype 0.5.2</div>
+        <div class="eyebrow">VS Code extension · prototype 0.5.3</div>
         <h1>Circle the wagons.</h1>
         <p class="lede">One room where you and your local coding agents work the same problem in the same conversation. Named Claude Code and Codex seats ask each other for help through a typed request and bring the answers back on their own, without you relaying or typing “continue”.</p>
         <div class="cta">
@@ -394,11 +394,12 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
 
   <section id="start" aria-labelledby="start-h">
     <h2 id="start-h">Get started</h2>
-    <p class="intro">Wagon Wheel is an early prototype and isn't on the VS Code Marketplace yet. Run it from source:</p>
+    <p class="intro">Wagon Wheel is an early prototype and isn't on the VS Code Marketplace yet. Each release ships an installable <code>.vsix</code>. Tested on macOS; Linux is untested and Windows isn't supported yet.</p>
     <ol class="steps">
-      <li><div><h3>Have both CLIs signed in</h3><p>Install <a href="https://code.claude.com/docs/en/overview">Claude Code</a> and the <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a>, and sign each in to your own subscription. Wagon Wheel uses them as-is.</p></div></li>
-      <li><div><h3>Clone the repo</h3><pre>git clone https://github.com/darkrangerstudios/wagon-wheel.git</pre></div></li>
-      <li><div><h3>Launch it in VS Code</h3><pre>code --extensionDevelopmentPath="$PWD/wagon-wheel" --new-window</pre><p style="margin-top:8px">Run <strong>Wagon Wheel: Check Setup</strong> to confirm both CLIs are installed and signed in (no model calls), then <strong>Wagon Wheel: New Room</strong> or <strong>Wagon Wheel: Join Existing Conversations</strong> from the Command Palette. A short walkthrough is under <em>Help → Welcome</em>. Set <code>wagonWheel.userName</code> if the agents should know you by a different name.</p></div></li>
+      <li><div><h3>Have your CLIs signed in</h3><p>Install <a href="https://code.claude.com/docs/en/setup">Claude Code</a>, the <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a> or both, and sign each in to your own subscription. Wagon Wheel uses them as-is and never installs or signs in anything for you.</p></div></li>
+      <li><div><h3>Install the extension</h3><p>Download <code>wagon-wheel-0.5.3.vsix</code> from the <a href="https://github.com/darkrangerstudios/wagon-wheel/releases/latest">latest release</a>, then install it from the Extensions view (<em>⋯ → Install from VSIX…</em>) or a terminal:</p><pre>code --install-extension wagon-wheel-0.5.3.vsix</pre></div></li>
+      <li><div><h3>Open a room</h3><p>Run <strong>Wagon Wheel: New Room</strong> from the Command Palette. The first room checks each CLI it needs and says what is missing before any turn is spent. A short walkthrough is under <em>Help → Welcome</em>. Set <code>wagonWheel.userName</code> if the agents should know you by a different name.</p></div></li>
+      <li><div><h3>Tell us what broke</h3><p><strong>Wagon Wheel: Report a Problem</strong> opens a prefilled GitHub issue with versions and your room's seats and models. It never includes your conversation, prompts, files or session contents, and nothing is sent until you submit it. Prefer to build from source? Clone the repo and run <code>code --extensionDevelopmentPath="$PWD/wagon-wheel"</code>.</p></div></li>
     </ol>
   </section>
 </div>
@@ -407,12 +408,12 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
 <div class="wrap">
   <section id="status" aria-labelledby="status-h">
     <h2 id="status-h">Where it stands</h2>
-    <p class="intro">Prototype 0.5.2. Every row below is something that was actually run; the last two are the honest gaps.</p>
+    <p class="intro">Prototype 0.5.3. Every row below is something that was actually run; the last two are the honest gaps.</p>
     <div class="tablewrap left">
       <table>
         <thead><tr><th>Check</th><th>Result</th><th>Status</th></tr></thead>
         <tbody>
-          <tr><td>Offline suite (fake agents and transports)</td><td>260/260: routing, typed requests and tasks, allowance and Pause/Stop races, the host scheduler on a fake clock, typed tools at both process boundaries, shared-history access, setup checks, delivery receipts, diff path containment, attachments, version guard</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Offline suite (fake agents and transports)</td><td>276/276: routing, typed requests and tasks, allowance and Pause/Stop races, the host scheduler on a fake clock, typed tools at both process boundaries, shared-history access, setup checks, delivery receipts, diff path containment, attachments, version guard</td><td><span class="pill ok">passed</span></td></tr>
           <tr><td>Live typed hand-off, Claude → Codex</td><td>One request, one automatic answer, <code>finish_task</code>, no acknowledgment turns, against both real CLIs</td><td><span class="pill ok">passed</span></td></tr>
           <tr><td>Two seats, same provider</td><td>Two Claude Code sessions, and separately two Codex threads, each completed a typed hand-off in exactly three turns; distinct processes and session IDs, usage attributed per seat, reopen restored both</td><td><span class="pill ok">passed</span></td></tr>
           <tr><td>Claude's effective toolset</td><td>Real CLI init inventory equals Read, Glob, Grep plus the room tools; a shell attempt refused</td><td><span class="pill ok">passed</span></td></tr>
@@ -422,7 +423,8 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
           <tr><td>Usage breakdown</td><td>Real local logs broken down by model, lane, thinking, cache tier and tool call; Codex rollout shapes checked on a Mac</td><td><span class="pill ok">passed</span></td></tr>
           <tr><td>Attachments and live status</td><td>Claude read a pasted screenshot and a Markdown file in one turn; thinking, tool steps and writing shown from real output</td><td><span class="pill ok">passed</span></td></tr>
           <tr><td>Webview render + injection probe</td><td>an <code>&lt;img onerror&gt;</code> probe displayed as literal text; the reset-credit spend call refused before reaching Codex</td><td><span class="pill ok">passed</span></td></tr>
-          <tr><td>Click-through inside VS Code</td><td>Native runs cover New Room, Pause/Resume/Stop, reload and the three-seat layout; the Continue/Fork pickers are covered offline only</td><td><span class="pill wait">partial</span></td></tr>
+          <tr><td>Installable package</td><td>The 0.5.3 <code>.vsix</code> installed into a clean VS Code profile with only runtime files; its walkthrough ran Check Setup against the real CLIs and opened Report a Problem, which showed exactly what would be sent</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Click-through inside VS Code</td><td>Native runs cover New Room, Pause/Resume/Stop, reload and the three-seat layout; the Continue/Fork pickers and the first-run check on New Room are covered offline only</td><td><span class="pill wait">partial</span></td></tr>
           <tr><td>More providers (Gemini CLI over ACP)</td><td>Adapter ships off by default, tested against a fake agent over real stdio; no live provider check</td><td><span class="pill wait">off by default</span></td></tr>
         </tbody>
       </table>

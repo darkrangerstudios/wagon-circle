@@ -17,6 +17,7 @@ const { HistorySources, LOCAL_ONLY } = require('./historySources');
 const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
 const setup = require('./setup');
 const { LocalUsage } = require('./localUsage');
+const feedback = require('./feedback');
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -43,7 +44,67 @@ const roomClaims = new Map(); // one writer per saved room in this extension hos
 let lastEditor = null; // last code editor used; the room panel steals focus, so track it
 
 let output;
-const log = (s) => output && output.appendLine(`[${new Date().toISOString()}] ${s}`);
+const recentLog = []; // last lines of this window's log, kept in memory for Report a Problem (opt-in, scrubbed)
+const log = (s) => {
+  const line = `[${new Date().toISOString()}] ${s}`;
+  recentLog.push(line); if (recentLog.length > 50) recentLog.shift();
+  if (output) output.appendLine(line);
+};
+const hostLabel = () => (vscode.env.remoteName ? `remote (${vscode.env.remoteName})` : 'this computer');
+const PROVIDER_NAMES = { claude: 'Claude Code', codex: 'Codex CLI' };
+const setupLine = (p) => `${PROVIDER_NAMES[p.provider]}: ${p.installation === 'available' ? `v${p.version}` : p.installation}${p.installation === 'available' ? `, ${p.authentication === 'present' ? 'signed in' : p.authentication === 'signed-out' ? 'signed out' : 'sign-in unknown'}` : ''}${p.issue ? ` (${p.issue})` : ''}`;
+
+// First New Room with a given provider: check its CLI before any turn is spent. Returns false to cancel the room.
+async function firstRunCheck(context, seats) {
+  if (!vscode.workspace.isTrusted) return true; // Check Setup refuses untrusted workspaces; the room reports its own errors
+  const passed = context.globalState.get(setup.PASSED_KEY) || {};
+  const need = setup.firstRunProviders(seats, passed);
+  if (!need.length) return true;
+  const s = settings(), exes = { claude: s.claude.path, codex: s.codexExe };
+  const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: checking your agents (first run only)' },
+    () => setup.checkSetup({ trusted: true, executionHost: hostLabel(), executables: Object.fromEntries(need.map((p) => [p, exes[p]])) }));
+  for (const p of r.providers) log(`first-run setup: ${setupLine(p)} [${p.executable}]`);
+  const ok = r.providers.filter(setup.passes);
+  if (ok.length) await context.globalState.update(setup.PASSED_KEY, { ...passed, ...Object.fromEntries(ok.map((p) => [p.provider, true])) });
+  const bad = r.providers.filter(setup.blocking);
+  if (!bad.length) return true;
+  const guides = bad.map((p) => `Open ${PROVIDER_NAMES[p.provider]} guide`);
+  const pick = await vscode.window.showWarningMessage(`Not ready yet: ${bad.map(setupLine).join('; ')}.`,
+    { modal: true, detail: `Seats that use ${bad.map((p) => PROVIDER_NAMES[p.provider]).join(' or ')} will not be able to answer until the CLI is installed and signed in on ${r.executionHost}. Nothing was installed or signed in for you.` },
+    'Create room anyway', ...guides);
+  const hit = bad[guides.indexOf(pick)];
+  if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide));
+  return pick === 'Create room anyway';
+}
+
+// Report a Problem: versions and the focused room's roster, plus scrubbed log lines only if the person opts in.
+async function reportProblem() {
+  const s = settings();
+  const [claudeV, codexV] = await Promise.all([setup.cliVersion('claude', s.claude.path), setup.cliVersion('codex', s.codexExe)]);
+  const open = [...sessions], room = open.find((x) => x.panel && x.panel.active) || open[open.length - 1];
+  let seats = [];
+  if (room) {
+    let controls = {}; try { controls = room.room ? room.controls() : {}; } catch { /* roster only */ }
+    seats = (room.meta.participants || room.meta.seats || []).map((p) => ({ id: p.id, label: p.label, provider: p.provider,
+      model: (controls[p.id] && controls[p.id].model) || p.model || null, effort: (controls[p.id] && controls[p.id].effort) || p.effort || null }));
+  }
+  const pkg = require('../package.json');
+  const facts = { extension: pkg.version, vscode: vscode.version, platform: `${process.platform} ${process.arch}`, remote: vscode.env.remoteName || null,
+    clis: [{ name: 'Claude Code CLI', version: /^\d/.test(claudeV) ? claudeV : null, state: claudeV }, { name: 'Codex CLI', version: /^\d/.test(codexV) ? codexV : null, state: codexV }],
+    seats, log: recentLog.slice() };
+  const who = { home: os.homedir(), user: os.userInfo().username };
+  const preview = feedback.issueUrl(facts, { includeLog: true, ...who }).logLines;
+  const WITH = 'Open issue with log lines', WITHOUT = 'Open issue';
+  const detail = ['This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.',
+    '', `Included: Wagon Wheel ${facts.extension}, VS Code ${facts.vscode}, ${facts.platform}, Claude Code CLI ${claudeV}, Codex CLI ${codexV}, and the room's seats and models.`,
+    'Never included: your conversation, prompts, files or session contents.',
+    ...(preview.length ? ['', `"${WITH}" also adds these ${preview.length} lines (home folder, emails and key-like text removed):`, ...preview] : [])].join('\n');
+  const pick = await vscode.window.showInformationMessage('Wagon Wheel: Report a Problem', { modal: true, detail }, WITHOUT, ...(preview.length ? [WITH] : []));
+  if (!pick) return;
+  const { url } = feedback.issueUrl(facts, { includeLog: pick === WITH, ...who });
+  log(`report a problem: opened issue form (${pick === WITH ? 'with' : 'without'} log lines)`);
+  vscode.env.openExternal(vscode.Uri.parse(url));
+}
 
 function firstExisting(candidates) {
   for (const c of candidates) if (c && (c.indexOf('/') === -1 || fs.existsSync(c))) return c;
@@ -765,6 +826,7 @@ function activate(context) {
     if (!name) return;
     const meta = newMeta(name), seats = await chooseParticipants(meta);
     if (!seats) return;
+    if (!(await firstRunCheck(context, seats))) return;
     meta.seats = seats;
     await openSession(context, new RoomSession(context, meta, null), {});
   }));
@@ -801,18 +863,25 @@ function activate(context) {
   // First-run check (setup.js): CLI versions and sign-in on this host. No model calls, no installs, no logins.
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.checkSetup', async () => {
     const s = settings();
-    const r = await setup.checkSetup({ trusted: vscode.workspace.isTrusted, executionHost: vscode.env.remoteName ? `remote (${vscode.env.remoteName})` : 'this computer', executables: { claude: s.claude.path, codex: s.codexExe } });
+    const r = await setup.checkSetup({ trusted: vscode.workspace.isTrusted, executionHost: hostLabel(), executables: { claude: s.claude.path, codex: s.codexExe } });
     if (r.state === 'workspace-untrusted') { vscode.window.showWarningMessage('Wagon Wheel: trust this workspace before checking the CLIs.'); return; }
-    const W = { claude: 'Claude Code', codex: 'Codex CLI' };
-    const line = (p) => `${W[p.provider]}: ${p.installation === 'available' ? `v${p.version}` : p.installation}${p.installation === 'available' ? `, ${p.authentication === 'present' ? 'signed in' : p.authentication === 'signed-out' ? 'signed out' : 'sign-in unknown'}` : ''}${p.issue ? ` (${p.issue})` : ''}`;
+    const W = PROVIDER_NAMES, line = setupLine;
     for (const p of r.providers) log(`setup: ${line(p)} [${p.executable}]`);
     const msg = `Wagon Wheel on ${r.executionHost}: ${r.providers.map(line).join('; ')}. ${r.note}`;
     const bad = r.providers.filter((p) => p.installation !== 'available' || p.authentication !== 'present');
     // The walkthrough step completes only on a passing check, not on running the command.
     vscode.commands.executeCommand('setContext', 'wagonWheel.setupOk', !bad.length && r.providers.length > 0);
+    // A full pass also counts as the first-run check for both providers.
+    const passedNow = r.providers.filter(setup.passes);
+    if (passedNow.length) await context.globalState.update(setup.PASSED_KEY, { ...(context.globalState.get(setup.PASSED_KEY) || {}), ...Object.fromEntries(passedNow.map((p) => [p.provider, true])) });
     if (!bad.length) vscode.window.showInformationMessage(msg);
     else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide)); }
   }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.reportProblem', () => reportProblem().catch((e) => {
+    log(`report a problem: ${e.message}`);
+    vscode.window.showErrorMessage(`Wagon Wheel: could not build the report (${e.message}). You can still open an issue at ${feedback.ISSUES_URL}.`);
+  })));
 
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.openRoom', async () => {
     const dir = path.join(context.globalStorageUri.fsPath, 'rooms');
@@ -828,4 +897,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants, firstRunCheck, reportProblem };

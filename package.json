@@ -3,7 +3,7 @@
   "displayName": "Wagon Wheel",
   "icon": "media/icon.png",
   "description": "One VS Code room for your local Claude Code and Codex sessions. Named participants run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -29,6 +29,10 @@
       {
         "command": "wagonWheel.checkSetup",
         "title": "Wagon Wheel: Check Setup"
+      },
+      {
+        "command": "wagonWheel.reportProblem",
+        "title": "Wagon Wheel: Report a Problem"
       }
     ],
     "configuration": [
@@ -225,7 +229,7 @@
           {
             "id": "setup",
             "title": "Get your agents ready",
-            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonWheel.checkSetup)",
+            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonWheel.checkSetup)\nSomething not working? [Report a problem](command:wagonWheel.reportProblem)",
             "media": {
               "markdown": "walkthrough/setup.md"
             },
@@ -265,7 +269,8 @@
     ]
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "package": "npx --yes @vscode/vsce@4.0.0 package"
   },
   "repository": {
     "type": "git",

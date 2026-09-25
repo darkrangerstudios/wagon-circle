@@ -1,0 +1,11 @@
+# Only what the extension runs ships in the .vsix: src/, media/, walkthrough/, package.json, README, LICENSE.
+test/**
+docs/**
+.github/**
+.claude/**
+.vscode/**
+AGENTS.md
+**/*.vsix
+**/.DS_Store
+.gitignore
+.vscodeignore

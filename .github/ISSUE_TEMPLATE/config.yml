@@ -1,0 +1,6 @@
+# Blank issues stay enabled: Wagon Wheel's Report a Problem command opens a prefilled blank issue.
+blank_issues_enabled: true
+contact_links:
+  - name: How Wagon Wheel works
+    url: https://darkrangerstudios.github.io/wagon-wheel/
+    about: Architecture, safety rules and setup, before you file.

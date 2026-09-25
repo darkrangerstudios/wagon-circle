@@ -14,7 +14,8 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
 | `src/prompts.js` | The standing brief each agent gets (typed and untyped variants). |
 | `src/sessionHistory.js` | Access control for shared history: host-only binding and readers, rebinding revokes grants, text-only Claude and Codex readers. |
 | `src/historySources.js` | Local history as room context: human-added sources, shared working sessions, the read_session_history tool's output. Local sessions only. |
-| `src/setup.js` | Read-only CLI checks for first run (version, sign-in), no model calls. |
+| `src/setup.js` | Read-only CLI checks (version, sign-in), no model calls; the first-run rules New Room uses (check each seat's provider once). |
+| `src/feedback.js` | Report a Problem: builds the prefilled GitHub issue URL from versions and the roster, plus opt-in scrubbed log lines. Pure; the command in `extension.js` gathers facts and opens the URL. |
 | `src/localUsage.js` | This computer's token use from the CLIs' own logs (`~/.claude/projects`, `~/.codex/sessions`): incremental, read-only, no model calls. Totals plus the breakdown by model, lane (main or subagent), thinking, cache tier and tool call. Unrecognised formats report unknown, never zero. |
 | `src/claudeUsage.js` | Claude plan limits from the CLI's headless `/usage` (session, week, per model). |
 | `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`), typed tools (`dynamicTools` on `thread/start`, answered from `item/tool/call`). Holds the forbidden-method blocklist. |
@@ -40,6 +41,7 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
   - `node test/live-stop.js <scratchCwd>` (Stop and steer against both real CLIs; run after touching either client's lifecycle)
   - `node test/live-tasks.js <scratchCwd>` (typed request → answer → finish_task with both real CLIs; run after touching tools, tasks or prompts)
   - `node test/live-history.js <scratchCwd>` (each agent reads a local session of the other provider through read_session_history)
+- Package: `npm run package` builds `wagon-wheel-<version>.vsix` with a pinned `@vscode/vsce` via npx (no dev dependency). `.vscodeignore` keeps tests, the site and agent notes out; `test/package.test.js` guards it. Install-check with `code --user-data-dir <tmp> --extensions-dir <tmp> --install-extension <vsix>` so your own profile is untouched.
 - UI: launch an Extension Development Host with `code --extensionDevelopmentPath="$PWD" --new-window`. Press Cmd+R in that window to reload after changes. `package.json` `version` and `EXPECT` in `media/room.js` must match (a test enforces this); bump both together.
 
 ## Guardrails (do not weaken without the repo owner's explicit OK)
@@ -49,6 +51,7 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
 - **Forbidden methods** in `codexClient.js` (quota reset-credit spend, logout/login, thread delete) stay blocked.
 - **Untrusted output.** The webview renders model output with `textContent` only, under a strict CSP. Never use `innerHTML` with agent or file content.
 - **Fork by default.** Joining an existing Codex thread or Claude session forks it. The only way to write to an existing conversation is the human choosing Continue in the Working session picker, after a warning that Wagon Wheel cannot see whether another window has it open. Never continue a session implicitly.
+- **Problem reports carry no content.** Report a Problem may include versions, the roster and, only on opt-in after the person sees them, scrubbed log lines. Never add transcript, prompt, attachment, file or session content, and never send anything: the person submits on GitHub.
 - **Relay labels.** Agent text is always delivered as "relayed by Wagon Wheel, not <human>". Only the human's messages carry authority.
 
 ## Conventions

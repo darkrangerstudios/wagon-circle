@@ -4,7 +4,7 @@
 
 > One room for your local coding sessions to work together.
 
-**Prototype 0.5.2.** Site: https://darkrangerstudios.github.io/wagon-wheel/
+**Prototype 0.5.3.** Site: https://darkrangerstudios.github.io/wagon-wheel/
 
 One VS Code room where you and named local Claude Code or Codex sessions talk in a single timeline. Multiple participants can use the same provider.
 
@@ -47,11 +47,26 @@ The custom room roster supports multiple local Claude Code/Codex sessions. Routi
 - A hard blocklist stops the room from ever calling `account/rateLimitResetCredit/consume`, logout/login or thread delete.
 - The webview renders agent output with `textContent` only, under a strict CSP: nonce'd script, no network, no inline handlers.
 
-## Try it
+## Install
+You need VS Code 1.90 or later and, for each kind of seat you want, that provider's CLI installed and signed in with your own account: [Claude Code](https://code.claude.com/docs/en/setup) and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Wagon Wheel never installs or signs in anything for you.
+
+1. Download `wagon-wheel-0.5.3.vsix` from the [latest release](https://github.com/darkrangerstudios/wagon-wheel/releases/latest).
+2. Install it, either from the Extensions view (**⋯ → Install from VSIX…**) or from a terminal:
+   ```
+   code --install-extension wagon-wheel-0.5.3.vsix
+   ```
+3. Run **Wagon Wheel: New Room** from the Command Palette. The first room checks each CLI it needs and tells you what is missing before any turn is spent. **Wagon Wheel: Check Setup** runs the same check any time.
+
+Tested on macOS. Linux should work but is untested; Windows is not supported yet. Logs appear in Output → Wagon Wheel.
+
+## Report a problem
+Run **Wagon Wheel: Report a Problem** from the Command Palette. It opens a prefilled GitHub issue in your browser with the Wagon Wheel, VS Code and CLI versions and the seats and models in your room. It never includes your conversation, prompts, files or session contents. You can add the last ten log lines: you see them first, with your home folder, emails and key-like text removed, and nothing is sent until you submit the issue on GitHub. Ideas are welcome as [issues](https://github.com/darkrangerstudios/wagon-wheel/issues/new/choose) too.
+
+## Run from source
 ```
 "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --extensionDevelopmentPath="$HOME/code/wagon-wheel" --new-window
 ```
-Then, from the Command Palette, run **Wagon Wheel: New Room**, **Wagon Wheel: Join Existing Conversations (fork)** or **Wagon Wheel: Reopen a Room**. Logs appear in Output → Wagon Wheel.
+`npm run package` builds the `.vsix` with a pinned `@vscode/vsce`; `.vscodeignore` keeps tests, the site and agent notes out of it.
 
 ## Tests
 - `npm test` runs every offline suite with fake agents and transports (router, typed requests and tasks, allowances and Pause/Stop races, the host scheduler on a fake clock, typed tools at both process boundaries, shared history access, setup checks, Stop and steer, delivery receipts, diff path containment, commands, diffs, IDE context, attachments, Codex activity replay, version guard).
@@ -71,7 +86,7 @@ Settings (search "Wagon Wheel" in VS Code settings) come in four short groups: *
 - Live mirroring into the ChatGPT app or the Codex panel. That would need Codex's shared app-server daemon, which OpenAI's desktop app deliberately won't attach to locally.
 - Write or shell tools for either agent.
 - Markdown beyond code fences, and images.
-- Packaging, Windows, and multiple rooms sharing one Codex process.
+- A Marketplace listing, Windows support, and multiple rooms sharing one Codex process.
 - Participants load the project instructions in their working folder (for example a large CLAUDE.md or AGENTS.md), which costs tokens on every turn.
 
 ## License

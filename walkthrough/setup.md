@@ -2,7 +2,7 @@
 
 Wagon Wheel uses the Claude Code and Codex command-line tools. Their desktop apps are optional.
 
-Run the setup check from this IDE window. It checks the host where the extension runs: a local install does not automatically exist inside SSH, WSL or a development container.
+Your first New Room runs this check for each CLI it needs. You can also run it any time from this IDE window. It checks the host where the extension runs: a local install does not automatically exist inside SSH, WSL or a development container.
 
 If a tool is missing, follow its official guide or select an existing executable in the extension settings:
 

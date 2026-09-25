@@ -5,6 +5,10 @@ const GUIDES = Object.freeze({
   claude: 'https://code.claude.com/docs/en/setup',
   codex: 'https://learn.chatgpt.com/docs/codex/cli',
 });
+const VERSION = Object.freeze({
+  codex: /^codex-cli\s+(\d+\.\d+\.\d+)(?:\S*)$/,
+  claude: /^(\d+\.\d+\.\d+)\s+\(Claude Code\)$/,
+});
 function runProbe(executable, args) {
   return new Promise((resolve) => {
     let child;
@@ -32,10 +36,7 @@ async function checkProvider(provider, executable, { run = runProbe } = {}) {
   try { version = await run(executable, ['--version']); }
   catch { return { ...result, issue: 'check-failed' }; }
   if (version.code !== 0) return { ...result, installation: version.code === 'ENOENT' ? 'missing' : 'unknown', issue: failure(version) };
-  const text = String(version.stdout || '').trim();
-  const pattern = provider === 'codex' ? /^codex-cli\s+(\d+\.\d+\.\d+)(?:\S*)$/
-    : /^(\d+\.\d+\.\d+)\s+\(Claude Code\)$/;
-  const match = text.match(pattern);
+  const match = String(version.stdout || '').trim().match(VERSION[provider]);
   if (!match) return { ...result, issue: 'unrecognized-version' };
   result.installation = 'available'; result.version = match[1];
   let auth;
@@ -66,4 +67,24 @@ async function checkSetup({ executables, executionHost, trusted }, options = {})
     && p.authentication === 'present') ? 'credentials-present' : 'needs-attention',
   note: 'Sign-in status does not verify quota, model access, or working-session tools.' };
 }
-module.exports = { checkProvider, checkSetup, runProbe, GUIDES };
+// Version only, for problem reports: no sign-in probe, no raw output returned.
+async function cliVersion(provider, executable, { run = runProbe } = {}) {
+  if (!Object.hasOwn(VERSION, provider) || typeof executable !== 'string' || !executable.trim() || executable.includes('\0')) return 'unknown';
+  let r;
+  try { r = await run(executable, ['--version']); } catch { return 'unknown'; }
+  if (r.code === 'ENOENT') return 'not found';
+  const m = r.code === 0 && String(r.stdout || '').trim().match(VERSION[provider]);
+  return m ? m[1] : 'unknown';
+}
+
+// First run: check each provider the new room's seats use, once. A provider that passed before is not probed
+// again. Only a missing CLI or an explicit signed-out answer stops a room; an unknown sign-in state does not.
+const PASSED_KEY = 'wagonWheel.setupPassed';
+function firstRunProviders(seats, passed) {
+  const done = passed && typeof passed === 'object' ? passed : {};
+  return [...new Set((seats || []).map((p) => p && p.provider))].filter((p) => Object.hasOwn(GUIDES, p) && done[p] !== true);
+}
+const blocking = (p) => p.installation !== 'available' || p.authentication === 'signed-out';
+const passes = (p) => p.installation === 'available' && p.authentication === 'present';
+
+module.exports = { checkProvider, checkSetup, runProbe, cliVersion, firstRunProviders, blocking, passes, PASSED_KEY, GUIDES };
