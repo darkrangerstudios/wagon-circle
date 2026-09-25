@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/poster.jpg" width="420" alt="Wagon Wheel: a wooden wagon wheel with a circuit-board brain at the hub, over a desert night. AI chat room for engineers. Multiple AI agents, one conversation."></p>
+
 # Wagon Wheel
 
 > One room for your local coding sessions to work together.

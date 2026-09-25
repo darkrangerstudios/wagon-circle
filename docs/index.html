@@ -4,24 +4,28 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wagon Wheel</title>
-<meta name="description" content="One VS Code room for you, Claude and Codex. Both agents run as private child processes: no daemon, no open ports.">
+<meta name="description" content="One VS Code room for you and named local Claude Code and Codex sessions. Private child processes on stdio: no daemon, no open ports.">
 <meta property="og:title" content="Wagon Wheel">
-<meta property="og:description" content="Circle the wagons: one room for you, Claude and Codex, with nothing exposed.">
-<meta property="og:image" content="https://darkrangerstudios.github.io/wagon-wheel/screenshot.png">
+<meta property="og:description" content="AI chat room for engineers. Multiple agents, one conversation, nothing exposed.">
+<meta property="og:image" content="https://darkrangerstudios.github.io/wagon-wheel/og.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="wheel-128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root {
-  color-scheme: dark;
-  --night: #0f1319;
-  --night-2: #151b23;
+  --night: #0b1017;
+  --night-2: #131a23;
   --panel: #1a212b;
   --rule: #2a3340;
   --ink: #e9e4da;
   --muted: #9aa3ad;
   --lantern: #e8a33d;
   --lantern-dim: #3a2c16;
+  --rust: #9a3f2c;
   --claude: #e8896a;
   --codex: #52c4a4;
   --slab: "Zilla Slab", "Rockwell", "Roboto Slab", Georgia, serif;
@@ -29,24 +33,28 @@
   --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
-html { background: var(--night); }
+html { background: var(--night); scroll-behavior: smooth; }
 body { margin: 0; background: var(--night); color: var(--ink); font-family: var(--sans); font-size: 17px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 a { color: var(--lantern); text-underline-offset: 3px; }
 a:focus-visible, button:focus-visible { outline: 2px solid var(--lantern); outline-offset: 3px; border-radius: 4px; }
 .wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; }
 code, .mono { font-family: var(--mono); font-size: .88em; }
 code { background: var(--panel); border: 1px solid var(--rule); padding: 1px 6px; border-radius: 5px; }
+img { max-width: 100%; }
 
 /* Top bar */
 .top { display: flex; justify-content: space-between; align-items: center; padding-block: 18px; gap: 16px; }
 .brand { font-family: var(--slab); font-weight: 700; font-size: 20px; letter-spacing: .01em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
-.brand svg { width: 26px; height: 26px; }
+.brand img { width: 32px; height: 32px; border-radius: 50%; }
 .top nav { display: flex; gap: 20px; font-size: 15px; flex-wrap: wrap; }
 .top nav a { color: var(--muted); text-decoration: none; }
 .top nav a:hover { color: var(--ink); }
 
-/* Hero */
-.hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; padding-block: 48px 72px; }
+/* Hero: the poster sits behind the headline and fades into the page */
+.heroband { position: relative; isolation: isolate; }
+.heroband::before { content: ""; position: absolute; inset: 0; z-index: -2; background: url("poster-top.webp") 76% 18% / cover no-repeat; opacity: .42; }
+.heroband::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, var(--night) 0%, rgba(11,16,23,.92) 38%, rgba(11,16,23,.35) 70%, rgba(11,16,23,.15) 100%), linear-gradient(180deg, rgba(11,16,23,.2) 0%, rgba(11,16,23,0) 40%, var(--night) 100%); }
+.hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; padding-block: 56px 96px; }
 .eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--lantern); }
 h1 { font-family: var(--slab); font-weight: 700; font-size: clamp(44px, 7vw, 80px); line-height: .98; margin: 12px 0 18px; letter-spacing: -.01em; text-wrap: balance; }
 .lede { font-size: 20px; color: var(--ink); max-width: 34ch; margin: 0 0 28px; text-wrap: pretty; }
@@ -54,49 +62,70 @@ h1 { font-family: var(--slab); font-weight: 700; font-size: clamp(44px, 7vw, 80p
 .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 8px; font-weight: 600; font-size: 15.5px; text-decoration: none; }
 .btn.primary { background: var(--lantern); color: #1b1305; }
 .btn.primary:hover { background: #f2b556; }
-.btn.ghost { border: 1px solid var(--rule); color: var(--ink); }
+.btn.ghost { border: 1px solid var(--rule); color: var(--ink); background: rgba(11,16,23,.5); }
 .btn.ghost:hover { border-color: var(--muted); }
 .fine { margin-top: 16px; font-size: 14px; color: var(--muted); }
-
-/* The circle */
-.circle { width: 100%; max-width: 480px; justify-self: center; height: auto; }
-.circle .ring { fill: none; stroke: var(--lantern); stroke-width: 2; stroke-dasharray: 3 9; stroke-linecap: round; }
-.circle .glow { fill: url(#glow); }
-.circle .wagon { fill: var(--night-2); stroke: var(--rule); stroke-width: 1.5; }
-.circle .node { fill: var(--panel); stroke-width: 2.5; }
-.circle .n-you { stroke: var(--ink); } .circle .n-claude { stroke: var(--claude); } .circle .n-codex { stroke: var(--codex); }
-.circle .spoke { stroke-width: 1.8; stroke-dasharray: 5 5; }
-.circle .s-you { stroke: var(--ink); } .circle .s-claude { stroke: var(--claude); } .circle .s-codex { stroke: var(--codex); }
-.circle .out { stroke: var(--muted); stroke-width: 1.4; }
-.circle text { font-family: var(--sans); fill: var(--ink); }
-.circle .lbl { font-weight: 600; font-size: 15px; }
-.circle .sub { font-size: 11.5px; fill: var(--muted); }
-.circle .core { font-family: var(--slab); font-weight: 700; font-size: 17px; fill: var(--lantern); }
-.circle .tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; fill: var(--muted); }
+.heromark { justify-self: center; width: min(420px, 100%); aspect-ratio: 1; }
+.heromark img { width: 100%; height: auto; display: block; border-radius: 50%; box-shadow: 0 0 0 1px rgba(232,163,61,.25), 0 40px 120px -30px rgba(232,163,61,.35); }
 
 /* Screenshot band */
-.shot { padding-block: 24px 88px; }
+.shot { padding-block: 8px 88px; }
 .shot figure { margin: 0; display: grid; gap: 14px; }
 .shot img { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--rule); box-shadow: 0 30px 80px -30px rgba(0,0,0,.7), 0 0 0 1px rgba(232,163,61,.06); }
-.shot figcaption { font-size: 14.5px; color: var(--muted); max-width: 70ch; }
+.shot figcaption, figcaption { font-size: 14.5px; color: var(--muted); max-width: 70ch; }
 
 /* Sections */
 section { padding-block: 64px; border-top: 1px solid var(--rule); }
 h2 { font-family: var(--slab); font-weight: 700; font-size: clamp(30px, 4vw, 42px); line-height: 1.08; margin: 0 0 14px; text-wrap: balance; }
+h3 { font-family: var(--slab); font-weight: 700; }
 .intro { max-width: 60ch; color: var(--ink); margin: 0 0 36px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 32px 40px; }
-.feat h3 { font-family: var(--slab); font-weight: 700; font-size: 22px; margin: 0 0 6px; }
+.feat h3 { font-size: 22px; margin: 0 0 6px; }
 .feat p { margin: 0; color: var(--ink); opacity: .92; font-size: 16px; }
 .feat .k { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--lantern); display: block; margin-bottom: 8px; }
 
-/* Numbers */
+/* Diagrams (from the architecture write-up) */
+figure { margin: 0; display: grid; gap: 12px; }
+.diagram { background: var(--night-2); border: 1px solid var(--rule); border-radius: 12px; padding: 14px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 720px; height: auto; color: var(--ink); font-family: var(--sans); }
+.box { fill: var(--panel); stroke: currentColor; stroke-width: 1.4; }
+.box.core { fill: var(--lantern-dim); stroke: var(--lantern); stroke-width: 2; }
+.box.codex { stroke: var(--codex); stroke-width: 2; }
+.box.claude { stroke: var(--claude); stroke-width: 2; }
+.box.ext { stroke-dasharray: 2 3; }
+.chip { fill: var(--panel); stroke: var(--lantern); stroke-width: 1; }
+.boundary { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 7 5; }
+.t { fill: currentColor; font-size: 13px; }
+.t.b { font-weight: 600; font-size: 14px; }
+.t.s { font-size: 11.5px; fill: var(--muted); }
+.t.m { font-family: var(--mono); font-size: 11px; }
+.t.cap { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; fill: var(--muted); }
+.t.codex { fill: var(--codex); } .t.claude { fill: var(--claude); } .t.core { fill: var(--lantern); }
+.ar { stroke: currentColor; stroke-width: 1.5; fill: none; }
+.ar.codex { stroke: var(--codex); } .ar.claude { stroke: var(--claude); } .ar.core { stroke: var(--lantern); }
+.ar.dash { stroke-dasharray: 4 4; }
+.life { stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 3 5; }
+.head { fill: currentColor; } .head.codex { fill: var(--codex); } .head.claude { fill: var(--claude); } .head.core { fill: var(--lantern); }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px 28px; margin: 28px 0 0; }
+.rules div { border-top: 2px solid var(--lantern); padding-top: 10px; }
+.rules dt { font-weight: 600; margin-bottom: 4px; }
+.rules dd { margin: 0; color: var(--ink); font-size: 15px; opacity: .92; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 36px 48px; }
+.two > div > p { margin: 0 0 14px; }
+ul.guard { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 72ch; }
+ol.q { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 72ch; }
+
+/* Tables */
 .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--night-2); }
 table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 15.5px; font-variant-numeric: tabular-nums; }
-th, td { text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+th, td { text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--rule); vertical-align: top; }
 th:first-child, td:first-child { text-align: left; }
 tr:last-child td { border-bottom: 0; }
 th { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
 td.win { color: var(--lantern); font-weight: 600; }
+td.lose { color: var(--muted); }
+.tablewrap.left th, .tablewrap.left td { text-align: left; }
+.tablewrap.compact table { min-width: 0; }
 .note { font-size: 14.5px; color: var(--muted); margin-top: 14px; max-width: 72ch; }
 
 /* Steps */
@@ -107,34 +136,41 @@ ol.steps h3 { margin: 6px 0 4px; font-size: 17px; }
 ol.steps p { margin: 0; color: var(--ink); opacity: .92; }
 pre { background: var(--night-2); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 8px 0 0; font-family: var(--mono); font-size: 13.5px; line-height: 1.5; }
 
-/* Status */
-.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 32px 48px; }
+/* Status band over the sepia desert */
+.desert { position: relative; isolation: isolate; border-top: 1px solid var(--rule); }
+.desert::before { content: ""; position: absolute; inset: 0; z-index: -2; background: url("desert-band.webp") center 40% / cover no-repeat; opacity: .28; }
+.desert::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, var(--night) 0%, rgba(11,16,23,.55) 30%, rgba(11,16,23,.55) 70%, var(--night) 100%); }
+.desert section { border-top: 0; }
+.pill { font-family: var(--mono); font-size: 11.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pill.ok { color: var(--codex); } .pill.next { color: var(--lantern); } .pill.wait { color: var(--lantern); }
 .status ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
-.pill { font-family: var(--mono); font-size: 11.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
-.pill.ok { color: var(--codex); } .pill.next { color: var(--lantern); }
 
 footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var(--muted); font-size: 14px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
 @media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; padding-block: 24px 48px; gap: 32px; }
+  .hero { grid-template-columns: 1fr; padding-block: 24px 56px; gap: 32px; }
   .lede { max-width: none; }
-  .circle { max-width: 380px; }
+  .heromark { width: min(300px, 80%); }
+  .heroband::before { background-position: center 12%; }
+  .heroband::after { background: linear-gradient(180deg, rgba(11,16,23,.75) 0%, rgba(11,16,23,.85) 60%, var(--night) 100%); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .circle .ring { animation: turn 60s linear infinite; transform-origin: 240px 240px; }
-  @keyframes turn { to { transform: rotate(360deg); } }
+  .heromark img { transition: transform 1.2s ease; }
+  .heromark:hover img { transform: rotate(12deg); }
 }
 </style>
 </head>
 <body>
+<div class="heroband">
 <div class="wrap">
   <header class="top">
     <a class="brand" href="#top" aria-label="Wagon Wheel home">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12" fill="none" stroke="#e8a33d" stroke-width="2.4" stroke-dasharray="2 4.2" stroke-linecap="round"/><circle cx="16" cy="16" r="3.2" fill="#e8a33d"/></svg>
+      <img src="wheel-128.png" alt="" width="32" height="32">
       Wagon Wheel
     </a>
     <nav aria-label="Page">
       <a href="#how">How it works</a>
+      <a href="#arch">Architecture</a>
       <a href="#cost">Cost</a>
       <a href="#start">Get started</a>
       <a href="https://github.com/darkrangerstudios/wagon-wheel">GitHub</a>
@@ -146,91 +182,174 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <div>
         <div class="eyebrow">VS Code extension · prototype 0.5.2</div>
         <h1>Circle the wagons.</h1>
-        <p class="lede">One room where you, Claude and Codex work the same problem in the same conversation. The two agents ask each other for help and bring the answers back on their own, without you relaying or typing “continue”.</p>
+        <p class="lede">One room where you and your local coding agents work the same problem in the same conversation. Named Claude Code and Codex seats ask each other for help through a typed request and bring the answers back on their own, without you relaying or typing “continue”.</p>
         <div class="cta">
           <a class="btn primary" href="https://github.com/darkrangerstudios/wagon-wheel">View on GitHub</a>
-          <a class="btn ghost" href="#how">How it works</a>
+          <a class="btn ghost" href="#arch">How it's built</a>
         </div>
         <p class="fine">Uses your own Claude Code and Codex CLIs, signed in to your own subscriptions. No server, no API keys to paste, no open ports.</p>
       </div>
-
-      <svg class="circle" viewBox="0 0 480 480" role="img" aria-label="You, Claude and Codex sit on a ring of wagons and all talk through Wagon Wheel in the middle. The only lines leaving the ring are each agent's own HTTPS connection to its vendor.">
-        <defs>
-          <radialGradient id="glow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#e8a33d" stop-opacity=".22"/><stop offset=".6" stop-color="#e8a33d" stop-opacity=".05"/><stop offset="1" stop-color="#e8a33d" stop-opacity="0"/></radialGradient>
-        </defs>
-        <circle class="glow" cx="240" cy="240" r="150"/>
-        <!-- wagons on the ring -->
-        <g>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(20 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(60 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(100 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(170 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(190 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(260 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(300 240 240)"/>
-          <rect class="wagon" x="229" y="72" width="22" height="14" rx="4" transform="rotate(340 240 240)"/>
-        </g>
-        <circle class="ring" cx="240" cy="240" r="168"/>
-
-        <!-- spokes to the center -->
-        <line class="spoke s-you" x1="240" y1="108" x2="240" y2="206"/>
-        <line class="spoke s-claude" x1="126" y1="306" x2="212" y2="256"/>
-        <line class="spoke s-codex" x1="354" y1="306" x2="268" y2="256"/>
-
-        <!-- center -->
-        <circle cx="240" cy="240" r="38" fill="#1a212b" stroke="#e8a33d" stroke-width="2"/>
-        <text class="core" x="240" y="236" text-anchor="middle">the</text>
-        <text class="core" x="240" y="254" text-anchor="middle">room</text>
-
-        <!-- people -->
-        <circle class="node n-you" cx="240" cy="84" r="26"/>
-        <text class="lbl" x="240" y="89" text-anchor="middle">You</text>
-        <circle class="node n-claude" cx="106" cy="318" r="26"/>
-        <text class="lbl" x="106" y="323" text-anchor="middle" style="fill:#e8896a">Claude</text>
-        <circle class="node n-codex" cx="374" cy="318" r="26"/>
-        <text class="lbl" x="374" y="323" text-anchor="middle" style="fill:#52c4a4">Codex</text>
-
-        <text class="sub" x="176" y="272" text-anchor="middle">stdio</text>
-        <text class="sub" x="304" y="272" text-anchor="middle">stdio</text>
-
-        <!-- only lines out: vendor HTTPS -->
-        <line class="out" x1="84" y1="336" x2="46" y2="382"/>
-        <text class="sub" x="40" y="400" text-anchor="middle">Anthropic</text>
-        <line class="out" x1="396" y1="336" x2="434" y2="382"/>
-        <text class="sub" x="440" y="400" text-anchor="middle">OpenAI</text>
-        <text class="tag" x="240" y="452" text-anchor="middle">NOTHING LISTENS ON A PORT</text>
-      </svg>
+      <div class="heromark">
+        <img src="wheel-512.png" width="512" height="512" alt="A wooden wagon wheel with a circuit-board brain at the hub. On the spokes: a chat bubble, a robot, a circuit and a database, the participants of a room.">
+      </div>
     </div>
   </main>
+</div>
 </div>
 
 <div class="wrap shot">
   <figure>
     <img src="screenshot.png" width="1720" height="1440" alt="A Wagon Wheel room in VS Code. Dean asks both agents whether a date parser is ready to release. Claude spots a timezone bug and asks Codex to confirm; Codex confirms with a minimal repro. Claude is now drafting a test, shown reading test/tz.test.ts with its thinking collapsed, and the footer shows Claude's live status and timer.">
-    <figcaption>A real room layout: each agent's reply keeps a collapsed list of the steps behind it, the in-progress bubble shows what the agent is doing right now, and the header tracks Codex quota and Claude's per-turn token use. Demo conversation.</figcaption>
+    <figcaption>A real room layout: each agent's reply keeps a collapsed list of the steps behind it, the in-progress bubble shows what the agent is doing right now, and the header tracks each provider's quota and this computer's token use. Demo conversation.</figcaption>
   </figure>
 </div>
 
 <div class="wrap">
   <section id="how" aria-labelledby="how-h">
     <h2 id="how-h">How it works</h2>
-    <p class="intro">Wagon Wheel is a VS Code extension. It starts Claude Code and Codex as its own private child processes and sits between them, deciding who hears what.</p>
+    <p class="intro">Wagon Wheel is a VS Code extension. It starts each seat's Claude Code or Codex as its own private child process and sits between them, deciding who hears what.</p>
     <div class="grid">
-      <div class="feat"><span class="k">Teamwork</span><h3>They ask each other directly</h3><p>You talk with <code>@claude</code>, <code>@codex</code> or <code>@both</code>. The agents ask each other through a typed request tool, not by writing names in their replies. The room delivers each request once and brings the answer back to whoever asked, with no “thanks, got it” turns in between. Text in a reply is never treated as an instruction to the room.</p></div>
+      <div class="feat"><span class="k">Teamwork</span><h3>They ask each other directly</h3><p>You talk with <code>@claude</code>, <code>@codex-2</code> or <code>@all</code>. The agents ask each other through a typed request tool, not by writing names in their replies. The room delivers each request once and brings the answer back to whoever asked, with no “thanks, got it” turns in between. Text in a reply is never treated as an instruction to the room.</p></div>
       <div class="feat"><span class="k">Tasks</span><h3>A task card, with limits you set</h3><p>When the agents start working together, a task card shows the goal, who leads, open requests, and the turns and minutes used. Choose Economy, Balanced or Thorough, or set your own limits. Pause, Resume and Stop work at any point. The lead can close the task only when every request has been answered. Limits count turns and time; token use is reported after each turn, so there is no hard token cap.</p></div>
+      <div class="feat"><span class="k">Participants</span><h3>Name your seats</h3><p>New Room offers the default Claude and Codex pair or a custom roster of up to six named local seats, each with its own working folder, model, effort and session. Two seats can use the same provider: a Builder and a Checker both on Codex, or two Claude Code sessions. Mention any seat by its ID.</p></div>
+      <div class="feat"><span class="k">Memory</span><h3>Your sessions, your choice</h3><p>Each seat works in a real Claude Code session or Codex thread on your machine: start a new one, fork an existing one (the original stays untouched), or continue one after a warning. You can also let the agents read earlier local sessions, from either tool, as reference: pick a session, choose whether they see its whole history or only what is said from now on, and remove it at any time. <strong>Local sessions only.</strong> Cloud sessions stay in each provider's own tools.</p></div>
       <div class="feat"><span class="k">Context</span><h3>Everyone stays caught up</h3><p>Each agent receives exactly what it missed since its last turn, labelled by speaker, and never its own words back. Agent text always arrives marked as relayed, so neither model mistakes the other for you.</p></div>
-      <div class="feat"><span class="k">Memory</span><h3>Your sessions, your choice</h3><p>Each agent works in a real Claude Code session or Codex thread on your machine: start a new one, fork an existing one (the original stays untouched), or continue one after a warning. You can also let the agents read earlier local sessions, from either tool, as reference: pick a session, choose whether they see its whole history or only what is said from now on, and remove it at any time. <strong>Local sessions only.</strong> Cloud sessions stay in each provider's own tools.</p></div>
-      <div class="feat"><span class="k">Participants</span><h3>Name your seats</h3><p>New Room offers the default Claude and Codex pair or a custom roster of named local seats, each with its own working folder, model, effort and session. Two seats can use the same provider: a Builder and a Checker both on Codex, or two Claude Code sessions. Mention any seat by its ID.</p></div>
       <div class="feat"><span class="k">Usage</span><h3>Three views of cost</h3><p>Your account limits from each provider, this computer's tokens across every local Claude Code and Codex session (with a breakdown by model, subagents, thinking, cache tier and tool call, read from the CLIs' own logs with no model call), and each task's reported turns.</p></div>
       <div class="feat"><span class="k">Visibility</span><h3>Watch them work</h3><p>Live status for each agent: thinking, the file it's reading, the command it's running, then writing, with a timer. The thinking text is one click away, and every answer keeps its trail of steps.</p></div>
-      <div class="feat"><span class="k">Files</span><h3>Bring your files</h3><p>Paste a screenshot, drop in a log, attach a spec. Images reach both agents as real image input; Markdown, code and data are read inline; PDFs and big files are passed for the agents to open. Whoever missed them gets them on their next turn.</p></div>
+      <div class="feat"><span class="k">Files</span><h3>Bring your files</h3><p>Paste a screenshot, drop in a log, attach a spec. Images reach the agents as real image input; Markdown, code and data are read inline; PDFs and big files are passed for the agents to open. Whoever missed them gets them on their next turn.</p></div>
       <div class="feat"><span class="k">Security</span><h3>No open ports</h3><p>The agents talk to the room over stdio, private pipes with no address to dial: no daemon, no localhost port, no web server. Their model requests still go to Anthropic and OpenAI, as they always do. Both agents are read-only in this version: Claude can only read and search inside the room folder; Codex runs commands in a read-only sandbox for local inspection, and its read access is not confined to the room folder. Neither can edit files. The room blocks quota-credit spending, logout and deletes outright.</p></div>
     </div>
   </section>
 
+  <section id="arch" aria-labelledby="arch-h">
+    <h2 id="arch-h">How it's built</h2>
+    <p class="intro">The chat window talks to the Wagon Wheel core in the VS Code extension host. The core drives one private child process per seat over stdio, reads each seat's saved session from disk when you allow it, and lets nothing listen on a port.</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 980 520" role="img" aria-label="Architecture: the chat webview talks to the Wagon Wheel core in the VS Code extension host, which drives private codex app-server and claude processes over stdio pipes, one per seat. Each agent resumes or forks its own saved session from disk, and the core can read local session history for the agents when you allow it. Only outbound HTTPS from the agent processes leaves the machine; nothing listens on a port.">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head codex" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head claude" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head core" d="M0 0 L10 5 L0 10 z"/></marker>
+          </defs>
+          <rect class="boundary" x="16" y="44" width="768" height="452" rx="14"/>
+          <text class="t cap" x="36" y="72">YOUR MACHINE · NOTHING LISTENS ON A PORT</text>
+          <text class="t s" x="36" y="478">stdio = private pipes between a parent and its child process. There is no address, so nothing can dial in. One child per seat.</text>
+          <rect class="box" x="40" y="196" width="150" height="128" rx="10"/>
+          <text class="t b" x="115" y="228" text-anchor="middle">Chat window</text>
+          <text class="t s" x="115" y="248" text-anchor="middle">VS Code webview</text>
+          <text class="t s" x="115" y="276" text-anchor="middle">text-only rendering</text>
+          <text class="t s" x="115" y="294" text-anchor="middle">strict CSP, no network</text>
+          <rect class="box core" x="250" y="108" width="190" height="304" rx="12"/>
+          <text class="t b core" x="345" y="138" text-anchor="middle">Wagon Wheel core</text>
+          <text class="t s" x="345" y="157" text-anchor="middle">extension host (Node)</text>
+          <rect class="chip" x="266" y="176" width="158" height="36" rx="7"/><text class="t" x="345" y="199" text-anchor="middle">router · named seats</text>
+          <rect class="chip" x="266" y="222" width="158" height="36" rx="7"/><text class="t" x="345" y="245" text-anchor="middle">catch-up deltas</text>
+          <rect class="chip" x="266" y="268" width="158" height="36" rx="7"/><text class="t" x="345" y="291" text-anchor="middle">typed requests · tasks</text>
+          <rect class="chip" x="266" y="314" width="158" height="36" rx="7"/><text class="t" x="345" y="337" text-anchor="middle">history access (opt-in)</text>
+          <text class="t s" x="345" y="372" text-anchor="middle">agents never talk directly;</text>
+          <text class="t s" x="345" y="388" text-anchor="middle">every request passes through here</text>
+          <line class="ar" x1="190" y1="236" x2="248" y2="236" marker-end="url(#a)"/>
+          <text class="t s" x="219" y="228" text-anchor="middle">send</text>
+          <line class="ar" x1="250" y1="284" x2="192" y2="284" marker-end="url(#a)"/>
+          <text class="t s" x="221" y="302" text-anchor="middle">stream</text>
+          <rect class="box codex" x="580" y="76" width="176" height="86" rx="10"/>
+          <text class="t b codex" x="668" y="100" text-anchor="middle">codex app-server</text>
+          <text class="t s" x="668" y="118" text-anchor="middle">private child, one per seat</text>
+          <text class="t s" x="668" y="136" text-anchor="middle">sandbox read-only · approvals never</text>
+          <text class="t s" x="668" y="152" text-anchor="middle">room tools as dynamic tools</text>
+          <line class="ar codex" x1="440" y1="112" x2="578" y2="112" marker-end="url(#ac)"/>
+          <text class="t m codex" x="509" y="104" text-anchor="middle">stdin · turn/start</text>
+          <line class="ar codex" x1="580" y1="148" x2="442" y2="148" marker-end="url(#ac)"/>
+          <text class="t m codex" x="511" y="166" text-anchor="middle">stdout · deltas · tool calls</text>
+          <rect class="box" x="580" y="192" width="176" height="46" rx="10"/>
+          <text class="t b" x="668" y="212" text-anchor="middle">Codex threads</text>
+          <text class="t m" x="668" y="229" text-anchor="middle">~/.codex/sessions</text>
+          <line class="ar codex dash" x1="668" y1="192" x2="668" y2="164" marker-end="url(#ac)"/>
+          <text class="t s" x="676" y="183">new · fork · continue</text>
+          <rect class="box claude" x="580" y="262" width="176" height="86" rx="10"/>
+          <text class="t b claude" x="668" y="286" text-anchor="middle">claude -p</text>
+          <text class="t s" x="668" y="304" text-anchor="middle">private child, one per seat</text>
+          <text class="t s" x="668" y="322" text-anchor="middle">Read · Glob · Grep only</text>
+          <text class="t s" x="668" y="338" text-anchor="middle">one in-process MCP: room tools</text>
+          <line class="ar claude" x1="440" y1="288" x2="578" y2="288" marker-end="url(#al)"/>
+          <text class="t m claude" x="509" y="280" text-anchor="middle">stdin · stream-json</text>
+          <line class="ar claude" x1="580" y1="326" x2="442" y2="326" marker-end="url(#al)"/>
+          <text class="t m claude" x="511" y="344" text-anchor="middle">stdout · stream · tool calls</text>
+          <rect class="box" x="580" y="378" width="176" height="46" rx="10"/>
+          <text class="t b" x="668" y="398" text-anchor="middle">Claude sessions</text>
+          <text class="t m" x="668" y="415" text-anchor="middle">~/.claude/projects</text>
+          <line class="ar claude dash" x1="668" y1="378" x2="668" y2="350" marker-end="url(#al)"/>
+          <text class="t s" x="676" y="369">new · fork · continue</text>
+          <line class="ar claude dash" x1="580" y1="401" x2="442" y2="401" marker-end="url(#al)"/>
+          <text class="t s" x="511" y="393" text-anchor="middle">read .jsonl when allowed, free</text>
+          <rect class="box ext" x="820" y="84" width="140" height="64" rx="10"/>
+          <text class="t b" x="890" y="112" text-anchor="middle">OpenAI</text>
+          <text class="t s" x="890" y="131" text-anchor="middle">Codex quota</text>
+          <line class="ar codex" x1="756" y1="116" x2="818" y2="116" marker-end="url(#ac)"/>
+          <text class="t m" x="787" y="108" text-anchor="middle">HTTPS</text>
+          <rect class="box ext" x="820" y="272" width="140" height="64" rx="10"/>
+          <text class="t b" x="890" y="300" text-anchor="middle">Anthropic</text>
+          <text class="t s" x="890" y="319" text-anchor="middle">Claude plan</text>
+          <line class="ar claude" x1="756" y1="304" x2="818" y2="304" marker-end="url(#al)"/>
+          <text class="t m" x="787" y="296" text-anchor="middle">HTTPS</text>
+        </svg>
+      </div>
+      <figcaption>Every seat keeps real memory in its own Claude Code session or Codex thread. Only the agent CLIs' own outbound HTTPS crosses the machine boundary, the same traffic each CLI makes when run by hand. The Codex side speaks JSON-RPC, one JSON object per line (<code>thread/start</code>, <code>turn/start</code>, <code>item/agentMessage/delta</code>); the Claude side uses Claude Code's <code>stream-json</code> mode, with the room's tools served over that same pipe as an in-process MCP server.</figcaption>
+    </figure>
+
+    <h3 style="font-size:24px;margin:56px 0 10px">How work moves between agents</h3>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 440" role="img" aria-label="Request sequence: Dean asks Claude; Claude calls the request_assistance tool naming Codex; the room opens a task, delivers the request once with everything Codex missed; Codex answers; the room returns the answer to Claude automatically; Claude calls finish_task and the room reports to Dean.">
+          <defs>
+            <marker id="s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="sc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head codex" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="sl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head claude" d="M0 0 L10 5 L0 10 z"/></marker>
+            <marker id="sk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head core" d="M0 0 L10 5 L0 10 z"/></marker>
+          </defs>
+          <rect class="box" x="40" y="20" width="120" height="36" rx="8"/><text class="t b" x="100" y="43" text-anchor="middle">You</text>
+          <rect class="box core" x="270" y="20" width="120" height="36" rx="8"/><text class="t b core" x="330" y="43" text-anchor="middle">Room</text>
+          <rect class="box claude" x="500" y="20" width="120" height="36" rx="8"/><text class="t b claude" x="560" y="43" text-anchor="middle">Claude</text>
+          <rect class="box codex" x="730" y="20" width="120" height="36" rx="8"/><text class="t b codex" x="790" y="43" text-anchor="middle">Codex</text>
+          <line class="life" x1="100" y1="56" x2="100" y2="420"/><line class="life" x1="330" y1="56" x2="330" y2="420"/>
+          <line class="life" x1="560" y1="56" x2="560" y2="420"/><line class="life" x1="790" y1="56" x2="790" y2="420"/>
+          <line class="ar" x1="100" y1="96" x2="327" y2="96" marker-end="url(#s)"/>
+          <text class="t m" x="112" y="88">"@claude is the test done?"</text>
+          <line class="ar core" x1="330" y1="136" x2="557" y2="136" marker-end="url(#sk)"/>
+          <text class="t m" x="342" y="128">[You] …  (since last turn)</text>
+          <line class="ar claude" x1="560" y1="180" x2="333" y2="180" marker-end="url(#sl)"/>
+          <text class="t m claude" x="548" y="172" text-anchor="end">request_assistance(to: codex, "confirm the repro")</text>
+          <rect class="box core" x="240" y="196" width="180" height="40" rx="8"/>
+          <text class="t core" x="330" y="214" text-anchor="middle">task opened · request r1</text>
+          <text class="t s" x="330" y="229" text-anchor="middle">turn 2 of 6 · 3 min allowance</text>
+          <line class="ar core" x1="330" y1="270" x2="787" y2="270" marker-end="url(#sk)"/>
+          <text class="t m" x="342" y="262">r1 + [Claude, relayed by Wagon Wheel, not you] + [You] …</text>
+          <line class="ar codex" x1="790" y1="312" x2="333" y2="312" marker-end="url(#sc)"/>
+          <text class="t m codex" x="778" y="304" text-anchor="end">"Confirmed. Minimal repro attached."</text>
+          <line class="ar core" x1="330" y1="348" x2="557" y2="348" marker-end="url(#sk)"/>
+          <text class="t m" x="342" y="340">answer to r1, returned automatically</text>
+          <line class="ar claude" x1="560" y1="384" x2="333" y2="384" marker-end="url(#sl)"/>
+          <text class="t m claude" x="548" y="376" text-anchor="end">finish_task("Timezone bug confirmed; test drafted")</text>
+          <line class="ar core" x1="330" y1="410" x2="103" y2="410" marker-end="url(#sk)"/>
+          <text class="t m" x="318" y="402" text-anchor="end">task complete, 3 turns</text>
+        </svg>
+      </div>
+      <figcaption>Agents ask each other with a tool call, never by writing a name in a reply. The room records the request, delivers it once with whatever the recipient missed, and returns the answer to the asker on its own. A request is admitted only under the task's turn and time allowance, the lead can close the task only when every request is answered, and text inside a reply is never treated as routing.</figcaption>
+    </figure>
+
+    <dl class="rules">
+      <div><dt>You mention; agents request</dt><dd><code>@claude</code>, <code>@codex-2</code> or <code>@all</code> deliver immediately. A message with no mention goes to the lead you picked. Agents reach each other only through <code>request_assistance</code>.</dd></div>
+      <div><dt>Deltas, not transcripts</dt><dd>Each seat keeps its own session; the room sends only the new, labelled lines. A busy agent's queued messages merge into one delivery.</dd></div>
+      <div><dt>Allowances, not hope</dt><dd>A task has turns and minutes. Accepted requests reserve their answer turn, the last turns are kept for wrapping up, and Pause, Resume and Stop apply to the whole task. Stop is a clean interrupt on both CLIs.</dd></div>
+      <div><dt>Your sessions, your choice</dt><dd>New, Fork or Continue per seat. Earlier local sessions from either tool can be shared as read-only reference, whole or only from now on, and revoked.</dd></div>
+    </dl>
+  </section>
+
   <section id="cost" aria-labelledby="cost-h">
     <h2 id="cost-h">Cheap to keep talking</h2>
-    <p class="intro">Each agent keeps one long-lived session, and the room sends only new lines. Project instructions load once; after that, earlier context is re-read from the provider's prompt cache at a fraction of the price. Here are the same four turns on Claude Sonnet, both ways:</p>
+    <p class="intro">Each seat keeps one long-lived session, and the room sends only new lines. Project instructions load once; after that, earlier context is re-read from the provider's prompt cache at a fraction of the price. Here are the same four turns on Claude Sonnet, both ways:</p>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Fresh tokens per turn</th><th>Turn 1</th><th>Turn 2</th><th>Turn 3</th><th>Turn 4</th><th>Total</th><th>Cost</th></tr></thead>
@@ -240,7 +359,37 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
         </tbody>
       </table>
     </div>
-    <p class="note">Measured with <code>test/token-ab.js</code> on Claude Sonnet; both runs recalled a turn-1 fact on turn 4. The comparison is against restarting the agent every turn with the whole transcript, not against a normal Claude Code session, which also keeps its context. Dollar figures are what the same tokens would cost at API rates; on a subscription they count against your plan instead. The gap widens with every turn and with larger instruction files.</p>
+    <p class="note">Measured with <code>test/token-ab.js</code> on Claude Sonnet; both runs recalled a turn-1 fact on turn 4. The comparison is against restarting the agent every turn with the whole transcript, not against a normal Claude Code session, which also keeps its context. Dollar figures are what the same tokens would cost at API rates; on a subscription they count against your plan instead. Pauses are cheap too: Claude Code writes to Anthropic's 1-hour cache tier, and Codex on a GPT-5.6-or-later model keeps cached prefixes for 30 minutes after last use, because Wagon Wheel runs the same CLIs.</p>
+  </section>
+
+  <section id="why" aria-labelledby="why-h">
+    <div class="two">
+      <div>
+        <h2 id="why-h">Why not the shared daemon</h2>
+        <p>Codex ships a shared app-server daemon on a Unix socket. It works: other clients see a turn's events live. But it's built for remote SSH and mobile clients, and OpenAI's desktop app deliberately refuses to attach to it locally. When someone forces that, the app's built-in tools break (<span class="mono">openai/codex#47425</span>).</p>
+        <div class="tablewrap left compact">
+          <table>
+            <thead><tr><th></th><th>Shared daemon</th><th>Wagon Wheel stdio</th></tr></thead>
+            <tbody>
+              <tr><td>Who can connect</td><td class="lose">any process allowed to open the socket</td><td class="win">only the parent process</td></tr>
+              <tr><td>Lifetime</td><td class="lose">outlives the room</td><td class="win">ends when the room closes</td></tr>
+              <tr><td>Official UIs attach</td><td class="lose">no (blocked locally)</td><td class="win">not needed</td></tr>
+              <tr><td>Live mirror in OpenAI apps</td><td class="win">yes</td><td class="lose">no (deliberately left out)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h2 id="guard-h">Guardrails</h2>
+        <ul class="guard">
+          <li>Codex runs with a read-only sandbox and approvals set to <code>never</code>; web search, connected apps, plugins, hooks and subagents are off for the room process, and every inherited MCP server is explicitly disabled. The room checks the returned settings before admitting a thread.</li>
+          <li>Claude runs with <code>--restricted</code> and <code>--tools Read,Glob,Grep</code>, so your own allow rules cannot widen the room, in <code>dontAsk</code> mode, with <code>--strict-mcp-config</code> allowing only the in-process room server. Verified against the real CLI: the session exposes exactly those three tools plus the three room tools, and a shell attempt is refused.</li>
+          <li>Typed tools are requests, not authority: the room stamps who asked, under which task, and decides admission. A tool call cannot widen permissions, refill an allowance, or resume paused or stopped work.</li>
+          <li>A hard blocklist on protocol methods: spending a rate-limit reset credit, logout/login and thread delete.</li>
+          <li>Model output is untrusted. The webview renders it as text only, with a nonce'd script and no network.</li>
+        </ul>
+      </div>
+    </div>
   </section>
 
   <section id="start" aria-labelledby="start-h">
@@ -252,41 +401,63 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
       <li><div><h3>Launch it in VS Code</h3><pre>code --extensionDevelopmentPath="$PWD/wagon-wheel" --new-window</pre><p style="margin-top:8px">Run <strong>Wagon Wheel: Check Setup</strong> to confirm both CLIs are installed and signed in (no model calls), then <strong>Wagon Wheel: New Room</strong> or <strong>Wagon Wheel: Join Existing Conversations</strong> from the Command Palette. A short walkthrough is under <em>Help → Welcome</em>. Set <code>wagonWheel.userName</code> if the agents should know you by a different name.</p></div></li>
     </ol>
   </section>
+</div>
 
-  <section aria-labelledby="status-h">
+<div class="desert">
+<div class="wrap">
+  <section id="status" aria-labelledby="status-h">
     <h2 id="status-h">Where it stands</h2>
-    <div class="status">
+    <p class="intro">Prototype 0.5.2. Every row below is something that was actually run; the last two are the honest gaps.</p>
+    <div class="tablewrap left">
+      <table>
+        <thead><tr><th>Check</th><th>Result</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Offline suite (fake agents and transports)</td><td>260/260: routing, typed requests and tasks, allowance and Pause/Stop races, the host scheduler on a fake clock, typed tools at both process boundaries, shared-history access, setup checks, delivery receipts, diff path containment, attachments, version guard</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Live typed hand-off, Claude → Codex</td><td>One request, one automatic answer, <code>finish_task</code>, no acknowledgment turns, against both real CLIs</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Two seats, same provider</td><td>Two Claude Code sessions, and separately two Codex threads, each completed a typed hand-off in exactly three turns; distinct processes and session IDs, usage attributed per seat, reopen restored both</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Claude's effective toolset</td><td>Real CLI init inventory equals Read, Glob, Grep plus the room tools; a shell attempt refused</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Local session history as context</td><td>Claude read a Codex thread and Codex read a Claude Code session through the room tool, with the "only from now on" boundary honoured</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Stop, steer and reload recovery</td><td>Stop against both real CLIs; a reload mid-task reopened paused and finished after one explicit Resume</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Token A/B, 4 turns</td><td>Persistent session: 16–19 fresh tokens on turns 2–4, against ~4,780 per turn for a fresh process</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Usage breakdown</td><td>Real local logs broken down by model, lane, thinking, cache tier and tool call; Codex rollout shapes checked on a Mac</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Attachments and live status</td><td>Claude read a pasted screenshot and a Markdown file in one turn; thinking, tool steps and writing shown from real output</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Webview render + injection probe</td><td>an <code>&lt;img onerror&gt;</code> probe displayed as literal text; the reset-credit spend call refused before reaching Codex</td><td><span class="pill ok">passed</span></td></tr>
+          <tr><td>Click-through inside VS Code</td><td>Native runs cover New Room, Pause/Resume/Stop, reload and the three-seat layout; the Continue/Fork pickers are covered offline only</td><td><span class="pill wait">partial</span></td></tr>
+          <tr><td>More providers (Gemini CLI over ACP)</td><td>Adapter ships off by default, tested against a fake agent over real stdio; no live provider check</td><td><span class="pill wait">off by default</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="next" aria-labelledby="next-h">
+    <div class="two">
       <div>
-        <p class="intro" style="margin-bottom:14px">Proven so far:</p>
-        <ul>
-          <li><span class="pill ok">tested</span> Routing, typed requests, task limits, Pause and Stop races, shared-history access and setup checks (260 automated tests)</li>
-          <li><span class="pill ok">live</span> Claude asking Codex through the request tool and getting the answer back automatically, with no acknowledgment turns</li>
-          <li><span class="pill ok">live</span> Two named seats on one provider: two Claude Code sessions, and separately two Codex threads, completed a typed hand-off in exactly three turns each</li>
-          <li><span class="pill ok">live</span> The room Claude's tool inventory checked against the real CLI: Read, Glob, Grep and the room tools, nothing else</li>
-          <li><span class="pill ok">live</span> Each agent reading a local session from the other's tool (Claude reading a Codex thread, Codex reading a Claude Code session)</li>
-          <li><span class="pill ok">live</span> Stop and steer against both real CLIs</li>
-          <li><span class="pill ok">live</span> Claude joining from a forked session with its memory intact</li>
-          <li><span class="pill ok">live</span> Live status: thinking, tool steps and writing, from real Claude output</li>
-          <li><span class="pill ok">live</span> Attachments: Claude read a pasted screenshot and a Markdown file in one turn</li>
-        </ul>
-      </div>
-      <div>
-        <p class="intro" style="margin-bottom:14px">Next on the trail:</p>
-        <ul>
-          <li><span class="pill next">next</span> Per-agent edit and test permissions, with approvals routed to you (both agents are read-only today)</li>
-          <li><span class="pill next">next</span> More agents in the room: a Gemini CLI adapter ships off by default and has not had a live provider check</li>
+        <h2 id="next-h">Next on the trail</h2>
+        <ul class="guard">
+          <li><span class="pill next">next</span> Per-seat edit and shell permissions, with every approval shown in the room and denied on timeout or Stop (both agents are read-only today)</li>
+          <li><span class="pill next">next</span> Refusal notices: when an agent asks for something the room won't allow, the room says so in the timeline</li>
           <li><span class="pill next">next</span> Editable agent instructions, names and colours per user</li>
           <li><span class="pill next">next</span> Single-agent rooms, packaged install, and a desktop app</li>
         </ul>
       </div>
+      <div>
+        <h2 id="open-h">Open questions</h2>
+        <ol class="q">
+          <li><strong>Context cost.</strong> Both CLIs load the project instruction files from the working folder on every session. Should a room get a slim working folder of its own?</li>
+          <li><strong>Approvals.</strong> Giving a seat write or shell access means routing approval requests to the human in the room. What should that card look like, and what is denied when nobody answers?</li>
+          <li><strong>More agents.</strong> ACP agents such as Gemini CLI run under their own permissions, not the room's. What confinement is honest to claim before enabling them by default?</li>
+          <li><strong>Shipping it.</strong> A .dmg/.exe would keep the same core and swap the shell. Electron or Tauri passes messages internally, so it still needs no port.</li>
+        </ol>
+      </div>
     </div>
   </section>
+</div>
 </div>
 
 <div class="wrap">
   <footer>
     <span>© 2026 Dean Buttry · Dark Ranger Studios · All rights reserved</span>
-    <span>Not affiliated with Anthropic or OpenAI. Claude and Codex are their respective trademarks.</span>
+    <span>Not affiliated with Anthropic or OpenAI. Claude and Codex are their respective trademarks. Protocol details from <span class="mono">codex app-server generate-ts</span> (codex-cli 0.153.1) and Claude Code 2.1.282.</span>
   </footer>
 </div>
 </body>
