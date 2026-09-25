@@ -199,8 +199,8 @@ footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var
 
 <div class="wrap shot">
   <figure>
-    <img src="screenshot.png" width="1720" height="1440" alt="A Wagon Wheel room in VS Code. Dean asks both agents whether a date parser is ready to release. Claude spots a timezone bug and asks Codex to confirm; Codex confirms with a minimal repro. Claude is now drafting a test, shown reading test/tz.test.ts with its thinking collapsed, and the footer shows Claude's live status and timer.">
-    <figcaption>A real room layout: each agent's reply keeps a collapsed list of the steps behind it, the in-progress bubble shows what the agent is doing right now, and the header tracks each provider's quota and this computer's token use. Demo conversation.</figcaption>
+    <img src="screenshot.png" width="1720" height="1830" alt="A Wagon Wheel room in VS Code. Dean asks whether a date parser is ready to release. Claude sends Codex a typed test request, r1 under task t1; Codex answers r1 with a minimal repro showing a dropped timezone offset; Claude concludes it is not ready. Claude is now drafting the test, reading test/tz.test.ts. A task card shows 4 of 20 turns and 5 of 30 minutes used with Pause, Controls and Stop, and the composer shows each seat's model picker: Claude on Opus 5.5 high, Codex on gpt-6-astra high.">
+    <figcaption>The room as it ships in 0.5.3: agents ask each other through typed requests, the task card tracks the turn and time allowance, and each seat has its own model and effort picker. Rendered from the extension's own page code with a demo conversation.</figcaption>
   </figure>
 </div>
 
