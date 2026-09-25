@@ -3,7 +3,7 @@
   "displayName": "Wagon Wheel",
   "icon": "media/icon.png",
   "description": "One VS Code room for your local Claude Code and Codex sessions. Named participants run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -11,12 +11,18 @@
     "vscode": "^1.90.0"
   },
   "main": "./src/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
         "command": "wagonWheel.newRoom",
-        "title": "Wagon Wheel: New Room"
+        "title": "Wagon Wheel: New Room",
+        "icon": {
+          "light": "media/wheel-light.svg",
+          "dark": "media/wheel-dark.svg"
+        }
       },
       {
         "command": "wagonWheel.joinExisting",
@@ -33,8 +39,76 @@
       {
         "command": "wagonWheel.reportProblem",
         "title": "Wagon Wheel: Report a Problem"
+      },
+      {
+        "command": "wagonWheel.openRoomById",
+        "title": "Wagon Wheel: Open Saved Room"
+      },
+      {
+        "command": "wagonWheel.refreshRooms",
+        "title": "Wagon Wheel: Refresh Rooms",
+        "icon": "$(refresh)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wagonWheel",
+          "title": "Wagon Wheel",
+          "icon": "media/wheel-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "wagonWheel": [
+        {
+          "id": "wagonWheel.start",
+          "name": "Start",
+          "initialSize": 2
+        },
+        {
+          "id": "wagonWheel.rooms",
+          "name": "Rooms",
+          "initialSize": 5
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "wagonWheel.start",
+        "contents": "One room for your local Claude Code and Codex sessions.\n[New Room](command:wagonWheel.newRoom)\n[Join Existing Conversations](command:wagonWheel.joinExisting)\n[Check Setup](command:wagonWheel.checkSetup) · [Report a Problem](command:wagonWheel.reportProblem)"
+      },
+      {
+        "view": "wagonWheel.rooms",
+        "contents": "No saved rooms yet. Rooms you create appear here, newest first; click one to reopen it."
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "wagonWheel.newRoom",
+          "when": "config.wagonWheel.showEditorButton",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "wagonWheel.refreshRooms",
+          "when": "view == wagonWheel.rooms",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "wagonWheel.openRoomById",
+          "when": "false"
+        },
+        {
+          "command": "wagonWheel.refreshRooms",
+          "when": "false"
+        }
+      ]
+    },
     "configuration": [
       {
         "title": "General",
@@ -56,6 +130,18 @@
             "default": true,
             "order": 3,
             "description": "Send what you are looking at in VS Code (file, selection, open tabs, problems) with each message."
+          },
+          "wagonWheel.showEditorButton": {
+            "type": "boolean",
+            "default": true,
+            "order": 4,
+            "description": "Show the Wagon Wheel button (New Room) in the editor title bar, next to other agents' buttons."
+          },
+          "wagonWheel.showStatusBar": {
+            "type": "boolean",
+            "default": true,
+            "order": 5,
+            "description": "Show the Wagon Wheel button (New Room) in the status bar."
           }
         }
       },

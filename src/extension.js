@@ -18,6 +18,7 @@ const { claudeHistoryReader, codexHistoryReader } = require('./sessionHistory');
 const setup = require('./setup');
 const { LocalUsage } = require('./localUsage');
 const feedback = require('./feedback');
+const roomsView = require('./roomsView');
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -42,6 +43,9 @@ const sessions = new Set();
 const sessionClaims = new SessionClaims(); // only writers owned by this extension-host process
 const roomClaims = new Map(); // one writer per saved room in this extension host
 let lastEditor = null; // last code editor used; the room panel steals focus, so track it
+
+let roomsTree = null; // the side panel's saved-rooms list, once activated
+const refreshRooms = () => { if (roomsTree) roomsTree.refresh(); };
 
 let output;
 const recentLog = []; // last lines of this window's log, kept in memory for Report a Problem (opt-in, scrubbed)
@@ -644,6 +648,7 @@ class RoomSession {
       this.disposed = true;
       sessions.delete(this); if (this.scheduler) this.scheduler.dispose();
       this.closeClients(); this.panel = null;
+      refreshRooms();
     }
   }
 }
@@ -739,15 +744,60 @@ async function openSession(context, session, opts) {
   const panel = vscode.window.createWebviewPanel('wagonWheel', `Wagon Wheel: ${session.meta.name}`, vscode.ViewColumn.Active, {
     enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media'), vscode.Uri.joinPath(context.globalStorageUri, 'rooms')]
   });
+  panel.iconPath = { light: vscode.Uri.joinPath(context.extensionUri, 'media', 'wheel-light.svg'), dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'wheel-dark.svg') };
   panel.webview.html = panelHtml(panel.webview, context.extensionUri);
   session.attach(panel);
+  refreshRooms();
   try {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting local sessions…' }, () => session.boot(opts));
     session.postInit();
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
     vscode.window.showErrorMessage(`Wagon Wheel could not start: ${e.message}`); // the panel notice was posted by boot()
+  } finally { refreshRooms(); } // a new room's file exists once it has booted
+}
+
+// Side panel: the Start view is always empty so VS Code shows its buttons (viewsWelcome in package.json); the Rooms
+// view lists saved rooms, newest activity first. Clicking a room shows it if open, otherwise reopens it.
+class RoomsTree {
+  constructor(context) {
+    this.dir = path.join(context.globalStorageUri.fsPath, 'rooms'); this.cache = new Map();
+    this.emitter = new vscode.EventEmitter(); this.onDidChangeTreeData = this.emitter.event;
   }
+  refresh() { this.emitter.fire(); }
+  getChildren(el) { return el ? [] : roomsView.listRooms(this.dir, this.cache); }
+  getTreeItem(room) {
+    const open = [...sessions].some((x) => x.meta.id === room.id && x.panel);
+    const d = roomsView.describe(room, { open });
+    const item = new vscode.TreeItem(d.label, vscode.TreeItemCollapsibleState.None);
+    item.id = room.id; item.description = d.description; item.tooltip = d.tooltip; item.contextValue = 'wagonWheel.room';
+    item.iconPath = new vscode.ThemeIcon(open ? 'circle-filled' : 'comment-discussion');
+    item.command = { command: 'wagonWheel.openRoomById', title: 'Open room', arguments: [room.id] };
+    return item;
+  }
+}
+const emptyTree = { getChildren: () => [], getTreeItem: (x) => x };
+
+async function openRoomById(context, id) {
+  if (typeof id !== 'string' || !roomsView.ROOM_ID.test(id)) return;
+  const live = [...sessions].find((x) => x.meta.id === id && x.panel);
+  if (live) { live.panel.reveal(); return; }
+  const file = path.join(context.globalStorageUri.fsPath, 'rooms', `${id}.json`);
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { refreshRooms(); vscode.window.showWarningMessage(`Wagon Wheel: that room could not be read (${e.code || e.message}).`); return; }
+  if (!saved || !saved.meta || saved.meta.id !== id) { vscode.window.showWarningMessage('Wagon Wheel: that file is not a saved room.'); return; }
+  await openSession(context, new RoomSession(context, saved.meta, saved.state), {});
+}
+
+// Launchers outside the side panel: the editor title button is a menu contribution (package.json); the status bar
+// item is created here and follows its setting.
+function statusBarItem(context) {
+  const item = vscode.window.createStatusBarItem('wagonWheel.status', vscode.StatusBarAlignment.Right, 100);
+  item.name = 'Wagon Wheel'; item.text = '$(comment-discussion) Wagon Wheel'; item.tooltip = 'Wagon Wheel: New Room'; item.command = 'wagonWheel.newRoom';
+  const sync = () => (config().get('showStatusBar') === false ? item.hide() : item.show());
+  sync();
+  context.subscriptions.push(item, vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('wagonWheel.showStatusBar')) sync(); }));
+  return item;
 }
 
 // New rooms start on the current rules, so they get no upgrade notice.
@@ -883,6 +933,14 @@ function activate(context) {
     else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(hit.guide); }
   }));
 
+  roomsTree = new RoomsTree(context);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('wagonWheel.start', emptyTree),
+    vscode.window.registerTreeDataProvider('wagonWheel.rooms', roomsTree),
+    vscode.commands.registerCommand('wagonWheel.openRoomById', (id) => openRoomById(context, id)),
+    vscode.commands.registerCommand('wagonWheel.refreshRooms', () => refreshRooms()));
+  statusBarItem(context);
+
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.reportProblem', () => reportProblem().catch((e) => {
     log(`report a problem: ${e.message}`);
     vscode.window.showErrorMessage(`Wagon Wheel: could not build the report (${e.message}). You can still open an issue at ${feedback.ISSUES_URL}.`);
@@ -902,4 +960,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants, firstRunCheck, reportProblem };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants, firstRunCheck, reportProblem, openRoomById, RoomsTree };

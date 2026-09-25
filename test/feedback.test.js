@@ -102,14 +102,16 @@ function loadExtension(ui) {
   const disposable = { dispose() {} };
   const vscode = {
     workspace: { getConfiguration: () => ({ get: () => undefined, inspect: () => undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: ui.trusted !== false,
-      registerTextDocumentContentProvider: () => disposable },
+      registerTextDocumentContentProvider: () => disposable, onDidChangeConfiguration: () => disposable },
     window: {
       withProgress: async (_o, fn) => fn(),
       showWarningMessage: async (msg, opts, ...buttons) => { ui.warnings.push({ msg, opts, buttons }); return ui.answer; },
       showInformationMessage: async (msg, opts, ...buttons) => { ui.infos.push({ msg, opts, buttons }); return ui.answer; },
       createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
       onDidChangeActiveTextEditor: () => disposable, onDidChangeTextEditorSelection: () => disposable, onDidChangeTextEditorVisibleRanges: () => disposable,
+      registerTreeDataProvider: () => disposable, createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
     },
+    EventEmitter: class { constructor() { this.event = () => disposable; } fire() {} }, StatusBarAlignment: { Left: 1, Right: 2 },
     ProgressLocation: { Notification: 15 }, version: '1.104.0',
     env: { remoteName: undefined, openExternal: (u) => { ui.opened.push(u); } },
     Uri: { parse: lossyUri, file: (p) => ({ fsPath: p }) },

@@ -4,7 +4,7 @@
 
 > One room for your local coding sessions to work together.
 
-**Prototype 0.5.3.** Site: https://darkrangerstudios.github.io/wagon-wheel/
+**Prototype 0.5.4.** Site: https://darkrangerstudios.github.io/wagon-wheel/
 
 One VS Code room where you and named local Claude Code or Codex sessions talk in a single timeline. Multiple participants can use the same provider.
 
@@ -50,12 +50,12 @@ The custom room roster supports multiple local Claude Code/Codex sessions. Routi
 ## Install
 You need VS Code 1.90 or later and, for each kind of seat you want, that provider's CLI installed and signed in with your own account: [Claude Code](https://code.claude.com/docs/en/setup) and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Wagon Wheel never installs or signs in anything for you.
 
-1. Download `wagon-wheel-0.5.3.vsix` from the [latest release](https://github.com/darkrangerstudios/wagon-wheel/releases/latest).
+1. Download `wagon-wheel-0.5.4.vsix` from the [latest release](https://github.com/darkrangerstudios/wagon-wheel/releases/latest).
 2. Install it, either from the Extensions view (**⋯ → Install from VSIX…**) or from a terminal:
    ```
-   code --install-extension wagon-wheel-0.5.3.vsix
+   code --install-extension wagon-wheel-0.5.4.vsix
    ```
-3. Run **Wagon Wheel: New Room** from the Command Palette. The first room checks each CLI it needs and tells you what is missing before any turn is spent. **Wagon Wheel: Check Setup** runs the same check any time.
+3. Start a room from any of these: the wheel icon in the Activity Bar (a side panel with New Room, Join Existing Conversations and your saved rooms), the wheel button in the editor title bar, **Wagon Wheel** in the status bar, or **Wagon Wheel: New Room** in the Command Palette. Settings can hide the editor and status bar buttons. The first room checks each CLI it needs and tells you what is missing before any turn is spent. **Wagon Wheel: Check Setup** runs the same check any time.
 
 Tested on macOS. Linux should work but is untested; Windows is not supported yet. Logs appear in Output → Wagon Wheel.
 

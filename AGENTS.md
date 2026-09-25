@@ -15,6 +15,7 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
 | `src/sessionHistory.js` | Access control for shared history: host-only binding and readers, rebinding revokes grants, text-only Claude and Codex readers. |
 | `src/historySources.js` | Local history as room context: human-added sources, shared working sessions, the read_session_history tool's output. Local sessions only. |
 | `src/setup.js` | Read-only CLI checks (version, sign-in), no model calls; the first-run rules New Room uses (check each seat's provider once). |
+| `src/roomsView.js` | The side panel's saved-rooms list: reads room files (parsed once per change, keyed by mtime and size), newest activity first, UUID-named files only. The Activity Bar container, Start buttons (viewsWelcome), editor title button and status bar item are wired in `package.json` and `extension.js`. |
 | `src/feedback.js` | Report a Problem: builds the prefilled GitHub issue URL from versions and the roster, plus opt-in scrubbed log lines. Pure; the command in `extension.js` gathers facts and opens the URL. |
 | `src/localUsage.js` | This computer's token use from the CLIs' own logs (`~/.claude/projects`, `~/.codex/sessions`): incremental, read-only, no model calls. Totals plus the breakdown by model, lane (main or subagent), thinking, cache tier and tool call. Unrecognised formats report unknown, never zero. |
 | `src/claudeUsage.js` | Claude plan limits from the CLI's headless `/usage` (session, week, per model). |
