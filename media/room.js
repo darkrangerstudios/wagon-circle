@@ -387,7 +387,7 @@
       const tools = Object.entries(d.tools).sort((a, b) => b[1].calls - a[1].calls);
       if (tools.length) {
         s.appendChild(el('div', 'lbl', `Tool calls · ${d.toolCalls}`));
-        for (const [t, tu] of tools.slice(0, 12)) stat(s, t, `${tu.calls}× · ≈${chars(tu.chars)} back${tu.unsized ? ` (${tu.unsized} unsized)` : ''}`, 'Estimated: characters of text returned to the model. Neither CLI reports tokens per tool.');
+        for (const [t, tu] of tools.slice(0, 12)) stat(s, t, `${tu.calls}× · ≈${chars(tu.chars)} back${tu.unsized ? ` (${tu.unsized} unsized)` : ''}`, 'Estimated: characters of text returned to the model. Neither CLI reports tokens per tool. Unsized: no text came back (an image, an interrupted call, or a result not logged yet).');
         if (tools.length > 12) s.appendChild(el('small', 'note', `${tools.length - 12} more tools not shown`));
       }
     }
@@ -503,7 +503,7 @@
       renderWho(); renderQuota();
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
-    else if (m.type === 'localUsage') { local = m.usage; renderQuota(); }
+    else if (m.type === 'localUsage') { local = m.usage; renderQuota(); if (!$('pop').hidden && $('pop').dataset.for === 'usage') { closePop(); openUsage(); } } // a refresh while open re-renders it
     else if (m.type === 'task') { task = m.task; taskMode = m.mode || 'auto'; taskDefaults = m.defaults; presets = m.presets || presets; typedAgents = m.typed || {}; renderTask(); }
     else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
     else if (m.type === 'meta') { meta = m.meta; syncParticipants(); specs = m.commands || specs; controls = m.controls || controls; renderChips(); }

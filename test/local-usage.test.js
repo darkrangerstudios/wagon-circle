@@ -86,7 +86,7 @@ test('Claude breakdown: per model, main vs subagent, thinking, cache tiers, and 
   assert.deepStrictEqual(t.tiers, { h1: 5, m5: 0 });
   assert.deepStrictEqual(w.tiers, { h1: 5, m5: 9 });
   assert.strictEqual(w.models['claude-sonnet-5'].output, 50);
-  assert.deepStrictEqual(t.tools, { Read: { calls: 2, chars: 1500, unsized: 1 }, Grep: { calls: 1, chars: 4, unsized: 0 } });
+  assert.deepStrictEqual({ ...t.tools }, { Read: { calls: 2, chars: 1500, unsized: 1 }, Grep: { calls: 1, chars: 4, unsized: 0 } }); // containers have no prototype: spread to compare
   assert.strictEqual(t.toolCalls, 3);
   assert.deepStrictEqual(r.claude.today, { fresh: 61, cached: 102, cacheWrite: 8, output: 34 }); // totals include the subagent
 });
@@ -107,10 +107,10 @@ test('Codex breakdown: model from turn_context, reasoning growth, function calls
     tc(NOW - H, [300, 200, 10], 4)); // reset: new session baseline, its reasoning counted as is
   const r = await new LocalUsage({ home: h, now: () => NOW }).scan();
   const t = r.codex.detail.today;
-  assert.deepStrictEqual(t.models, { 'gpt-5.6-codex': { fresh: 500, cached: 1300, cacheWrite: 0, output: 80, thinking: 29 } });
+  assert.deepStrictEqual({ ...t.models }, { 'gpt-5.6-codex': { fresh: 500, cached: 1300, cacheWrite: 0, output: 80, thinking: 29 } });
   assert.strictEqual(t.thinking, 29);
   assert.strictEqual(t.tiers, null);
-  assert.deepStrictEqual(t.tools, { shell: { calls: 2, chars: 300, unsized: 1 }, apply_patch: { calls: 1, chars: 2, unsized: 0 } });
+  assert.deepStrictEqual({ ...t.tools }, { shell: { calls: 2, chars: 300, unsized: 1 }, apply_patch: { calls: 1, chars: 2, unsized: 0 } });
   assert.deepStrictEqual(t.lanes.subagent, { fresh: 0, cached: 0, cacheWrite: 0, output: 0 });
 });
 
@@ -119,6 +119,49 @@ test('a model that was never logged shows as unknown, and events before the wind
   const tc = (ts, t) => JSON.stringify({ timestamp: iso(ts), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: t[0], cached_input_tokens: 0, output_tokens: t[1] } } } }) + '\n';
   fs.writeFileSync(f, tc(NOW - 20 * 24 * H, [100, 1]) + tc(NOW - H, [150, 3]));
   const r = await new LocalUsage({ home: h, now: () => NOW }).scan();
-  assert.deepStrictEqual(r.codex.detail.window.models, { unknown: { fresh: 50, cached: 0, cacheWrite: 0, output: 2, thinking: 0 } });
+  assert.deepStrictEqual({ ...r.codex.detail.window.models }, { unknown: { fresh: 50, cached: 0, cacheWrite: 0, output: 2, thinking: 0 } });
   assert.deepStrictEqual(r.codex.window, { fresh: 50, cached: 0, cacheWrite: 0, output: 2 });
+});
+
+test('names from the logs are only keys: "__proto__" and "constructor" never touch Object.prototype', async () => {
+  const h = home(); const dir = path.join(h, '.claude', 'projects', 'proj');
+  const tool = (id, name) => ({ type: 'tool_use', id, name, input: {} });
+  fs.writeFileSync(path.join(dir, 's1.jsonl'),
+    claudeFull('m1', NOW - H, { model: '__proto__', content: [tool('t1', '__proto__'), tool('t2', 'constructor')] }) +
+    claudeFull('m2', NOW - H, { model: 'constructor' }, [1, 0, 0, 1]) +
+    claudeResult(NOW - H + 1000, 't1', 'abc'));
+  const r = await new LocalUsage({ home: h, now: () => NOW }).scan();
+  const t = r.claude.detail.today;
+  assert.deepStrictEqual(Object.keys(t.models).sort(), ['__proto__', 'constructor']);
+  assert.deepStrictEqual(t.tools['__proto__'], { calls: 1, chars: 3, unsized: 0 });
+  assert.deepStrictEqual(t.tools.constructor, { calls: 1, chars: 0, unsized: 1 });
+  assert.strictEqual(t.toolCalls, 2);
+  assert.strictEqual(({}).fresh, undefined); assert.strictEqual(({}).calls, undefined); assert.strictEqual(Object.calls, undefined);
+  assert.strictEqual(JSON.parse(JSON.stringify(t)).tools.constructor.calls, 1); // survives the trip to the webview
+});
+
+test('past the name cap, the most-called tools are kept and the rest fold into "other"', async () => {
+  const h = home(); const dir = path.join(h, '.claude', 'projects', 'proj');
+  let lines = '';
+  for (let i = 0; i < 70; i++) lines += claudeFull(`m${i}`, NOW - H, { content: [{ type: 'tool_use', id: `t${i}`, name: `rare${i}` }] });
+  for (let i = 0; i < 5; i++) lines += claudeFull(`z${i}`, NOW - H, { content: [{ type: 'tool_use', id: `z${i}`, name: 'Popular' }] }); // arrives last in file order
+  fs.writeFileSync(path.join(dir, 's1.jsonl'), lines);
+  const t = (await new LocalUsage({ home: h, now: () => NOW }).scan()).claude.detail.today;
+  assert.strictEqual(t.tools.Popular.calls, 5);
+  assert.strictEqual(Object.keys(t.tools).length, 61); // 60 kept + other
+  assert.strictEqual(t.tools.other.calls, 11); assert.strictEqual(t.toolCalls, 75); // 71 names: Popular + 59 rare kept, 11 rare folded
+});
+
+test('the subagent lane is judged below the projects root, and old events are pruned from memory', async () => {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'subagents-')); // a home folder named like the marker
+  const dir = path.join(h, '.claude', 'projects', 'proj'); fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(dir, 's1', 'subagents'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 's1.jsonl'), claudeFull('m1', NOW - H, {}, [10, 0, 0, 1]) + claudeFull('m0', NOW - 20 * 24 * H, {}, [99, 0, 0, 9]));
+  fs.writeFileSync(path.join(dir, 's1', 'subagents', 'a.jsonl'), claudeFull('m2', NOW - H, {}, [5, 0, 0, 1]));
+  const lu = new LocalUsage({ home: h, now: () => NOW });
+  const t = (await lu.scan()).claude.detail.today;
+  assert.deepStrictEqual(t.lanes, { main: { fresh: 10, cached: 0, cacheWrite: 0, output: 1 }, subagent: { fresh: 5, cached: 0, cacheWrite: 0, output: 1 } });
+  assert.strictEqual(lu.files.get(path.join(dir, 's1.jsonl')).events.length, 2); // pruning happens on the next read
+  await lu.scan();
+  assert.strictEqual(lu.files.get(path.join(dir, 's1.jsonl')).events.length, 1);
 });

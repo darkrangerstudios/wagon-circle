@@ -81,30 +81,41 @@ const fromCodex = (u) => (u ? { fresh: num(u.inputTokens) - num(u.cachedInputTok
 const sum = (a, b) => (b ? add(a || zero(), b) : a);
 
 const UNKNOWN = 'unknown';
-const MAX_TOOL_NAMES = 60; // a runaway log with thousands of distinct names stays bounded
+const MAX_TOOL_NAMES = 60; // the most-called names are kept; a runaway log with thousands of names stays bounded
 
-// Breakdown of the events and tool calls at or after `from`.
+// Model and tool names come from the logs, so they are untrusted text: aggregate in Maps and hand back
+// prototype-less objects, so a name such as "__proto__" or "constructor" is just a key.
+const plain = (map) => { const o = Object.create(null); for (const [k, v] of map) o[k] = v; return o; };
+
+// Breakdown of the events and tool calls at or after `from`. A tool call is "unsized" when no text came back:
+// an image result, a call that was interrupted, or one whose result is not in the log yet.
 function breakdown(files, from) {
-  const out = { models: {}, lanes: { main: zero(), subagent: zero() }, thinking: 0, tiers: null, tools: {}, toolCalls: 0 };
+  const models = new Map(), tools = new Map();
+  const out = { lanes: { main: zero(), subagent: zero() }, thinking: 0, tiers: null, toolCalls: 0 };
   for (const f of files) {
     for (const e of f.events) {
       if (e.ts < from) continue;
       const m = e.model || UNKNOWN;
-      add(out.models[m] || (out.models[m] = { ...zero(), thinking: 0 }), e.usage);
-      out.models[m].thinking += e.thinking || 0;
+      if (!models.has(m)) models.set(m, { ...zero(), thinking: 0 });
+      add(models.get(m), e.usage); models.get(m).thinking += e.thinking || 0;
       add(out.lanes[e.lane === 'subagent' ? 'subagent' : 'main'], e.usage);
       out.thinking += e.thinking || 0;
       if (e.tiers) { out.tiers = out.tiers || { h1: 0, m5: 0 }; out.tiers.h1 += e.tiers.h1; out.tiers.m5 += e.tiers.m5; }
     }
     for (const t of f.tools) {
       if (t.ts < from) continue;
-      const name = t.name in out.tools || Object.keys(out.tools).length < MAX_TOOL_NAMES ? t.name : 'other';
-      const x = out.tools[name] || (out.tools[name] = { calls: 0, chars: 0, unsized: 0 });
-      x.calls += 1; out.toolCalls += 1;
+      if (!tools.has(t.name)) tools.set(t.name, { calls: 0, chars: 0, unsized: 0 });
+      const x = tools.get(t.name); x.calls += 1; out.toolCalls += 1;
       if (Number.isFinite(t.chars)) x.chars += t.chars; else x.unsized += 1;
     }
   }
-  return out;
+  if (tools.size > MAX_TOOL_NAMES) {
+    const rest = [...tools.entries()].sort((a, b) => b[1].calls - a[1].calls).slice(MAX_TOOL_NAMES);
+    const other = { calls: 0, chars: 0, unsized: 0 };
+    for (const [name, x] of rest) { tools.delete(name); other.calls += x.calls; other.chars += x.chars; other.unsized += x.unsized; }
+    tools.set('other', other);
+  }
+  return { models: plain(models), ...out, tools: plain(tools) };
 }
 
 class LocalUsage {
@@ -125,10 +136,20 @@ class LocalUsage {
     return out;
   }
 
-  _fresh(file) {
+  _fresh(file, provider) {
     // Claude Code writes subagent transcripts under <session>/subagents/; their lines may not say isSidechain.
-    const lane = /[\\/]subagents[\\/]/.test(file) ? 'subagent' : 'main';
+    // Judged on the path below the projects root, so a home folder named that way doesn't count.
+    const rel = path.relative(this.roots[provider], file).split(path.sep);
+    const lane = provider === 'claude' && rel.slice(0, -1).includes('subagents') ? 'subagent' : 'main';
     return { offset: 0, events: [], tools: [], calls: new Map(), seen: new Set(), last: null, lastReasoning: 0, lines: 0, recognised: 0, model: null, lane };
+  }
+
+  // Forget what is older than the window, so long-lived sessions don't grow without bound. A call that never
+  // got its result (interrupted, or the process died) stays unsized once it leaves the matching map.
+  _prune(f, since) {
+    f.events = f.events.filter((e) => e.ts >= since);
+    f.tools = f.tools.filter((t) => t.ts >= since);
+    for (const [id, entry] of f.calls) if (entry.ts < since) f.calls.delete(id);
   }
 
   // Read the bytes added since the last scan, in bounded chunks; only complete lines are consumed.
@@ -136,7 +157,8 @@ class LocalUsage {
     let st; try { st = await fsp.stat(file); } catch { return; }
     if (st.mtimeMs < since) return;
     let f = this.files.get(file);
-    if (!f || st.size < f.offset) { f = this._fresh(file); this.files.set(file, f); }
+    if (!f || st.size < f.offset) { f = this._fresh(file, provider); this.files.set(file, f); }
+    this._prune(f, since);
     if (st.size === f.offset) return;
     const h = await fsp.open(file, 'r');
     try {

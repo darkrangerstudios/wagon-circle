@@ -53,3 +53,16 @@ test('an older host without breakdowns still opens with totals and says to reloa
   assert.match(h.ids.pop.textContent, /needs a newer Wagon Wheel host/);
   assert.match(h.ids.pop.textContent, /Codex: no local logs found/);
 });
+
+test('a refresh while open re-renders in place, and a click on the pill itself does not close it', () => {
+  const h = setup();
+  h.receive({ type: 'localUsage', usage: local });
+  const pill = () => walk(h.ids.quota).find((e) => e.tagName === 'button');
+  pill().fire('click');
+  assert.match(h.ids.pop.textContent, /Tool calls · 52/);
+  h.docFire('click', pill()); assert.equal(h.ids.pop.hidden, false); // the outside-click handler exempts the pill
+  h.receive({ type: 'localUsage', usage: { ...local, scannedAt: local.scannedAt + 5 * 60e3, claude: { ...local.claude, detail: { ...local.claude.detail, window: { ...local.claude.detail.window, toolCalls: 53 } } } } });
+  assert.equal(h.ids.pop.hidden, false); assert.match(h.ids.pop.textContent, /Tool calls · 53/);
+  assert.match(h.ids.pop.textContent, /updated 10:05/);
+  h.docFire('click', h.ids.log); assert.equal(h.ids.pop.hidden, true); // a click elsewhere closes it
+});
