@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit(src/**)",
+      "Edit(media/**)",
+      "Edit(test/**)",
+      "Edit(docs/**)",
+      "Edit(README.md)",
+      "Edit(AGENTS.md)",
+      "Bash(npm test)",
+      "Bash(node test/*)",
+      "Bash(node -e *)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git fetch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git push -u origin claude/*)",
+      "Bash(git push -u origin codex/*)",
+      "mcp__github__pull_request_read",
+      "mcp__github__list_pull_requests",
+      "mcp__github__get_file_contents",
+      "mcp__github__create_pull_request",
+      "mcp__github__update_pull_request",
+      "mcp__github__add_issue_comment"
+    ],
+    "deny": [
+      "Bash(git push * main*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard*)",
+      "Bash(git config user.email*)",
+      "Bash(rm -rf *)",
+      "mcp__github__merge_pull_request",
+      "mcp__github__delete_file"
+    ]
+  }
+}
