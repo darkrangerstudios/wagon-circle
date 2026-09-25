@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.5.1-local.1';
+  const EXPECT = '0.5.2-local.1';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -239,11 +239,13 @@
       cp('Claude session', cusage.session); cp('Claude week', cusage.week);
       for (const [name, v] of Object.entries(cusage.models || {})) if (v.pct >= 80) cp(`${name} week`, v);
     }
-    // This computer's token totals across all local sessions (not only this room). Hover for the breakdown.
+    // This computer's token totals across all local sessions (not only this room). Hover for the totals, click for
+    // the breakdown by model, lane, thinking, cache tier and tool.
     if (local) {
       const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
       const part = (n, x) => (x === null ? `${n} no logs` : x.unknown ? `${n} unknown` : `${n} ${k(total(x.window))}`);
-      const p = el('span', 'pill', `This computer · ${local.windowDays} days: ${part('Claude', local.claude)} · ${part('Codex', local.codex)}`);
+      const p = el('button', 'pill btn', `This computer · ${local.windowDays} days: ${part('Claude', local.claude)} · ${part('Codex', local.codex)}`);
+      p.setAttribute('aria-label', 'This computer: token usage breakdown'); p.addEventListener('click', () => openUsage());
       const line = (n, x, w) => (x && !x.unknown ? `${n} ${w === 'today' ? 'today' : `${local.windowDays} days`}: ${k(x[w].fresh)} new in · ${k(x[w].cached)} cached · ${k(x[w].cacheWrite)} cache writes · ${k(x[w].output)} out` : `${n}: ${x === null ? 'no local logs found' : 'log format not recognised'}`);
       p.title = [line('Claude', local.claude, 'today'), line('Claude', local.claude, 'window'), line('Codex', local.codex, 'today'), line('Codex', local.codex, 'window'),
         'Tokens from every Claude Code and Codex session on this computer, read from their local logs. Not included: web apps, other machines, cloud tasks. Most are cached reads, which cost far less than new input.',
@@ -347,6 +349,51 @@
     const sv = el('button', 'link', 'Save as my defaults'); sv.title = 'New tasks start with these; tasks already running keep theirs';
     sv.addEventListener('click', () => { vscode.postMessage({ type: 'taskDefaults', limits: read() }); closePop(); }); acts.appendChild(sv);
     pop.appendChild(acts);
+  }
+  // ---------- this computer's usage, broken down ----------
+  let usageWin = 'window';
+  const chars = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M chars` : n >= 1000 ? `${(n / 1000).toFixed(1)}k chars` : `${n} chars`);
+  function openUsage() {
+    const pop = $('pop');
+    if (!pop.hidden && pop.dataset.for === 'usage') return closePop();
+    if (!local) return;
+    pop.dataset.for = 'usage'; pop.textContent = ''; pop.hidden = false;
+    const h = el('h4'); h.appendChild(el('span', null, 'This computer'));
+    h.appendChild(el('small', null, `updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)); pop.appendChild(h);
+    const seg = el('div', 'seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Period');
+    const body = el('div', 'usage');
+    for (const [v, label] of [['today', 'Today'], ['window', `${local.windowDays} days`]]) {
+      const x = el('button', v === usageWin ? 'on' : '', label); x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', String(v === usageWin));
+      x.addEventListener('click', () => { usageWin = v; for (const b of seg.children) { b.classList.toggle('on', b === x); b.setAttribute('aria-checked', String(b === x)); } render(); });
+      seg.appendChild(x);
+    }
+    pop.appendChild(seg); pop.appendChild(body);
+    const stat = (box, label, value, tip) => { const r = el('div', 'stat'); r.appendChild(el('span', null, label)); const v = el('span', 'val', value); if (tip) v.title = tip; r.appendChild(v); box.appendChild(r); };
+    const tok = (u) => `${k(u.fresh + u.cacheWrite)} new · ${k(u.cached)} cached · ${k(u.output)} out`;
+    const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
+    function section(name, x) {
+      const s = el('div', 'usec'); body.appendChild(s);
+      if (x === null) { s.appendChild(el('div', 'lbl', `${name}: no local logs found`)); return; }
+      if (x.unknown) { s.appendChild(el('div', 'lbl', `${name}: log format not recognised`)); return; }
+      const u = x[usageWin], d = x.detail && x.detail[usageWin];
+      s.appendChild(el('div', 'lbl', `${name} · ${k(total(u))} tokens${usageWin === 'window' && x.sessions ? ` · ${x.sessions} session${x.sessions === 1 ? '' : 's'}` : ''}`));
+      stat(s, 'All', tok(u), `${k(u.fresh)} new input · ${k(u.cacheWrite)} cache writes · ${k(u.cached)} cached reads · ${k(u.output)} output`);
+      if (!d) { s.appendChild(el('small', 'note', 'Breakdown needs a newer Wagon Wheel host; reload the window.')); return; }
+      const models = Object.entries(d.models).sort((a, b) => total(b[1]) - total(a[1]));
+      if (models.length > 1 || (models[0] && models[0][0] !== 'unknown')) for (const [m, mu] of models) stat(s, m === 'unknown' ? 'model not logged' : m, `${tok(mu)}${mu.thinking ? ` · ${k(mu.thinking)} thinking` : ''}`);
+      if (total(d.lanes.subagent)) { stat(s, 'Main conversation', tok(d.lanes.main)); stat(s, 'Subagents', tok(d.lanes.subagent)); }
+      if (u.output) stat(s, name === 'Codex' ? 'Reasoning' : 'Thinking', `${k(d.thinking)} of ${k(u.output)} output tokens`, name === 'Codex' ? 'Reasoning tokens as Codex reports them in its running total' : 'Thinking tokens as Claude Code logs them per API message');
+      if (d.tiers && (d.tiers.h1 || d.tiers.m5)) stat(s, 'Cache writes', `${k(d.tiers.h1)} 1-hour · ${k(d.tiers.m5)} 5-minute`, 'Prompt-cache tiers: the 1-hour tier costs more to write and lasts longer between turns');
+      const tools = Object.entries(d.tools).sort((a, b) => b[1].calls - a[1].calls);
+      if (tools.length) {
+        s.appendChild(el('div', 'lbl', `Tool calls · ${d.toolCalls}`));
+        for (const [t, tu] of tools.slice(0, 12)) stat(s, t, `${tu.calls}× · ≈${chars(tu.chars)} back${tu.unsized ? ` (${tu.unsized} unsized)` : ''}`, 'Estimated: characters of text returned to the model. Neither CLI reports tokens per tool.');
+        if (tools.length > 12) s.appendChild(el('small', 'note', `${tools.length - 12} more tools not shown`));
+      }
+    }
+    function render() { body.textContent = ''; section('Claude', local.claude); section('Codex', local.codex); }
+    render();
+    pop.appendChild(el('small', 'note', 'Every Claude Code and Codex session on this computer, read from their local logs; nothing here is a model call. Not included: web apps, other machines, cloud tasks. Tool result sizes are estimates in characters, not tokens.'));
   }
   function closePop() { $('pop').hidden = true; }
   function cmd(text) { vscode.postMessage({ type: 'command', text }); }
@@ -549,7 +596,7 @@
       b.addEventListener('click', () => { cmd(`/default ${v}`); closePop(); }); pop.appendChild(b);
     }
   });
-  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead') && !e.target.closest('#tc') && !e.target.closest('#task')) closePop(); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#pop') && !e.target.closest('.vendor') && !e.target.closest('#lead') && !e.target.closest('#tc') && !e.target.closest('#task') && !e.target.closest('#quota .btn')) closePop(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
   document.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dropping'); });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });

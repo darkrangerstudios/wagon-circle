@@ -34,6 +34,13 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .pill.warn { color: var(--vscode-editorWarning-foreground); border-color: currentColor; }
 .pill.full { color: var(--vscode-editorError-foreground); border-color: currentColor; }
 .pill:empty { display: none; }
+.pill.btn { cursor: pointer; } .pill.btn:hover { border-color: var(--muted); color: var(--ink); }
+/* usage breakdown popover */
+.pop .usage { display: grid; gap: 10px; }
+.pop .usec { display: grid; gap: 3px; }
+.pop .stat { display: flex; justify-content: space-between; gap: 12px; font-size: .86em; }
+.pop .stat span:first-child { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop .stat .val { text-align: right; flex: none; font-variant-numeric: tabular-nums; }
 
 /* Conversation column */
 main { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 18px 8px; }

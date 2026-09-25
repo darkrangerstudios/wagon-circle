@@ -15,6 +15,8 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
 | `src/sessionHistory.js` | Access control for shared history: host-only binding and readers, rebinding revokes grants, text-only Claude and Codex readers. |
 | `src/historySources.js` | Local history as room context: human-added sources, shared working sessions, the read_session_history tool's output. Local sessions only. |
 | `src/setup.js` | Read-only CLI checks for first run (version, sign-in), no model calls. |
+| `src/localUsage.js` | This computer's token use from the CLIs' own logs (`~/.claude/projects`, `~/.codex/sessions`): incremental, read-only, no model calls. Totals plus the breakdown by model, lane (main or subagent), thinking, cache tier and tool call. Unrecognised formats report unknown, never zero. |
+| `src/claudeUsage.js` | Claude plan limits from the CLI's headless `/usage` (session, week, per model). |
 | `src/codexClient.js` | Private `codex app-server` over stdio: threads, turns, fork, `turn/steer`, `model/list`, rate limits, activity mapping (`describeItem`), typed tools (`dynamicTools` on `thread/start`, answered from `item/tool/call`). Holds the forbidden-method blocklist. |
 | `src/claudeClient.js` | Persistent `claude -p` stream-json session: streaming, thinking and tool activity, clean interrupt (control_request), steer (interrupt, then continue), model/effort/fast restarts on the same session, typed tools as an in-process `sdk` MCP server answered over the same stdio. |
 | `src/claudeBinary.js` | Picks the newest Claude Code CLI on the machine. Old CLIs refuse new models. |

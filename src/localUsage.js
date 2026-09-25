@@ -4,6 +4,10 @@
 // Read-only and incremental (only files touched in the window, only bytes added since the last scan), no model
 // calls. It sees this computer only: web apps, other machines and cloud tasks are not in these logs. Providers
 // change their log formats; anything unrecognised is reported as unknown, never as zero.
+//
+// Besides the totals, each usage event keeps the model, the lane (main conversation or a subagent), thinking
+// tokens and Claude's cache tiers, and tool calls are counted per tool with the size of what came back. Neither
+// provider reports tokens per tool call, so result sizes are the characters the model received: an estimate.
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
@@ -13,13 +17,39 @@ const CHUNK = 8 * 1024 * 1024;
 const zero = () => ({ fresh: 0, cached: 0, cacheWrite: 0, output: 0 });
 const add = (a, b) => { a.fresh += b.fresh; a.cached += b.cached; a.cacheWrite += b.cacheWrite; a.output += b.output; return a; };
 const num = (v) => (Number.isFinite(v) && v >= 0 ? v : 0);
+const str = (v) => (typeof v === 'string' && v ? v : null);
 
 // Claude: one usage per API message, repeated on each content block of that message (dedupe by message id).
 function claudeRecord(r) {
   if (!r || r.type !== 'assistant' || !r.message || !r.message.usage) return null;
   const u = r.message.usage;
   if (!Number.isFinite(u.input_tokens) && !Number.isFinite(u.output_tokens)) return null;
-  return { key: `${r.message.id || ''}:${r.requestId || ''}`, ts: Date.parse(r.timestamp), usage: { fresh: num(u.input_tokens), cached: num(u.cache_read_input_tokens), cacheWrite: num(u.cache_creation_input_tokens), output: num(u.output_tokens) } };
+  const tiers = u.cache_creation && typeof u.cache_creation === 'object' ? { h1: num(u.cache_creation.ephemeral_1h_input_tokens), m5: num(u.cache_creation.ephemeral_5m_input_tokens) } : null;
+  return {
+    key: `${r.message.id || ''}:${r.requestId || ''}`, ts: Date.parse(r.timestamp),
+    usage: { fresh: num(u.input_tokens), cached: num(u.cache_read_input_tokens), cacheWrite: num(u.cache_creation_input_tokens), output: num(u.output_tokens) },
+    model: str(r.message.model), lane: r.isSidechain === true ? 'subagent' : 'main',
+    thinking: num(u.output_tokens_details && u.output_tokens_details.thinking_tokens), tiers,
+  };
+}
+
+// Claude tool calls: tool_use blocks in assistant messages (one block per log line, dedupe by block id) and the
+// tool_result blocks in the following user message, whose text is what the model received.
+function claudeToolUses(r) {
+  if (!r || r.type !== 'assistant' || !r.message || !Array.isArray(r.message.content)) return [];
+  return r.message.content.filter((b) => b && b.type === 'tool_use' && str(b.name)).map((b) => ({ id: str(b.id), name: b.name, ts: Date.parse(r.timestamp) }));
+}
+function claudeToolResults(r) {
+  if (!r || r.type !== 'user' || !r.message || !Array.isArray(r.message.content)) return [];
+  return r.message.content.filter((b) => b && b.type === 'tool_result').map((b) => ({ id: str(b.tool_use_id), chars: textChars(b.content) }));
+}
+// Characters of text in a tool result; images and other blocks have no text size (null = unknown).
+function textChars(c) {
+  if (typeof c === 'string') return c.length;
+  if (!Array.isArray(c)) return null;
+  let n = 0, any = false;
+  for (const b of c) if (b && typeof b.text === 'string') { n += b.text.length; any = true; }
+  return any || !c.length ? n : null;
 }
 
 // Codex: token_count events carry the session's running total; usage is the growth between events.
@@ -28,7 +58,21 @@ function codexTotal(r) {
   const p = r && r.type === 'event_msg' && r.payload;
   const t = p && p.type === 'token_count' && p.info && p.info.total_token_usage;
   if (!t || !Number.isFinite(t.input_tokens)) return null;
-  return { ts: Date.parse(r.timestamp), total: { fresh: num(t.input_tokens) - num(t.cached_input_tokens), cached: num(t.cached_input_tokens), cacheWrite: num(t.cache_write_input_tokens), output: num(t.output_tokens) } };
+  return { ts: Date.parse(r.timestamp), total: { fresh: num(t.input_tokens) - num(t.cached_input_tokens), cached: num(t.cached_input_tokens), cacheWrite: num(t.cache_write_input_tokens), output: num(t.output_tokens) }, reasoning: num(t.reasoning_output_tokens) };
+}
+// Codex rollout items: the model comes from turn_context; tool calls are function_call / custom_tool_call /
+// local_shell_call items and their *_output items, matched by call_id.
+function codexModel(r) { const p = r && r.type === 'turn_context' && r.payload; return p ? str(p.model) : null; }
+function codexToolCall(r) {
+  const p = r && r.type === 'response_item' && r.payload; if (!p) return null;
+  if (p.type === 'function_call' || p.type === 'custom_tool_call') return str(p.name) ? { id: str(p.call_id), name: p.name, ts: Date.parse(r.timestamp) } : null;
+  if (p.type === 'local_shell_call') return { id: str(p.call_id), name: 'shell', ts: Date.parse(r.timestamp) };
+  return null;
+}
+function codexToolOutput(r) {
+  const p = r && r.type === 'response_item' && r.payload; if (!p) return null;
+  if (p.type !== 'function_call_output' && p.type !== 'custom_tool_call_output') return null;
+  return { id: str(p.call_id), chars: typeof p.output === 'string' ? p.output.length : textChars(p.output) };
 }
 
 // One turn's usage as the clients report it, in the same shape as the log totals.
@@ -36,11 +80,38 @@ const fromClaude = (u) => (u ? { fresh: num(u.input_tokens), cached: num(u.cache
 const fromCodex = (u) => (u ? { fresh: num(u.inputTokens) - num(u.cachedInputTokens), cached: num(u.cachedInputTokens), cacheWrite: num(u.cacheWriteInputTokens), output: num(u.outputTokens) } : null);
 const sum = (a, b) => (b ? add(a || zero(), b) : a);
 
+const UNKNOWN = 'unknown';
+const MAX_TOOL_NAMES = 60; // a runaway log with thousands of distinct names stays bounded
+
+// Breakdown of the events and tool calls at or after `from`.
+function breakdown(files, from) {
+  const out = { models: {}, lanes: { main: zero(), subagent: zero() }, thinking: 0, tiers: null, tools: {}, toolCalls: 0 };
+  for (const f of files) {
+    for (const e of f.events) {
+      if (e.ts < from) continue;
+      const m = e.model || UNKNOWN;
+      add(out.models[m] || (out.models[m] = { ...zero(), thinking: 0 }), e.usage);
+      out.models[m].thinking += e.thinking || 0;
+      add(out.lanes[e.lane === 'subagent' ? 'subagent' : 'main'], e.usage);
+      out.thinking += e.thinking || 0;
+      if (e.tiers) { out.tiers = out.tiers || { h1: 0, m5: 0 }; out.tiers.h1 += e.tiers.h1; out.tiers.m5 += e.tiers.m5; }
+    }
+    for (const t of f.tools) {
+      if (t.ts < from) continue;
+      const name = t.name in out.tools || Object.keys(out.tools).length < MAX_TOOL_NAMES ? t.name : 'other';
+      const x = out.tools[name] || (out.tools[name] = { calls: 0, chars: 0, unsized: 0 });
+      x.calls += 1; out.toolCalls += 1;
+      if (Number.isFinite(t.chars)) x.chars += t.chars; else x.unsized += 1;
+    }
+  }
+  return out;
+}
+
 class LocalUsage {
   constructor({ home = os.homedir(), now = Date.now, windowDays = 7 } = {}) {
     this.roots = { claude: path.join(home, '.claude', 'projects'), codex: path.join(home, '.codex', 'sessions') };
     this.now = now; this.windowDays = windowDays;
-    this.files = new Map(); // path -> { size, offset, events: [{ts, usage}], seen:Set, last:total, lines, recognised }
+    this.files = new Map(); // path -> { size, offset, events, tools, calls, seen, last, lines, recognised, model, lane }
   }
 
   async _list(dir, depth) {
@@ -54,12 +125,18 @@ class LocalUsage {
     return out;
   }
 
+  _fresh(file) {
+    // Claude Code writes subagent transcripts under <session>/subagents/; their lines may not say isSidechain.
+    const lane = /[\\/]subagents[\\/]/.test(file) ? 'subagent' : 'main';
+    return { offset: 0, events: [], tools: [], calls: new Map(), seen: new Set(), last: null, lastReasoning: 0, lines: 0, recognised: 0, model: null, lane };
+  }
+
   // Read the bytes added since the last scan, in bounded chunks; only complete lines are consumed.
   async _read(file, provider, since) {
     let st; try { st = await fsp.stat(file); } catch { return; }
     if (st.mtimeMs < since) return;
     let f = this.files.get(file);
-    if (!f || st.size < f.offset) { f = { offset: 0, events: [], seen: new Set(), last: null, lines: 0, recognised: 0 }; this.files.set(file, f); }
+    if (!f || st.size < f.offset) { f = this._fresh(file); this.files.set(file, f); }
     if (st.size === f.offset) return;
     const h = await fsp.open(file, 'r');
     try {
@@ -78,30 +155,50 @@ class LocalUsage {
     } finally { await h.close(); }
   }
 
+  _tool(f, call) {
+    if (!call || !Number.isFinite(call.ts)) return;
+    if (call.id) { if (f.seen.has(`tool:${call.id}`)) return; f.seen.add(`tool:${call.id}`); }
+    const entry = { ts: call.ts, name: call.name, chars: null };
+    f.tools.push(entry);
+    if (call.id) f.calls.set(call.id, entry);
+  }
+  _toolResult(f, res) {
+    if (!res || !res.id) return;
+    const entry = f.calls.get(res.id); if (!entry) return;
+    entry.chars = Number.isFinite(res.chars) ? (entry.chars || 0) + res.chars : entry.chars;
+    f.calls.delete(res.id);
+  }
+
   _lines(f, provider, text) {
     for (const line of text.split('\n')) {
       if (!line) continue;
       f.lines += 1;
       let r; try { r = JSON.parse(line); } catch { continue; }
       if (provider === 'claude') {
+        for (const c of claudeToolUses(r)) this._tool(f, c);
+        for (const x of claudeToolResults(r)) this._toolResult(f, x);
         const x = claudeRecord(r); if (!x) continue;
         f.recognised += 1;
         if (f.seen.has(x.key)) continue; f.seen.add(x.key);
-        if (Number.isFinite(x.ts)) f.events.push({ ts: x.ts, usage: x.usage });
+        if (Number.isFinite(x.ts)) f.events.push({ ts: x.ts, usage: x.usage, model: x.model, lane: f.lane === 'subagent' ? 'subagent' : x.lane, thinking: x.thinking, tiers: x.tiers });
       } else {
+        const model = codexModel(r); if (model) { f.model = model; continue; }
+        const call = codexToolCall(r); if (call) { this._tool(f, call); continue; }
+        const res = codexToolOutput(r); if (res) { this._toolResult(f, res); continue; }
         const x = codexTotal(r); if (!x) continue;
         f.recognised += 1;
         const prev = f.last; f.last = x.total;
         // A total that went down is a new session baseline, not negative use.
         const grew = prev && x.total.fresh + x.total.cached >= prev.fresh + prev.cached && x.total.output >= prev.output;
         const d = grew ? { fresh: x.total.fresh - prev.fresh, cached: x.total.cached - prev.cached, cacheWrite: Math.max(0, x.total.cacheWrite - prev.cacheWrite), output: x.total.output - prev.output } : x.total;
-        if (Number.isFinite(x.ts) && (d.fresh || d.cached || d.output)) f.events.push({ ts: x.ts, usage: d });
+        const thinking = grew ? Math.max(0, x.reasoning - f.lastReasoning) : x.reasoning; f.lastReasoning = x.reasoning;
+        if (Number.isFinite(x.ts) && (d.fresh || d.cached || d.output)) f.events.push({ ts: x.ts, usage: d, model: f.model, lane: 'main', thinking, tiers: null });
       }
     }
   }
 
   // Totals for today (since local midnight) and the last N days, per provider. null = no logs found; a provider
-  // whose logs have lines but no recognisable usage is { unknown: true }.
+  // whose logs have lines but no recognisable usage is { unknown: true }. `detail` holds the breakdowns.
   async scan() {
     const now = this.now(), since = now - this.windowDays * DAY;
     const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
@@ -115,10 +212,10 @@ class LocalUsage {
       if (lines && !recognised) { out[provider] = { unknown: true }; continue; }
       const today = zero(), window = zero();
       for (const f of mine) for (const e of f.events) { if (e.ts >= since) add(window, e.usage); if (e.ts >= midnight.getTime()) add(today, e.usage); }
-      out[provider] = { today, window, sessions: mine.filter((f) => f.events.some((e) => e.ts >= since)).length };
+      out[provider] = { today, window, sessions: mine.filter((f) => f.events.some((e) => e.ts >= since)).length, detail: { today: breakdown(mine, midnight.getTime()), window: breakdown(mine, since) } };
     }
     return out;
   }
 }
 
-module.exports = { LocalUsage, claudeRecord, codexTotal, zero, add, fromClaude, fromCodex, sum };
+module.exports = { LocalUsage, claudeRecord, codexTotal, zero, add, fromClaude, fromCodex, sum, breakdown, textChars };
