@@ -24,8 +24,8 @@ function describeTool(name, input = {}) {
 
 class ClaudeClient {
   // tools: typed room tools ([{name, description, inputSchema}]), answered by the current send()'s onTool.
-  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], tools = [], log = () => {}, onNotice = () => {} }) {
-    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, tools, log, onNotice });
+  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], tools = [], log = () => {}, onNotice = () => {}, onSession = () => {} }) {
+    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, tools, log, onNotice, onSession });
     this.typed = tools.length > 0;
     this.proc = null; this.waiter = null; this.totalCostUsd = 0; this.steerQueue = []; this.reqId = 0;
   }
@@ -94,7 +94,7 @@ class ClaudeClient {
   _onLine(line) {
     let m;
     try { m = JSON.parse(line); } catch { return; }
-    if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; }
+    if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; this.onSession(this.sessionId); } // the host claims it at once
     if (m.type === 'system' && m.subtype === 'notification' && m.text) this.onNotice(m.text); // e.g. fast mode out of credits
     if (m.type === 'control_request' && m.request && m.request.subtype === 'mcp_message' && m.request.server_name === SERVER) { this._onMcp(m); return; }
     const w = this.waiter; if (!w) return;

@@ -110,7 +110,7 @@ class RoomSession {
     if (this.disposed) return;
     for (const r of Object.values(this.slots)) {
       const p = r.seat;
-      if (p.provider === 'claude' && r.client && r.client.sessionId && r.client.sessionId !== p.sessionId) this.bindId(r, r.client.sessionId);
+      if (p.provider === 'claude' && r.client && r.client.sessionId && r.client.sessionId !== p.sessionId) this.adoptId(r, r.client, r.client.sessionId);
       // Preserve older metadata readers for the original two seat ids, without using it for routing.
       if (p.id === p.provider) {
         this.meta[p.provider === 'codex' ? 'codexThreadId' : 'claudeSessionId'] = p.sessionId;
@@ -124,6 +124,18 @@ class RoomSession {
     if (!sessionClaims.claim(r.seat.provider, id, r.owner)) throw new Error('That working session is already owned by another seat or room in this extension host. Fork it instead.');
     if (r.seat.sessionId !== id) sessionClaims.release(r.seat.provider, r.seat.sessionId, r.owner);
     r.seat.sessionId = id;
+  }
+
+  // A Claude seat learns its session id from the CLI's first line: claim it then, not at the next save, so a
+  // sibling's Continue picker cannot take it in between. Never throws: a save or a finishing turn must not fail
+  // because of a claim, so a conflict is reported once in the room and logged instead.
+  adoptId(r, client, id) {
+    if (this.disposed || r.client !== client || r.seat.sessionId === id) return;
+    try { this.bindId(r, id); } catch (e) {
+      if (r.claimNoted === id) return; r.claimNoted = id;
+      log(`${r.seat.id}: could not claim ${id}: ${e.message}`);
+      if (this.room) this.room.note(`${r.seat.label} is writing to session ${String(id).slice(0, 8)}, which another seat or room already continues. Fork one of them so they stop sharing it.`);
+    }
   }
 
   peers(id) { return this.roster.filter((p) => p.id !== id); }
@@ -153,7 +165,7 @@ class RoomSession {
     const p = r.seat;
     const c = new ClaudeClient({ exe: this.options.claude.path, cwd: p.cwd, model: p.model, effort: p.effort, fast: !!p.fast && this.claudeFastOk(p.model),
       onNotice: (t) => !this.disposed && this.room && this.room.note(`${p.label}: ${t}`), systemPrompt: this.brief(r, true), tools: this.toolsFor(p.id),
-      sessionId, forkFrom, addDirs: [this.attDir], log });
+      onSession: (id) => this.adoptId(r, c, id), sessionId, forkFrom, addDirs: [this.attDir], log });
     this.ownedClients.add(c); return c;
   }
 
@@ -164,7 +176,11 @@ class RoomSession {
     roomClaims.set(this.file, this);
     this.booting = this.bootSeats(opts);
     try { await this.booting; }
-    catch (e) { this.disposed = true; this.scheduler?.dispose(); this.closeClients(); throw e; }
+    catch (e) {
+      // Tell the panel before disposing: post() is a no-op afterwards, and the toast alone is easy to miss.
+      this.post({ type: 'notice', text: `Could not start: ${e.message}` });
+      this.disposed = true; this.scheduler?.dispose(); this.closeClients(); throw e;
+    }
     finally { this.booting = null; }
   }
 
@@ -389,8 +405,9 @@ class RoomSession {
         pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'fork' ? 'fork a local session' : 'continue a local session'}`, matchOnDetail: true });
         if (!pick || !live()) return;
         if (action === 'continue') {
+          const recent = pick.mtime && Date.now() - pick.mtime < 120000;
           const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" as ${L}?`, { modal: true,
-            detail: 'This writes to that session directly. Wagon Wheel prevents another seat or room in this extension host from owning it, but cannot see other apps or VS Code windows. Close it there first, or fork instead.' }, 'Continue', 'Fork instead');
+            detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}This writes to that session directly. Wagon Wheel prevents another seat or room in this extension host from owning it, but cannot see other apps or VS Code windows. Close it there first, or fork instead.` }, 'Continue', 'Fork instead');
           if (!go || !live()) return; if (go === 'Fork instead') action = 'fork';
         }
       }
@@ -546,7 +563,8 @@ class RoomSession {
   }
 
   dispose() {
-    if (this.disposed) return;
+    // A session whose boot failed is already disposed, but its panel is closing now: forget it either way.
+    if (this.disposed) { sessions.delete(this); this.panel = null; return; }
     // Save the closing checkpoint once; late boot/turn/usage completions may never save again.
     try { this.save(); } finally {
       this.disposed = true;
@@ -654,8 +672,7 @@ async function openSession(context, session, opts) {
     session.postInit();
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
-    vscode.window.showErrorMessage(`Wagon Wheel could not start: ${e.message}`);
-    session.post({ type: 'notice', text: `Could not start: ${e.message}` });
+    vscode.window.showErrorMessage(`Wagon Wheel could not start: ${e.message}`); // the panel notice was posted by boot()
   }
 }
 

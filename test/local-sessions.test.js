@@ -59,7 +59,7 @@ class FakeClaude {
   }
   setOptions(options) { this.updates.push(options); Object.assign(this, options); }
   async send(text, delta, activity, files, onTool) {
-    if (!this.sessionId) this.sessionId = this.nextId;
+    if (!this.sessionId) { this.sessionId = this.nextId; if (this.onSession) this.onSession(this.sessionId); } // as the CLI's first line does
     fs.writeFileSync(path.join(historyRoot, `${this.sessionId}.jsonl`), JSON.stringify({ type: 'assistant', uuid: 'evidence', sessionId: this.sessionId,
       message: { content: [{ type: 'text', text: `HISTORY:${this.sessionId}` }] } }) + '\n');
     this.turns.push({ text, model: this.model, effort: this.effort, onTool });
@@ -443,4 +443,70 @@ test('history source added during consent picker cannot produce a false success 
   assert.equal((await s.history.read('app',{source:'h1'})).ok,true);
   assert.equal((await s.history.read('db',{source:'h1'})).ok,false);
   assert.match(s.room.state.transcript.at(-1).text,/Already added as h1/);
+});
+
+// ---------- session claims at the moment the CLI reports an id (Kestrel peer review of 3905948, P2) ----------
+function fakePanel() {
+  const posted = []; let onDispose = null;
+  return { posted, close: () => onDispose && onDispose(), webview: { postMessage: (m) => posted.push(m), onDidReceiveMessage() {} }, onDidDispose: (fn) => { onDispose = fn; } };
+}
+
+test('a Claude seat claims its session the moment the CLI reports it, so a sibling cannot Continue it mid-turn', async (t) => {
+  const f = fixture(t, ['claude', 'claude']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const [app, db] = claudeClients;
+  const entered = deferred(), released = deferred();
+  app.send = async function (text) { this.sessionId = this.nextId; this.onSession(this.sessionId); entered.resolve(); await released.promise; return 'First reply'; };
+  s.room.postFromHuman('@app start'); await entered.promise;
+  assert.equal(s.meta.seats[0].sessionId, app.nextId); // claimed before any save or turn end
+  claudeChoices = [{ id: app.nextId, cwd: f.seats[0].cwd, title: 'Fresh sibling', mtime: Date.now() }];
+  picks.push((items) => items.find((item) => item.id === app.nextId));
+  await assert.rejects(s.switchSession('db', 'continue'), /already owned/); // the claim already belongs to app
+  assert.equal(warnings.length, 1); assert.equal(db.stops, 0); assert.equal(s.meta.seats[1].sessionId, null);
+  released.resolve(); await settle(s);
+  assert.equal(s.room.busy.app, false); assert.equal(JSON.parse(fs.readFileSync(s.file, 'utf8')).meta.seats[0].sessionId, app.nextId);
+});
+
+test('a conflicting id learned late is noted once and never breaks saving or strands the seat', async (t) => {
+  const f = fixture(t, ['claude', 'claude']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const [app, db] = claudeClients;
+  const entered = deferred(), released = deferred();
+  // The old race: app's CLI id becomes visible to db's Continue picker before app has claimed it.
+  app.send = async function () { entered.resolve(); await released.promise; this.sessionId = 'shared-claude'; return 'Late first reply'; };
+  s.room.postFromHuman('@app start'); await entered.promise;
+  claudeChoices = [{ id: 'shared-claude', cwd: f.seats[0].cwd, title: 'Unclaimed yet', mtime: 0 }];
+  picks.push((items) => items[0]);
+  await s.switchSession('db', 'continue');
+  assert.equal(s.meta.seats[1].sessionId, 'shared-claude'); assert.equal(db.stops, 1);
+  released.resolve(); await settle(s);
+  assert.equal(s.room.busy.app, false); // the turn ended cleanly despite the claim conflict
+  const notes = s.room.state.transcript.filter((e) => e.from === 'system' && /already continues/.test(e.text));
+  assert.equal(notes.length, 1);
+  assert.equal(s.room.state.transcript.filter((e) => e.kind === 'error').length, 0);
+  s.room.postFromHuman('@app again'); await settle(s); // a second turn: still no throw, still one note
+  assert.equal(s.room.state.transcript.filter((e) => e.from === 'system' && /already continues/.test(e.text)).length, 1);
+  const saved = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+  assert.equal(saved.state.transcript.at(-1).text, 'Late first reply'); // saving kept working after the conflict
+  assert.equal(saved.meta.seats[1].sessionId, 'shared-claude'); assert.equal(saved.meta.seats[0].sessionId, null); // app never took the claim
+});
+
+test('a failed boot tells the panel why, and closing that panel forgets the session', async (t) => {
+  const f = fixture(t), s = f.create();
+  codexBarrier = async () => { throw new Error('synthetic start failure'); };
+  const panel = fakePanel(); s.attach(panel);
+  await assert.rejects(s.boot(), /synthetic start failure/);
+  assert.ok(panel.posted.some((m) => m.type === 'notice' && /Could not start: synthetic start failure/.test(m.text)));
+  assert.equal(s.disposed, true);
+  panel.close(); assert.equal(s.panel, null);
+});
+
+test('the Continue warning says when the session changed in the last two minutes', async (t) => {
+  const f = fixture(t, ['claude']), s = f.create(); await s.boot();
+  claudeChoices = [{ id: 'recent-claude', cwd: f.seats[0].cwd, title: 'Recent', mtime: Date.now() - 1000 }];
+  picks.push((items) => items[0]); await s.switchSession('app', 'continue');
+  assert.match(warnings[0][1].detail, /last two minutes/);
+  claudeChoices = [{ id: 'old-claude', cwd: f.seats[0].cwd, title: 'Old', mtime: Date.now() - 3600e3 }];
+  picks.push((items) => items[0]); await s.switchSession('app', 'continue');
+  assert.doesNotMatch(warnings[1][1].detail, /last two minutes/);
 });
