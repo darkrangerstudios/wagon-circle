@@ -2,7 +2,7 @@
 
 > One room for your local coding sessions to work together.
 
-**Local prototype 0.5.2-local.1 (unreleased).** Site: https://darkrangerstudios.github.io/wagon-wheel/
+**Prototype 0.5.2.** Site: https://darkrangerstudios.github.io/wagon-wheel/
 
 One VS Code room where you and named local Claude Code or Codex sessions talk in a single timeline. Multiple participants can use the same provider.
 

@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.5.2-local.1';
+  const EXPECT = '0.5.2';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -379,7 +379,7 @@
       s.appendChild(el('div', 'lbl', `${name} · ${k(total(u))} tokens${usageWin === 'window' && x.sessions ? ` · ${x.sessions} session${x.sessions === 1 ? '' : 's'}` : ''}`));
       stat(s, 'All', tok(u), `${k(u.fresh)} new input · ${k(u.cacheWrite)} cache writes · ${k(u.cached)} cached reads · ${k(u.output)} output`);
       if (!d) { s.appendChild(el('small', 'note', 'Breakdown needs a newer Wagon Wheel host; reload the window.')); return; }
-      const models = Object.entries(d.models).sort((a, b) => total(b[1]) - total(a[1]));
+      const models = Object.entries(d.models).filter(([, mu]) => total(mu) > 0).sort((a, b) => total(b[1]) - total(a[1])); // Claude Code logs a zero-token placeholder model ('<synthetic>'); it is not a row
       if (models.length > 1 || (models[0] && models[0][0] !== 'unknown')) for (const [m, mu] of models) stat(s, m === 'unknown' ? 'model not logged' : m, `${tok(mu)}${mu.thinking ? ` · ${k(mu.thinking)} thinking` : ''}`);
       if (total(d.lanes.subagent)) { stat(s, 'Main conversation', tok(d.lanes.main)); stat(s, 'Subagents', tok(d.lanes.subagent)); }
       if (u.output) stat(s, name === 'Codex' ? 'Reasoning' : 'Thinking', `${k(d.thinking)} of ${k(u.output)} output tokens`, name === 'Codex' ? 'Reasoning tokens as Codex reports them in its running total' : 'Thinking tokens as Claude Code logs them per API message');

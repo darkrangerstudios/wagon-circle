@@ -66,3 +66,12 @@ test('a refresh while open re-renders in place, and a click on the pill itself d
   assert.match(h.ids.pop.textContent, /updated 10:05/);
   h.docFire('click', h.ids.log); assert.equal(h.ids.pop.hidden, true); // a click elsewhere closes it
 });
+
+test('a zero-token placeholder model (Claude Code logs "<synthetic>") is not shown as a model row', () => {
+  const h = setup();
+  const window = local.claude.detail.window;
+  h.receive({ type: 'localUsage', usage: { ...local, claude: { ...local.claude, detail: { ...local.claude.detail, window: { ...window, models: { ...window.models, '<synthetic>': { ...u(0, 0, 0, 0), thinking: 0 } } } } } } });
+  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
+  assert.match(h.ids.pop.textContent, /claude-opus-5-5/); assert.match(h.ids.pop.textContent, /claude-haiku-4-5/);
+  assert.doesNotMatch(h.ids.pop.textContent, /<synthetic>/);
+});
