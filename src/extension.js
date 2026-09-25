@@ -73,14 +73,16 @@ async function firstRunCheck(context, seats) {
     { modal: true, detail: `Seats that use ${bad.map((p) => PROVIDER_NAMES[p.provider]).join(' or ')} will not be able to answer until the CLI is installed and signed in on ${r.executionHost}. Nothing was installed or signed in for you.` },
     'Create room anyway', ...guides);
   const hit = bad[guides.indexOf(pick)];
-  if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide));
+  if (hit) vscode.env.openExternal(hit.guide);
   return pick === 'Create room anyway';
 }
 
 // Report a Problem: versions and the focused room's roster, plus scrubbed log lines only if the person opts in.
 async function reportProblem() {
   const s = settings();
-  const [claudeV, codexV] = await Promise.all([setup.cliVersion('claude', s.claude.path), setup.cliVersion('codex', s.codexExe)]);
+  // Same trust rule as Check Setup: no CLI is run for an untrusted workspace.
+  const [claudeV, codexV] = vscode.workspace.isTrusted
+    ? await Promise.all([setup.cliVersion('claude', s.claude.path), setup.cliVersion('codex', s.codexExe)]) : ['not checked', 'not checked'];
   const open = [...sessions], room = open.find((x) => x.panel && x.panel.active) || open[open.length - 1];
   let seats = [];
   if (room) {
@@ -97,13 +99,16 @@ async function reportProblem() {
   const WITH = 'Open issue with log lines', WITHOUT = 'Open issue';
   const detail = ['This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.',
     '', `Included: Wagon Wheel ${facts.extension}, VS Code ${facts.vscode}, ${facts.platform}, Claude Code CLI ${claudeV}, Codex CLI ${codexV}, and the room's seats and models.`,
-    'Never included: your conversation, prompts, files or session contents.',
-    ...(preview.length ? ['', `"${WITH}" also adds these ${preview.length} lines (home folder, emails and key-like text removed):`, ...preview] : [])].join('\n');
+    `Room: ${feedback.roomLine(seats)}`,
+    'The report itself never includes your conversation, prompts, files or session contents.',
+    ...(preview.length ? ['', `"${WITH}" also adds these ${preview.length} lines. They can include error text from the CLIs, so read them first (home folder, emails and key-like text are removed):`, ...preview] : [])].join('\n');
   const pick = await vscode.window.showInformationMessage('Wagon Wheel: Report a Problem', { modal: true, detail }, WITHOUT, ...(preview.length ? [WITH] : []));
   if (!pick) return;
   const { url } = feedback.issueUrl(facts, { includeLog: pick === WITH, ...who });
   log(`report a problem: opened issue form (${pick === WITH ? 'with' : 'without'} log lines)`);
-  vscode.env.openExternal(vscode.Uri.parse(url));
+  // A string, not vscode.Uri: Uri.parse decodes the query and the opener re-encodes it lossily (& # + and ? change),
+  // so GitHub would receive a different issue than the one previewed. openExternal passes strings through unchanged.
+  vscode.env.openExternal(url);
 }
 
 function firstExisting(candidates) {
@@ -875,7 +880,7 @@ function activate(context) {
     const passedNow = r.providers.filter(setup.passes);
     if (passedNow.length) await context.globalState.update(setup.PASSED_KEY, { ...(context.globalState.get(setup.PASSED_KEY) || {}), ...Object.fromEntries(passedNow.map((p) => [p.provider, true])) });
     if (!bad.length) vscode.window.showInformationMessage(msg);
-    else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(vscode.Uri.parse(hit.guide)); }
+    else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(hit.guide); }
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.reportProblem', () => reportProblem().catch((e) => {

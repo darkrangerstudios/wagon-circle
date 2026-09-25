@@ -12,7 +12,8 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Best-effort removal of personal and secret-shaped text from a log line. The person still sees every line
 // before choosing to include it; this only lowers the chance of a careless paste.
 function scrub(line, { home, user } = {}) {
-  let s = String(line).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ');
+  // Newlines and tabs become spaces too: one entry stays one line and cannot close the report's code fence.
+  let s = String(line).replace(/[\x00-\x1f\x7f]/g, ' ');
   if (home && home.length > 1) s = s.replace(new RegExp(escapeRe(home), 'g'), '~');
   s = s
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '<email>')
@@ -20,14 +21,18 @@ function scrub(line, { home, user } = {}) {
     .replace(/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, '<redacted>')
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}/g, '<redacted>')
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '<redacted>')
+    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '<redacted>')
     // Long unbroken runs with a digit look like keys or ids. Slashes split runs, so ordinary paths survive.
     .replace(/(?=[A-Za-z_=+-]*\d)[A-Za-z0-9_=+-]{32,}/g, '<redacted>');
   if (user && user.length >= 3) s = s.replace(new RegExp(`(^|[^A-Za-z0-9])${escapeRe(user)}(?=$|[^A-Za-z0-9])`, 'g'), '$1<user>');
   return s.length > LINE_CHARS ? `${s.slice(0, LINE_CHARS - 1)}…` : s;
 }
 
+// Lines that quote agent-written content (an ACP agent's permission request title) never go in a report.
+const reportable = (line) => !/ asked permission \(/.test(String(line));
+
 function tail(lines, who) {
-  return (Array.isArray(lines) ? lines : []).slice(-LOG_LINES).map((l) => scrub(l, who));
+  return (Array.isArray(lines) ? lines : []).filter(reportable).slice(-LOG_LINES).map((l) => scrub(l, who));
 }
 
 const cli = (c) => `${c.name}: ${c.version ? c.version : c.state || 'unknown'}`;
@@ -38,13 +43,13 @@ function body(f, logLines) {
     `- Wagon Wheel: ${f.extension}`,
     `- VS Code: ${f.vscode} (${f.platform}${f.remote ? `, remote: ${f.remote}` : ''})`,
     ...(f.clis || []).map((c) => `- ${cli(c)}`),
-    `- Room: ${f.seats && f.seats.length ? f.seats.map(seat).join(', ') : 'no room open'}`,
+    `- Room: ${roomLine(f.seats)}`,
   ];
   const parts = [
     '**What happened**', '', '<!-- What did you do, and what went wrong? -->', '',
     '**What you expected**', '', '',
     '---',
-    'Filled in by Wagon Wheel: Report a Problem. It contains no conversation, prompts, files or session contents. Edit or delete anything before you submit.',
+    `Filled in by Wagon Wheel: Report a Problem. The report itself contains no conversation, prompts, files or session contents${logLines.length ? '; the log lines below can include error text from the CLIs' : ''}. Edit or delete anything before you submit.`,
     '', ...env,
   ];
   if (logLines.length) parts.push('', `<details><summary>Last ${logLines.length} log lines (scrubbed)</summary>`, '', '```', ...logLines, '```', '</details>');
@@ -61,4 +66,7 @@ function issueUrl(facts, { includeLog = false, home, user } = {}) {
   return { url, logLines: lines };
 }
 
-module.exports = { issueUrl, scrub, tail, ISSUES_URL, MAX_URL, LOG_LINES };
+// The Room line exactly as the issue shows it, for the confirmation dialog.
+const roomLine = (seats) => (seats && seats.length ? seats.map(seat).join(', ') : 'no room open');
+
+module.exports = { issueUrl, scrub, tail, roomLine, reportable, ISSUES_URL, MAX_URL, LOG_LINES };

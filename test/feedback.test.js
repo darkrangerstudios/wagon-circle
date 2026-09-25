@@ -27,6 +27,12 @@ test('scrub keeps ordinary paths readable (seen natively: the Claude CLI path wa
   assert.strictEqual(feedback.scrub('thread 019a2b3c-4d5e-6f70-8a9b-0c1d2e3f4a5b ok'), 'thread <redacted> ok');
 });
 
+test('scrub flattens multi-line entries, redacts AWS keys, and reports drop agent-written permission titles', () => {
+  assert.strictEqual(feedback.scrub('boot failed: Error: x\n    at y\n```\tz'), 'boot failed: Error: x     at y ```' + ' z');
+  assert.strictEqual(feedback.scrub('key AKIAABCDEFGHIJKLMNOP end'), 'key <redacted> end');
+  assert.deepStrictEqual(feedback.tail(['[t] Gemini asked permission (rm -rf ~/secret); rejected', '[t] ok']), ['[t] ok']);
+});
+
 test('scrub leaves words that merely contain the login name, strips control characters and caps length', () => {
   assert.strictEqual(feedback.scrub('alexander ok', { user: 'alex' }), 'alexander ok');
   assert.ok(!feedback.scrub('a\x1b[31mred\x07').includes('\x1b'));
@@ -84,35 +90,44 @@ test('first run checks only the room\'s providers that have not passed before', 
   assert.ok(setup.blocking({ installation: 'available', authentication: 'signed-out' }));
   assert.ok(!setup.blocking({ installation: 'available', authentication: 'unknown' }));
   assert.ok(!setup.passes({ installation: 'available', authentication: 'unknown' }));
+  assert.ok(setup.blocking({ installation: 'unknown', issue: 'not-executable' }));
+  for (const issue of ['timed-out', 'unrecognized-version', 'check-failed']) assert.ok(!setup.blocking({ installation: 'unknown', issue }), `${issue} must not block`);
 });
 
-// Extension glue with VS Code and the CLI probe stubbed.
+// Extension glue with VS Code and the CLI probe stubbed. Uri.parse is lossy like the real one (it decodes the query
+// and the opener re-encodes only # and ?), so passing a Uri instead of the string would corrupt the issue.
+const lossyUri = (u) => { const [base, query = ''] = String(u).split('?'); return { lossy: encodeURI(`${base}?${decodeURIComponent(query.replace(/\+/g, ' '))}`), toString() { return this.lossy; } }; };
 function loadExtension(ui) {
+  const handlers = {};
+  const disposable = { dispose() {} };
   const vscode = {
-    workspace: { getConfiguration: () => ({ get: () => undefined, inspect: () => undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: ui.trusted !== false },
+    workspace: { getConfiguration: () => ({ get: () => undefined, inspect: () => undefined, update: async () => {} }), workspaceFolders: undefined, isTrusted: ui.trusted !== false,
+      registerTextDocumentContentProvider: () => disposable },
     window: {
       withProgress: async (_o, fn) => fn(),
       showWarningMessage: async (msg, opts, ...buttons) => { ui.warnings.push({ msg, opts, buttons }); return ui.answer; },
       showInformationMessage: async (msg, opts, ...buttons) => { ui.infos.push({ msg, opts, buttons }); return ui.answer; },
+      createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
+      onDidChangeActiveTextEditor: () => disposable, onDidChangeTextEditorSelection: () => disposable, onDidChangeTextEditorVisibleRanges: () => disposable,
     },
     ProgressLocation: { Notification: 15 }, version: '1.104.0',
-    env: { remoteName: undefined, openExternal: (u) => { ui.opened.push(String(u)); } },
-    Uri: { parse: (u) => u, file: (p) => ({ fsPath: p }) },
-    commands: { executeCommand: async () => {} },
+    env: { remoteName: undefined, openExternal: (u) => { ui.opened.push(u); } },
+    Uri: { parse: lossyUri, file: (p) => ({ fsPath: p }) },
+    commands: { executeCommand: async () => {}, registerCommand: (id, fn) => { handlers[id] = fn; return disposable; } },
   };
-  const fakeSetup = { ...setup, checkSetup: async ({ executables }) => { ui.checked.push(Object.keys(executables)); return { executionHost: 'this computer', state: 'x', providers: Object.keys(executables).map((p) => ({ provider: p, executable: executables[p], guide: setup.GUIDES[p], ...ui.results[p] })) }; },
-    cliVersion: async (p) => (p === 'claude' ? '2.1.282' : 'not found') };
-  const fakes = { [require.resolve('../src/setup')]: fakeSetup, [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: 'claude', version: [2, 1, 282] }), atLeast: () => true } };
+  const fakeSetup = { ...setup, checkSetup: async ({ executables }) => { ui.checked.push(Object.keys(executables)); return { executionHost: 'this computer', state: 'x', note: 'n', providers: Object.keys(executables).map((p) => ({ provider: p, executable: executables[p], guide: setup.GUIDES[p], ...ui.results[p] })) }; },
+    cliVersion: async (p) => { ui.probed.push(p); return p === 'claude' ? '2.1.282' : 'not found'; } };
+  const fakes = { [require.resolve('../src/setup')]: fakeSetup, [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: ui.claudePath || 'claude', version: [2, 1, 282] }), atLeast: () => true } };
   const realLoad = Module._load;
   Module._load = function (req, parent, ...a) {
     if (req === 'vscode') return vscode;
     const file = (() => { try { return Module._resolveFilename(req, parent); } catch { return null; } })();
     return file && fakes[file] ? fakes[file] : realLoad.call(this, req, parent, ...a);
   };
-  try { delete require.cache[require.resolve('../src/extension')]; return require('../src/extension'); } finally { Module._load = realLoad; }
+  try { delete require.cache[require.resolve('../src/extension')]; const ext = require('../src/extension'); ext.handlers = handlers; return ext; } finally { Module._load = realLoad; }
 }
 const memo = () => { const m = new Map(); return { get: (k) => m.get(k), update: async (k, v) => { m.set(k, v); }, m }; };
-const ui = (o = {}) => ({ warnings: [], infos: [], opened: [], checked: [], results: {}, ...o });
+const ui = (o = {}) => ({ warnings: [], infos: [], opened: [], checked: [], probed: [], results: {}, ...o });
 
 test('first New Room: a passing provider is recorded and not probed again', async () => {
   const u = ui({ results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' } } });
@@ -155,7 +170,7 @@ test('Report a Problem never puts room transcript text in the issue, and cancell
   const ext = loadExtension(u);
   await ext.reportProblem();
   assert.deepStrictEqual(u.opened, []);
-  assert.match(u.infos[0].opts.detail, /Never included: your conversation, prompts, files or session contents/);
+  assert.match(u.infos[0].opts.detail, /The report itself never includes your conversation, prompts, files or session contents/);
 
   u = ui({ answer: 'Open issue' });
   const ext2 = loadExtension(u);
@@ -166,10 +181,53 @@ test('Report a Problem never puts room transcript text in the issue, and cancell
   s.attach({ active: true, webview: { onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: () => {} }); // registers it as an open room
   await ext2.reportProblem();
   assert.match(u.infos[0].opts.detail, /Claude Code CLI 2\.1\.282, Codex CLI not found/);
+  assert.match(u.infos[0].opts.detail, /Room: Claude \(claude, claude-opus-5-5, max\)/, 'the dialog shows the Room line the issue will carry');
+  assert.strictEqual(typeof u.opened[0], 'string', 'openExternal gets the exact string');
   assert.strictEqual(u.opened.length, 1);
   const body = bodyOf(u.opened[0]);
   assert.ok(!body.includes('TRANSCRIPT_SECRET'));
+  assert.strictEqual(u.opened.length, 1);
   assert.match(body, /Claude Code CLI: 2\.1\.282/);
   assert.match(body, /Codex CLI: not found/);
   assert.match(body, /Room: Claude \(claude, claude-opus-5-5, max\)/, 'the live model from the room controls, not the saved default');
+});
+
+test('opt-in: the lines previewed are exactly the lines GitHub receives, with & # + ? intact', async () => {
+  const u = ui({ claudePath: '/opt/R&D #1/c++?x=1/claude', results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' } } });
+  const ext = loadExtension(u);
+  await ext.firstRunCheck({ globalState: memo() }, [{ provider: 'claude' }]); // writes a log line with the odd path
+  const s = new ext.RoomSession({ globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwfb-')) } }, ext.newMeta('r'), null);
+  s.meta.participants = [{ id: 'rd', label: 'R&D #1 C++?', provider: 'claude', model: 'claude-sonnet-5' }];
+  s.attach({ active: true, webview: { onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: () => {} });
+  u.answer = 'Open issue with log lines';
+  await ext.reportProblem();
+  const detail = u.infos[0].opts.detail;
+  const previewed = detail.slice(detail.indexOf('removed):\n') + 'removed):\n'.length).split('\n');
+  assert.ok(previewed.some((l) => l.includes('[/opt/R&D #1/c++?x=1/claude]')));
+  const body = bodyOf(u.opened[0]);
+  assert.ok(body.includes(['```', ...previewed, '```'].join('\n')), 'body carries the previewed lines verbatim');
+  assert.match(body, /Room: R&D #1 C\+\+\? \(claude, claude-sonnet-5\)/);
+  assert.match(body, /the log lines below can include error text from the CLIs/);
+  assert.deepStrictEqual([...new URL(u.opened[0]).searchParams.keys()], ['title', 'body'], 'no stray parameters');
+});
+
+test('untrusted workspace: Report a Problem runs no CLI', async () => {
+  const u = ui({ trusted: false, answer: undefined });
+  await loadExtension(u).reportProblem();
+  assert.deepStrictEqual(u.probed, []);
+  assert.match(u.infos[0].opts.detail, /Claude Code CLI not checked, Codex CLI not checked/);
+});
+
+test('Check Setup records each provider that passes, so New Room does not probe it again', async () => {
+  const u = ui({ results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' }, codex: { installation: 'available', version: '0.99.0', authentication: 'signed-out' } } });
+  const ext = loadExtension(u);
+  const context = { subscriptions: [], globalState: memo(), globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwcs-')) } };
+  ext.activate(context);
+  await ext.handlers['wagonWheel.checkSetup']();
+  assert.deepStrictEqual(context.globalState.get(setup.PASSED_KEY), { claude: true });
+  assert.strictEqual(u.warnings.length, 1, 'the signed-out Codex is still reported');
+  u.checked.length = 0;
+  u.answer = undefined;
+  assert.strictEqual(await ext.firstRunCheck(context, [{ provider: 'claude' }, { provider: 'codex' }]), false);
+  assert.deepStrictEqual(u.checked, [['codex']], 'only the provider that has not passed is probed');
 });

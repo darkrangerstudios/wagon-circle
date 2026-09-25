@@ -51,7 +51,7 @@ Wagon Wheel is a VS Code extension: one chat room where a human, Claude and Code
 - **Forbidden methods** in `codexClient.js` (quota reset-credit spend, logout/login, thread delete) stay blocked.
 - **Untrusted output.** The webview renders model output with `textContent` only, under a strict CSP. Never use `innerHTML` with agent or file content.
 - **Fork by default.** Joining an existing Codex thread or Claude session forks it. The only way to write to an existing conversation is the human choosing Continue in the Working session picker, after a warning that Wagon Wheel cannot see whether another window has it open. Never continue a session implicitly.
-- **Problem reports carry no content.** Report a Problem may include versions, the roster and, only on opt-in after the person sees them, scrubbed log lines. Never add transcript, prompt, attachment, file or session content, and never send anything: the person submits on GitHub.
+- **Problem reports carry no content.** Report a Problem may include versions, the roster and, only on opt-in after the person sees them, scrubbed log lines (which can hold CLI error text; lines quoting agent-written content are filtered). Never add transcript, prompt, attachment, file or session content, and never send anything: the person submits on GitHub. Open the URL with `openExternal(string)`, never `Uri.parse`, which re-encodes the query.
 - **Relay labels.** Agent text is always delivered as "relayed by Wagon Wheel, not <human>". Only the human's messages carry authority.
 
 ## Conventions

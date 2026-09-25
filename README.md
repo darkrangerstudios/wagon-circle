@@ -60,7 +60,7 @@ You need VS Code 1.90 or later and, for each kind of seat you want, that provide
 Tested on macOS. Linux should work but is untested; Windows is not supported yet. Logs appear in Output → Wagon Wheel.
 
 ## Report a problem
-Run **Wagon Wheel: Report a Problem** from the Command Palette. It opens a prefilled GitHub issue in your browser with the Wagon Wheel, VS Code and CLI versions and the seats and models in your room. It never includes your conversation, prompts, files or session contents. You can add the last ten log lines: you see them first, with your home folder, emails and key-like text removed, and nothing is sent until you submit the issue on GitHub. Ideas are welcome as [issues](https://github.com/darkrangerstudios/wagon-wheel/issues/new/choose) too.
+Run **Wagon Wheel: Report a Problem** from the Command Palette. It opens a prefilled GitHub issue in your browser with the Wagon Wheel, VS Code and CLI versions and the seats and models in your room. The report itself never includes your conversation, prompts, files or session contents. You can also add the last ten log lines. They can include error text from the CLIs, so the confirmation shows them first, with your home folder, emails and key-like text removed. Nothing is sent until you submit the issue on GitHub. Ideas are welcome as [issues](https://github.com/darkrangerstudios/wagon-wheel/issues/new/choose) too.
 
 ## Run from source
 ```
