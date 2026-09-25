@@ -94,8 +94,8 @@ test('first run checks only the room\'s providers that have not passed before', 
   for (const issue of ['timed-out', 'unrecognized-version', 'check-failed']) assert.ok(!setup.blocking({ installation: 'unknown', issue }), `${issue} must not block`);
 });
 
-// Extension glue with VS Code and the CLI probe stubbed. Uri.parse is lossy like the real one (it decodes the query
-// and the opener re-encodes only # and ?), so passing a Uri instead of the string would corrupt the issue.
+// Extension glue with VS Code and the CLI probe stubbed. Uri.parse is lossy like the real path: it decodes the query
+// and re-encodes it with encodeURI, so & # ? and literal + are lost. Passing a Uri instead of the string would corrupt the issue.
 const lossyUri = (u) => { const [base, query = ''] = String(u).split('?'); return { lossy: encodeURI(`${base}?${decodeURIComponent(query.replace(/\+/g, ' '))}`), toString() { return this.lossy; } }; };
 function loadExtension(ui) {
   const handlers = {};
