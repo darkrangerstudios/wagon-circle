@@ -38,9 +38,10 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 /* usage breakdown popover */
 .pop .usage { display: grid; gap: 10px; }
 .pop .usec { display: grid; gap: 3px; }
-.pop .stat { display: flex; justify-content: space-between; gap: 12px; font-size: .86em; }
-.pop .stat span:first-child { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pop .stat .val { text-align: right; flex: none; font-variant-numeric: tabular-nums; }
+.pop .stat { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: .86em; }
+/* Model and tool names are the point of the row: they keep their width and the numbers wrap instead. */
+.pop .stat span:first-child { color: var(--muted); flex: 0 0 auto; max-width: 48%; overflow-wrap: anywhere; }
+.pop .stat .val { text-align: right; flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
 
 /* Conversation column */
 main { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 18px 8px; }
