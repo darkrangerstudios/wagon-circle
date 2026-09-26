@@ -555,6 +555,8 @@ test('an agent\'s conversation can be found again: commands for the original, a 
   assert.deepStrictEqual(s.controls().app.source, s.meta.sources.app, 'the menu gets the source');
   const cd = `cd '${app.seat.cwd}' && `;
   assert.strictEqual(s.resumeCommand('app', 'source'), `${cd}codex resume th-users-own-1234`);
+  assert.strictEqual(s.resumeCommand('app', 'fork'), null, 'Codex saves the copy only after its first reply');
+  s.room.state.transcript.push({ id: 999, from: 'app', text: 'an answer', ts: Date.now() });
   assert.strictEqual(s.resumeCommand('app', 'fork'), `${cd}codex fork ${app.seat.sessionId}`);
   // Claude: a copy of the agent's conversation uses --fork-session; no id yet means no command.
   assert.strictEqual(s.resumeCommand('db', 'fork'), null);
@@ -568,6 +570,7 @@ test('an agent\'s conversation can be found again: commands for the original, a 
 test('Move it out: asks first, starts the agent over, then hands over the old conversation; decline or busy changes nothing', async (t) => {
   const s = fixture(t).create(); await s.boot();
   const app = s.slots.app, old = app.seat.sessionId, cd = `cd '${app.seat.cwd}' && `;
+  s.room.state.transcript.push({ id: 999, from: 'app', text: 'an answer', ts: Date.now() }); // saved by Codex after a reply
   clipboard.length = 0;
   warnAnswer = undefined; // decline
   await s.moveOut('app');
@@ -584,3 +587,102 @@ test('Move it out: asks first, starts the agent over, then hands over the old co
   warnAnswer = null;
 });
 function sessionClaimsHeld(s, id) { return Object.values(s.slots).some((r) => r.seat.sessionId === id); }
+
+test('no second writer: "open your original" is refused while any agent keeps going in it, and never offered for an original', async (t) => {
+  const f = fixture(t, ['codex', 'codex']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const cwd = s.meta.seats[0].cwd;
+  threadChoices = [{ id: 'th-person-0001', cwd, name: 'My thread' }];
+  picks.push((items) => items[0], (items) => items[0]); await s.switchSession('app', 'switch');   // app: a copy of it
+  assert.ok(s.resumeCommand('app', 'source'));
+  picks.push((items) => items[0], (items) => items[1]); await s.switchSession('db', 'switch');    // db: keeps going in it
+  assert.strictEqual(s.meta.sources.db.kind, 'original');
+  assert.strictEqual(s.resumeCommand('app', 'source'), null, 'db is writing to it now');
+  assert.strictEqual(s.controls().app.sourceInUse, 'agent');
+  assert.strictEqual(s.resumeCommand('db', 'source'), null, 'for an original the host refuses "source" itself');
+  s.meta.sources.app = { kind: 'original', id: 'th-unclaimed-0002', title: 'x' }; // even one nothing else holds
+  assert.strictEqual(s.resumeCommand('app', 'source'), null, '"source" is only ever a copy\'s original');
+});
+
+test('Claude: Default counts against the model it resolves to for weekly limits; a model without the current effort clears it', async (t) => {
+  const f = fixture(t, ['claude', 'claude']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const usageFake = fakes[path.join(__dirname, '../src/claudeUsage.js')], stub = usageFake.blockFor;
+  usageFake.blockFor = require('../src/claudeUsage').blockFor; // the real rule for this test
+  try {
+    s.claudeUsage = { session: null, week: null, models: { Fable: { pct: 100, resets: 'Mon' } } };
+    const menu = s.controls().app.models;
+    assert.match(menu.find((m) => m.id === 'default').blocked, /Weekly Fable limit used/, 'Default resolves to Fable');
+    assert.match(menu.find((m) => m.id === 'claude-fable-5-1').blocked, /Weekly Fable limit used/);
+    assert.strictEqual(menu.find((m) => m.id === 'claude-opus-5-5').blocked, null);
+  } finally { usageFake.blockFor = stub; s.claudeUsage = null; }
+  await s.runCommand('/app effort xhigh');
+  assert.strictEqual(s.slots.app.seat.effort, 'xhigh');
+  await s.runCommand('/app model claude-haiku-4-5-20251001');
+  assert.strictEqual(s.slots.app.seat.model, 'claude-haiku-4-5-20251001'); assert.strictEqual(s.slots.app.seat.effort, null, 'Haiku has no effort levels');
+  await s.runCommand('/app effort high');
+  assert.strictEqual(s.slots.app.seat.effort, null); assert.match(s.room.state.transcript.at(-1).text, /doesn't offer that effort level/);
+});
+
+test('a Claude session id the CLI reports is recorded as the room\'s own, so lists can leave it out', async (t) => {
+  const f = fixture(t, ['claude', 'claude']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const r = s.slots.app;
+  s.adoptId(r, r.client, 'cl-made-by-room');
+  assert.deepStrictEqual(r.seat.typedThreads, ['cl-made-by-room']);
+});
+
+test('"is anyone writing to the original?" fails closed on a room file it can\'t read, and saves never leave a half-written file', async (t) => {
+  const f = fixture(t, ['codex', 'codex']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  threadChoices = [{ id: 'th-person-0003', cwd: s.meta.seats[0].cwd, name: 'My thread' }];
+  picks.push((items) => items[0], (items) => items[0]); await s.switchSession('app', 'switch');
+  assert.ok(s.resumeCommand('app', 'source'));
+  const dir = path.dirname(s.file), bad = path.join(dir, '99999999-8888-4777-8666-555555555555.json');
+  fs.writeFileSync(bad, '{ "meta": {'); // another window's room caught mid-write
+  assert.strictEqual(s.resumeCommand('app', 'source'), null, 'unreadable: counted as in use');
+  fs.unlinkSync(bad);
+  assert.ok(s.resumeCommand('app', 'source'));
+  s.save();
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'saved by write-then-rename');
+  assert.ok(JSON.parse(fs.readFileSync(s.file, 'utf8')).meta);
+});
+
+test('a Codex thread counts as saved from its own first reply, and a resumed original is saved already', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const app = s.slots.app;
+  assert.strictEqual(s.ownConversation('app'), null, 'a new thread: not saved before it answers');
+  s.room.state.transcript.push({ id: 900, from: 'app', text: 'first answer', ts: Date.now() });
+  assert.strictEqual(s.ownConversation('app'), app.seat.sessionId);
+  await s.switchSession('app', 'new');
+  assert.strictEqual(s.ownConversation('app'), null, 'earlier replies belonged to the old thread');
+  threadChoices = [{ id: 'th-person-0004', cwd: app.seat.cwd, name: 'Mine' }];
+  picks.push((items) => items[0], (items) => items[1]); await s.switchSession('app', 'switch'); // keep going in the original
+  assert.strictEqual(s.ownConversation('app'), 'th-person-0004', 'a resumed thread is saved');
+});
+
+test('Switch refuses to keep going in an original that a saved room already uses', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const dir = path.dirname(s.file), id = '12121212-3434-4565-8787-909090909090';
+  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ meta: { id, name: 'Other room', seats: [{ id: 'x', label: 'X', provider: 'codex', cwd: s.meta.seats[0].cwd, sessionId: 'th-held-0005' }] }, state: { transcript: [] } }));
+  threadChoices = [{ id: 'th-held-0005', cwd: s.meta.seats[0].cwd, name: 'Held' }];
+  picks.push((items) => items[0], (items) => items[1]);
+  await assert.rejects(s.switchSession('app', 'switch'), /already in use/);
+});
+
+test('a very large room file elsewhere makes "in use" unknown (with its own message); this room\'s own large file never blocks it', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const dir = path.dirname(s.file);
+  s.save();
+  assert.strictEqual(s.whyInUse('codex', 'th-free-0006'), null);
+  fs.truncateSync(s.file, 26 * 1024 * 1024); // this room's own file grows past the 25 MB listing limit
+  assert.strictEqual(s.whyInUse('codex', 'th-free-0006'), null, 'its own seats are in memory');
+  s.save();
+  const other = path.join(dir, '34343434-5656-4787-8989-010101010101.json');
+  fs.writeFileSync(other, '{}'); fs.truncateSync(other, 26 * 1024 * 1024); // another room, too large to load
+  assert.strictEqual(s.whyInUse('codex', 'th-free-0006'), 'unknown');
+  threadChoices = [{ id: 'th-free-0006', cwd: s.meta.seats[0].cwd, name: 'Mine' }];
+  picks.push((items) => items[0], (items) => items[1]);
+  await assert.rejects(s.switchSession('app', 'switch'), /can't read its saved rooms right now/);
+  fs.unlinkSync(other);
+});

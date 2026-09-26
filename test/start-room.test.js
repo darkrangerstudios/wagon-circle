@@ -75,7 +75,7 @@ test('setup lines and conversation rows read as plain English and carry no contr
 });
 
 // The host side of the screen, with VS Code, the CLIs and their histories stubbed.
-function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [], bootFails = null, claudeSessions = null, codexThreads = null } = {}) {
+function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [], bootFails = null, claudeSessions = null, codexThreads = null, menu = null } = {}) {
   const disposable = { dispose() {} };
   const rec = { panels: [], warnings: [], opened: [] };
   const convDir = dir();
@@ -108,7 +108,8 @@ function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms =
   const fakes = {
     [require.resolve('../src/codexClient')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
     [require.resolve('../src/claudeHistory')]: { ROOT: os.tmpdir(), listSessions: () => (claudeSessions ? claudeSessions(convDir) : null) || lists.claude || [{ id: 'cl-1', path: '/x', cwd: convDir, mtime: recentMs ? now - recentMs : now - 3600e3, title: 'Old chat', preview: 'hi' }], recentMessages: () => [], fileFor: () => fileFor },
-    [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: 'claude', version: [2, 1, 282] }), atLeast: () => true },
+    [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: menu ? process.execPath : 'claude', version: [2, 1, 282] }), atLeast: () => true }, // an absolute path only when a test supplies a fake menu
+    ...(menu ? { [require.resolve('../src/claudeModels')]: { ...require('../src/claudeModels'), query: () => menu.promise } } : {}),
     [require.resolve('../src/setup')]: { ...require('../src/setup'), checkSetup: async ({ executables }) => ({ executionHost: 'this computer', providers: Object.keys(executables).map((p) => ({ provider: p, installation: 'available', version: '1.0.0', authentication: p === 'codex' ? 'signed-out' : 'present' })) }) },
   };
   const realLoad = Module._load;
@@ -301,6 +302,8 @@ test('Wagon Wheel\'s own room conversations are recognised; a person\'s original
   assert.ok(!startRoom.isRoomConversation('codex', { id: 'x', name: null, preview: 'Wagon Wheel: in the preview only' }));
   assert.ok(startRoom.isRoomConversation('claude', { id: 'c', mode: 'dontAsk' }));
   for (const mode of ['auto', 'default', 'plan', 'bypassPermissions', null]) assert.ok(!startRoom.isRoomConversation('claude', { id: 'c', mode }), String(mode));
+  assert.ok(!startRoom.isRoomConversation('claude', { id: 'c', mode: 'dontAsk', entrypoint: 'claude-desktop' }), 'a Claude Desktop session in dontAsk is the person\'s');
+  assert.ok(startRoom.isRoomConversation('claude', { id: 'c-made', mode: 'auto' }, startRoom.roomMade([{ seats: [{ provider: 'claude', made: ['c-made'] }] }])), 'a room copy keeps the person\'s mode but is recorded as the room\'s');
 });
 
 const rollout = (d, originator) => { const f = path.join(d, `rollout-${originator.replace(/\W/g, '')}-${Math.random().toString(36).slice(2)}.jsonl`); fs.writeFileSync(f, `${JSON.stringify({ type: 'session_meta', payload: { originator, cli_version: '0.153.1' } })}\n`); return f; };
@@ -426,4 +429,31 @@ test('coding sessions only: the Codex app\'s plain chats (projectless, or in its
     await p.recv({ type: 'ready' }); await settle();
     assert.deepStrictEqual(p.sent.find((m) => m.type === 'lists').conversations.codex.map((c) => c.title), ['Fix the parser']);
   } finally { if (oldHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldHome; }
+});
+
+test('a room\'s Claude process does not inherit the launching app\'s entrypoint (so its sessions never look like Claude Desktop\'s)', () => {
+  const cp = require('child_process'), real = cp.spawn;
+  let env = null;
+  cp.spawn = (exe, args, opts) => { env = opts.env; const { EventEmitter } = require('events'); const p = new EventEmitter(); p.stdout = new (require('stream').PassThrough)(); p.stderr = new (require('stream').PassThrough)(); p.stdin = { write() {}, end() {} }; p.kill = () => {}; return p; };
+  const old = process.env.CLAUDE_CODE_ENTRYPOINT; process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop';
+  try {
+    delete require.cache[require.resolve('../src/claudeClient')];
+    const { ClaudeClient } = require('../src/claudeClient');
+    new ClaudeClient({ exe: 'claude', cwd: os.tmpdir(), systemPrompt: 'x', tools: [], addDirs: [] })._spawn();
+    assert.ok(env && !('CLAUDE_CODE_ENTRYPOINT' in env)); assert.strictEqual(env.PATH, process.env.PATH, 'everything else is inherited');
+  } finally { cp.spawn = real; if (old === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = old; delete require.cache[require.resolve('../src/claudeClient')]; }
+});
+
+test('host: when Claude Code\'s own menu arrives late, the screen gets it on top of the latest lists, not an older snapshot', async () => {
+  let release; const menu = { promise: new Promise((r) => { release = r; }) };
+  let threads = [{ id: 'th-old', name: 'First list', cwd: os.tmpdir(), updatedAt: 1 }];
+  const { rec } = loadHost({ menu, codexThreads: () => threads });
+  await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
+  await p.recv({ type: 'ready' }); await settle();
+  threads = [{ id: 'th-new', name: 'Newer list', cwd: os.tmpdir(), updatedAt: 2 }];
+  await p.recv({ type: 'recheck' }); await settle(); // posts newer lists
+  release([{ id: 'default', name: 'Default (recommended)', note: 'from the CLI', efforts: [], older: false }]); await settle();
+  const last = p.sent.filter((m) => m.type === 'lists').at(-1);
+  assert.deepStrictEqual(last.models.claude.map((m) => m.note), ['from the CLI']);
+  assert.deepStrictEqual(last.conversations.codex.map((c) => c.title), ['Newer list']);
 });

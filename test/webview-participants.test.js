@@ -53,7 +53,7 @@ test('the agent menu says which conversation it is on and offers safe ways to ta
   assert.match(t, /Working on a copy of your conversation“My chat”/);
   assert.match(t, /id: original cl-src-1/); assert.doesNotMatch(t, /this agent's copy/, 'the source id is never shown as the agent\'s own');
   assert.ok(walk(h.ids.pop).filter((e) => ['Continue a copy yourself', 'Move it out of the room'].includes(e.textContent)).every((e) => e.disabled), 'no id yet: nothing to take');
-  assert.match(t, /gets its id after the first reply/);
+  assert.match(t, /saves a new conversation after its first reply/);
   h.controls.codex = { ...h.controls.codex, source: null, own: 'th-fresh-7777' };
   h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
   h.click(h.ids.participants, 'Builder controls');
@@ -83,4 +83,23 @@ test('model and effort controls use each app\'s own words, tier order and an Old
   t = h.ids.pop.textContent;
   assert.match(t, /Reasoning effort · default Medium/); assert.match(t, /LightMediumHighExtra HighMaxUltra/); assert.match(t, /⚡ Fast/);
   assert.strictEqual(walk(h.ids.pop).find((e) => e.tagName === 'button' && e.textContent === 'Ultra').title, 'Consumes usage limits faster');
+});
+
+test('while another agent keeps going in the original, the menu disables opening it and says why', () => {
+  const h = setup();
+  h.controls['codex-2'] = { ...h.controls['codex-2'], source: { kind: 'copy', id: 'th-users-own-1234', title: 'Plan the trip' }, own: 'th-copy-9999', sourceInUse: true };
+  h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
+  h.click(h.ids.participants, 'Checker controls');
+  const b = walk(h.ids.pop).find((e) => e.tagName === 'button' && e.textContent === 'Copy command to open your original');
+  assert.strictEqual(b.disabled, true);
+  assert.match(h.ids.pop.textContent, /Another agent is keeping going in your original, so only a copy can be opened/);
+});
+
+test('when another room\'s file can\'t be read, the menu says Wagon Wheel can\'t confirm, not that an agent is using it', () => {
+  const h = setup();
+  h.controls['codex-2'] = { ...h.controls['codex-2'], source: { kind: 'copy', id: 'th-users-own-1234', title: 'Plan the trip' }, own: 'th-copy-9999', sourceInUse: 'unknown' };
+  h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
+  h.click(h.ids.participants, 'Checker controls');
+  assert.match(h.ids.pop.textContent, /can't confirm nothing is writing to your original right now/);
+  assert.doesNotMatch(h.ids.pop.textContent, /Another agent is keeping going/);
 });

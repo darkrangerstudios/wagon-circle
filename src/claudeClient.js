@@ -49,7 +49,10 @@ class ClaudeClient {
   }
 
   _spawn() {
-    const proc = spawn(this.exe, this._args(), { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    // The room's Claude is its own entrypoint, not whichever app launched VS Code (Claude Desktop sets one in the
+    // environment); that keeps its sessions from looking like the person's own desktop sessions.
+    const env = { ...process.env }; delete env.CLAUDE_CODE_ENTRYPOINT;
+    const proc = spawn(this.exe, this._args(), { cwd: this.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc = proc;
     proc.stderr.on('data', (d) => this.log(`claude stderr: ${String(d).slice(0, 400)}`));
     // Events from a process we already replaced (model/effort switch) must not touch the new one's reply.

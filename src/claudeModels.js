@@ -57,6 +57,7 @@ function query(exe, { cwd = require('os').tmpdir(), timeoutMs = 15000, spawnFn =
         { cwd, stdio: ['pipe', 'pipe', 'ignore'] });
     } catch { finish(null); return; }
     p.on('error', () => finish(null)); p.on('exit', () => finish(null));
+    if (p.stdin && p.stdin.on) p.stdin.on('error', () => finish(null)); // EPIPE if the CLI exits before reading
     p.stdout.on('data', (d) => {
       buf += d; let i;
       while ((i = buf.indexOf('\n')) >= 0) {

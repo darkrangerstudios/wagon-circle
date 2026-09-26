@@ -45,7 +45,7 @@ test('listRooms parses each room file once until it changes, and forgets deleted
   assert.strictEqual(roomsView.listRooms(dir, cache, fsx)[0].name, 'renamed');
   assert.strictEqual(reads, 2);
   fs.unlinkSync(file);
-  assert.deepStrictEqual(roomsView.listRooms(dir, cache, fsx), []);
+  assert.strictEqual(roomsView.listRooms(dir, cache, fsx).length, 0);
   assert.strictEqual(cache.size, 0);
 });
 
@@ -84,8 +84,13 @@ function loadExtension(state = {}) {
     Uri: { joinPath: (b, ...p) => ({ fsPath: path.join(b.fsPath, ...p) }), file: (p) => ({ fsPath: p }), parse: (u) => u },
     env: {}, version: '1.104.0',
   };
-  const realLoad = Module._load;
-  Module._load = function (req, parent, ...a) { return req === 'vscode' ? vscode : realLoad.call(this, req, parent, ...a); };
+  const realLoad = Module._load, binary = require.resolve('../src/claudeBinary');
+  // A relative CLI path: nothing in these tests may launch a real Claude process.
+  Module._load = function (req, parent, ...a) {
+    if (req === 'vscode') return vscode;
+    const file = (() => { try { return Module._resolveFilename(req, parent); } catch { return null; } })();
+    return file === binary ? { findClaude: () => ({ path: 'claude', version: [2, 1, 282] }), atLeast: () => true } : realLoad.call(this, req, parent, ...a);
+  };
   let ext;
   try { delete require.cache[require.resolve('../src/extension')]; ext = require('../src/extension'); } finally { Module._load = realLoad; }
   const storage = tmp();

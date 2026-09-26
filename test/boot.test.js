@@ -254,3 +254,9 @@ test('a room made before sources were recorded looks up its copies\' titles once
     assert.deepStrictEqual(s.controls().claude.source, s.meta.sources.claude);
   } finally { s.dispose(); }
 });
+
+test('reopening a room: a resumed Codex thread counts as saved (its conversation can be handed over without a new reply)', async () => {
+  const s = new RoomSession(context(), { ...newMeta('reopened'), codexThreadId: 'th-resumed-1', codexTypedThreads: ['th-resumed-1'], claudeSessionId: null },
+    { transcript: [], cursors: { claude: 0, codex: 0 }, lastTargets: ['claude'], seq: 0 });
+  try { await s.boot(); assert.strictEqual(s.ownConversation('codex'), 'th-resumed-1'); } finally { s.dispose(); }
+});

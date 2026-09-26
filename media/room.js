@@ -525,11 +525,12 @@
     const find = el('div', 'findrow');
     const act = (label, msg, tip, disabled) => { const b = el('button', 'link', label); b.title = tip; b.disabled = !!disabled; b.addEventListener('click', () => { vscode.postMessage({ vendor: name, ...msg }); closePop(); }); find.appendChild(b); };
     const noId = !c.own;
-    if (src && src.kind === 'copy') act('Copy command to open your original', { type: 'copyResume', which: 'source' }, `Copies a terminal command that opens your original conversation in ${app}. The room never writes to it.`);
+    if (src && src.kind === 'copy') act('Copy command to open your original', { type: 'copyResume', which: 'source' }, c.sourceInUse === 'unknown' ? 'Wagon Wheel can\'t read its saved rooms right now, so it can\'t confirm nothing is writing to your original. Use Continue a copy yourself.' : c.sourceInUse ? 'Another agent is keeping going in your original, so it can\'t be opened safely right now. Use Continue a copy yourself.' : `Copies a terminal command that opens your original conversation in ${app}. No Wagon Wheel room that this window can see is writing to it.`, c.sourceInUse);
     act('Continue a copy yourself', { type: 'copyResume', which: 'fork' }, `Copies a terminal command that opens a copy of this conversation, as it is now, in ${app}. ${NAMES[name]} keeps its own here.`, noId);
     act('Move it out of the room', { type: 'moveOut' }, `${NAMES[name]} starts over here, and you keep going in this conversation yourself in ${app}. Asks first.`, noId || !!busy[name]);
     ws.appendChild(find);
-    ws.appendChild(el('small', 'note', `Commands are copied for you to paste in a terminal. You can also look for the title in ${app}'s history.${noId ? ' A new conversation gets its id after the first reply.' : ''}`));
+    if (c.sourceInUse) ws.appendChild(el('small', 'note', c.sourceInUse === 'unknown' ? 'Wagon Wheel can\'t confirm nothing is writing to your original right now, so only a copy can be opened.' : 'Another agent is keeping going in your original, so only a copy can be opened.'));
+    ws.appendChild(el('small', 'note', `Commands are copied for you to paste in a terminal. You can also look for the title in ${app}'s history.${noId ? ` ${app} saves a new conversation after its first reply.` : ''}`));
     const wseg = el('div', 'seg');
     for (const [a, label, tip] of [['new', 'Start over', 'Give this agent a brand-new conversation. The room keeps its messages.'],
       ['switch', 'Switch to one of your conversations…', 'Bring in a conversation you already had. Next you choose a copy (recommended) or the original.']]) {

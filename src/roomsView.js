@@ -40,7 +40,7 @@ function readRoom(file, fsx) {
 function listRooms(dir, cache = new Map(), fsx = fs) {
   let names;
   try { names = fsx.readdirSync(dir); } catch { return []; }
-  const rooms = [], seen = new Set();
+  const rooms = [], seen = new Set(); let unreadable = 0; // room files that couldn't be read right now (being written, corrupt)
   for (const n of names) {
     if (!n.endsWith('.json') || !ROOM_ID.test(n.slice(0, -5))) continue;
     const file = path.join(dir, n);
@@ -50,14 +50,16 @@ function listRooms(dir, cache = new Map(), fsx = fs) {
     const hit = cache.get(file);
     let room = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit.room : undefined;
     if (room === undefined) {
-      if (st.size > LARGE) room = { id: n.slice(0, -5), name: 'Large room (details not loaded)', cwd: '', createdAt: null, lastActivity: null, seats: [] };
+      if (st.size > LARGE) room = { id: n.slice(0, -5), name: 'Large room (details not loaded)', cwd: '', createdAt: null, lastActivity: null, seats: [], large: true };
       else { try { room = readRoom(file, fsx); } catch { room = null; } } // a half-written or foreign file is skipped, not fatal
       cache.set(file, { mtimeMs: st.mtimeMs, size: st.size, room });
     }
-    if (room) rooms.push({ ...room, file, updatedAt: room.lastActivity != null ? room.lastActivity : st.mtimeMs });
+    if (room) rooms.push({ ...room, file, updatedAt: room.lastActivity != null ? room.lastActivity : st.mtimeMs }); else unreadable++;
   }
   for (const k of cache.keys()) if (!seen.has(k)) cache.delete(k);
-  return rooms.sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name));
+  const sorted = rooms.sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name));
+  sorted.unreadable = unreadable; // callers that must fail closed (is anyone writing to X?) check this
+  return sorted;
 }
 
 function ago(ms, now = Date.now()) {

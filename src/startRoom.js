@@ -123,7 +123,8 @@ function roomMade(rooms) {
 }
 function isRoomConversation(provider, c, made = new Set()) {
   if (made.has(`${provider}:${c.id}`)) return true;
-  if (provider === 'claude') return c.mode === 'dontAsk';
+  // dontAsk is only a hint: Claude Desktop sessions can run in it too. Rooms' own ids (recorded since 0.6.1) are the proof.
+  if (provider === 'claude') return c.mode === 'dontAsk' && c.entrypoint !== 'claude-desktop';
   return ROOM_ORIGINATORS.has(c.originator) || (typeof c.name === 'string' && ROOM_NAME.test(c.name));
 }
 

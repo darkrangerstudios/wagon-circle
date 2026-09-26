@@ -45,6 +45,8 @@ let claudeBin = null; // resolved once per window: newest Claude Code CLI on the
 // Claude Code's own model menu, asked of the CLI once per window (no model call); the built-in copy until it answers.
 let claudeCatalog = null, claudeCatalogAsked = null;
 const claudeMenu = () => claudeCatalog || commands.CLAUDE_CATALOG;
+// Weekly limits are per model family ("Fable"); Default (recommended) counts against the model it resolves to.
+const limitName = (m) => { const f = claudeModels.familyOf(m.resolves || m.id); return f ? f.family[0].toUpperCase() + f.family.slice(1) : m.name; };
 // Asked once per window, only of a real CLI on disk; open rooms refresh their pickers when the answer arrives.
 function refreshClaudeMenu() {
   if (claudeCatalogAsked || !claudeBin || !path.isAbsolute(String(claudeBin.path)) || !fs.existsSync(claudeBin.path)) return claudeCatalogAsked;
@@ -166,7 +168,10 @@ class RoomSession {
     if (this.disposed || roomClaims.get(this.file) !== this) return;
     this.syncSeats();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify({ meta: this.meta, state: this.room ? this.room.state : this.state }, null, 1));
+    // Write then rename: another window reading this file never sees it half-written.
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ meta: this.meta, state: this.room ? this.room.state : this.state }, null, 1));
+    fs.renameSync(tmp, this.file);
   }
 
   syncSeats() {
@@ -194,6 +199,9 @@ class RoomSession {
   // because of a claim, so a conflict is reported once in the room and logged instead.
   adoptId(r, client, id) {
     if (this.disposed || r.client !== client || r.seat.sessionId === id) return;
+    // A new id from the CLI is a conversation this room created (fresh, or a copy): record it as the room's own, so
+    // the lists can leave it out later. A continued original keeps its id and never reaches this line.
+    if (r.seat.provider === 'claude') r.seat.typedThreads = [...new Set([...(r.seat.typedThreads || []), id])].slice(-50);
     try { this.bindId(r, id); } catch (e) {
       if (r.claimNoted === id) return; r.claimNoted = id;
       log(`${r.seat.id}: could not claim ${id}: ${e.message}`);
@@ -310,6 +318,7 @@ class RoomSession {
         if (this.disposed) return;
         r.client = made.client; r.models = made.models; this.bindId(r, made.id);
         if (action === 'new') { p.typed = true; p.typedThreads = [...(p.typedThreads || []), made.id]; }
+        r.saved = action === 'continue'; r.since = (this.state && Array.isArray(this.state.transcript) ? this.state.transcript.length : 0);
         if (action === 'fork') { p.typed = false; p.forkFrom = src; }
         if (seedFrom) { let items = []; try { items = await r.client.recentMessages(seedFrom, 8); } catch (e) { log(`history read failed: ${e.message}`); } if (this.disposed) return; seeds.push({ owner: p.id, readers: others, items }); }
       } else {
@@ -441,7 +450,7 @@ class RoomSession {
       else if (m.type === 'moveOut' && this.room && this.slots[m.vendor]) this.moveOut(m.vendor).catch((e) => this.room && this.room.note(`Couldn't move the conversation out: ${e.message}`));
       else if (m.type === 'copyResume' && this.room && this.slots[m.vendor] && ['source', 'fork'].includes(m.which)) {
         const cmd = this.resumeCommand(m.vendor, m.which);
-        if (!cmd) this.room.note(`${this.slots[m.vendor].seat.label}'s conversation doesn't have an id yet. It gets one with its first reply.`);
+        if (!cmd) this.room.note(m.which === 'source' ? (this.controls()[m.vendor].sourceInUse === 'unknown' ? 'Wagon Wheel can\'t read its saved rooms right now, so it can\'t confirm nothing is writing to the original. Use Continue a copy yourself, or try again in a moment.' : `Another agent is keeping going in ${this.slots[m.vendor].seat.label}'s original, so it can't be opened safely right now. Use Continue a copy yourself instead.`) : `${this.slots[m.vendor].seat.label}'s conversation isn't saved yet. It is saved after its first reply.`);
         else vscode.env.clipboard.writeText(cmd).then(() => vscode.window.setStatusBarMessage(`Wagon Wheel: copied "${cmd.length > 60 ? cmd.slice(0, 57) + '…' : cmd}". Paste it in a terminal to open that conversation.`, 6000));
       }
       else if (m.type === 'session' && this.room && this.slots[m.vendor] && ['new', 'switch', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => { if (!this.disposed) this.room.note(`Couldn't switch the working session: ${e.message}`); });
@@ -532,6 +541,8 @@ class RoomSession {
       }
       if (!live() || unresolved()) { if (live()) room.note(`${L} was given new work in the meantime, so its conversation was not changed.`); return; }
       if (action === 'continue') {
+        const why = this.whyInUse(p.provider, pick.id);
+        if (why) throw new Error(why === 'agent' ? 'That conversation is already in use by another agent or room. Use a copy instead.' : 'Wagon Wheel can\'t read its saved rooms right now, so it can\'t confirm nothing else is using that conversation. Use a copy, or try again in a moment.');
         if (!sessionClaims.claim(p.provider, pick.id, r.owner)) throw new Error('That conversation is already in use by another agent or room. Use a copy instead.');
         reserved = pick.id;
       }
@@ -545,7 +556,7 @@ class RoomSession {
       const sources = { ...(this.meta.sources || {}) };
       if (action === 'new') delete sources[id]; else sources[id] = { kind: action === 'fork' ? 'copy' : 'original', id: pick.id, title: pick.name ? String(pick.name).slice(0, 120) : null };
       this.meta.sources = sources;
-      if (p.provider === 'codex') { if (action === 'new') p.typedThreads = [...(p.typedThreads || []), made.id]; p.typed = (p.typedThreads || []).includes(made.id); }
+      if (p.provider === 'codex') { if (action === 'new') p.typedThreads = [...(p.typedThreads || []), made.id]; p.typed = (p.typedThreads || []).includes(made.id); r.saved = action === 'continue'; r.since = cursor; }
       this.history.resetParticipant(id); room.state.cursors[id] = cursor;
       old.stop(); this.ownedClients.delete(old); adopted = true;
       this.updateAliases();
@@ -589,12 +600,50 @@ class RoomSession {
       let title = null;
       try {
         if (p.provider === 'claude') title = claudeHistory.titleFor(src.id);
-        else if (r.client) { const t = (await r.client.listThreads(null, 100)).find((x) => x.id === src.id); title = t ? t.name || t.preview : null; }
+        else if (r.client) {
+          let t = null; try { t = (await r.client.request('thread/read', { threadId: src.id }, 20000)).thread; } catch { /* older CLI: fall back to the list */ }
+          if (!t) t = (await r.client.listThreads(null, 100)).find((x) => x.id === src.id);
+          title = t ? t.name || t.preview : null;
+        }
       } catch (e) { log(`source title: ${e.message}`); }
       if (this.disposed) return;
       if (title) { this.meta.sources = { ...(this.meta.sources || {}), [p.id]: { ...src, title: String(title).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 120) } }; changed = true; }
     }
     if (changed) this.postMeta();
+  }
+
+  // Whether a Codex seat's current thread is saved: a resumed thread is (resume only works on saved ones), and a new
+  // thread or copy is once the seat has answered since the room started using it (r.since, a transcript index).
+  codexSaved(r) {
+    if (r.saved) return true;
+    const t = this.room ? this.room.state.transcript : this.state && this.state.transcript;
+    return Array.isArray(t) && t.slice(r.since || 0).some((e) => e && e.from === r.seat.id && e.kind !== 'history');
+  }
+
+  // This seat's own conversation id, or null when it has none yet that its app could open: a Claude copy gets one with
+  // its first reply, and Codex saves a thread only after its first reply.
+  ownConversation(id) {
+    const r = this.slots[id]; if (!r) return null;
+    const p = r.seat;
+    if (p.provider === 'claude') return r.client?.sessionId || p.sessionId || null;
+    return p.sessionId && this.codexSaved(r) ? p.sessionId : null;
+  }
+
+  // Is a person's original also being written by an agent in some room (claimed here, or bound in a saved room)?
+  // Fails closed: a room file that can't be read right now (being written, too large to load, corrupt) counts as in use.
+  // This room's own seats are in memory (the claims above), so its own file is skipped: a long room never blocks itself.
+  sourceInUse(provider, convId) { return this.whyInUse(provider, convId) !== null; }
+  whyInUse(provider, convId) {
+    if (sessionClaims.isClaimed(provider, convId)) return 'agent';
+    try {
+      // One listing: the rooms searched and the unreadable count must describe the same moment.
+      const listed = roomsView.listRooms(path.dirname(this.file), this.roomsCache || (this.roomsCache = new Map()));
+      const rooms = listed.filter((room) => room.file !== this.file);
+      if (rooms.some((room) => room.seats.some((x) => x.provider === provider && x.sessionId === convId))) return 'agent';
+      // Unreadable files are not in the list at all; one that was listed unparsed (too large) can't be ruled out either.
+      if ((listed.unreadable || 0) > 0 || rooms.some((room) => room.large)) return 'unknown';
+      return null;
+    } catch { return 'unknown'; }
   }
 
   // Commands that open a conversation in its own app, built here from ids the room holds (never from the page):
@@ -603,8 +652,9 @@ class RoomSession {
   resumeCommand(id, which) {
     const r = this.slots[id]; if (!r) return null;
     const p = r.seat, src = this.sourceOf(p);
-    const own = p.provider === 'claude' ? r.client?.sessionId || p.sessionId : p.sessionId;
-    const conv = which === 'source' ? src && src.id : own;
+    // 'source' only for a copy, and never while any agent keeps going in that original: no second writer.
+    if (which === 'source' && (!src || src.kind !== 'copy' || this.sourceInUse(p.provider, src.id))) return null;
+    const conv = which === 'source' ? src.id : this.ownConversation(id);
     if (typeof conv !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(conv)) return null;
     const cd = `cd '${String(p.cwd).replace(/'/g, `'\\''`)}' && `;
     if (p.provider === 'codex') return `${cd}codex ${which === 'fork' ? 'fork' : 'resume'} ${conv}`;
@@ -617,7 +667,7 @@ class RoomSession {
     const r = this.slots[id]; if (!r || !this.room || this.disposed) return;
     const p = r.seat, L = p.label, app = p.provider === 'claude' ? 'Claude Code' : 'Codex';
     const cmd = this.resumeCommand(id, 'resume');
-    if (!cmd) { this.room.note(`${L}'s conversation doesn't have an id yet. It gets one with its first reply.`); return; }
+    if (!cmd) { this.room.note(`${L}'s conversation isn't saved yet. It is saved after ${L}'s first reply.`); return; }
     const go = await vscode.window.showWarningMessage(`Move ${L}'s conversation out of the room?`, { modal: true,
       detail: `${L} starts a fresh conversation here and won't remember this one. You keep going in this one yourself in ${app}: the command to open it is copied to your clipboard.` }, 'Move it out');
     if (go !== 'Move it out' || this.disposed) return;
@@ -633,10 +683,11 @@ class RoomSession {
     return Object.fromEntries(Object.values(this.slots).map((r) => {
       const p = r.seat;
       const models = p.provider === 'claude'
-        ? claudeMenu().map((x) => ({ ...x, available: x.minCli ? atLeast(v, x.minCli) : true, blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
+        ? claudeMenu().map((x) => ({ ...x, available: x.minCli ? atLeast(v, x.minCli) : true, blocked: claudeUsage.blockFor(this.claudeUsage, limitName(x)), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
         : r.models.map((x) => ({ id: x.id, name: x.displayName, note: typeof x.description === 'string' ? x.description.slice(0, 120) : '', efforts: (x.supportedReasoningEfforts || []).map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
       return [p.id, { provider: p.provider, label: p.label, cwd: p.cwd, source: this.sourceOf(p),
-        own: (p.provider === 'claude' ? r.client?.sessionId || p.sessionId : p.sessionId) || null, // this agent's own conversation id; a Claude copy has none until its first reply
+        own: this.ownConversation(p.id), // null until its app has saved it (first reply)
+        sourceInUse: (() => { const src = this.sourceOf(p); return src && src.kind === 'copy' ? this.whyInUse(p.provider, src.id) || false : false; })(), // 'agent' | 'unknown' | false
         session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
         shared: !!this.history?.describe().share[p.id], readers: this.history ? this.history.readers(p.id) : [], allHistory: !this.history || this.history.allHistory(p.id),
         cli: p.provider === 'claude' && v ? v.join('.') : undefined, model: p.model || models[0]?.id || null, effort: p.effort, fast: !!p.fast, models,
@@ -661,10 +712,17 @@ class RoomSession {
       if (action === 'model' || action === 'effort') {
         if (p.provider === 'claude') {
           const cat = claudeMenu().find((x) => x.id === arg);
-          const blocked = action === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, cat.name);
+          const blocked = action === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, limitName(cat));
           if (blocked) { say(`${p.label}: ${blocked}. Model unchanged.`); return; }
+          if (action === 'effort') {
+            const now = claudeMenu().find((x) => x.id === (p.model || 'default'));
+            if (now && !(now.efforts || []).includes(arg)) { say(`${now.name} doesn't offer that effort level.`); return; }
+          }
           if (action === 'model' && p.fast && !this.claudeFastOk(arg)) { p.fast = false; r.client.setOptions({ fast: false }); }
-          r.client.setOptions({ [action]: arg });
+          const opts = { [action]: arg };
+          // A model that doesn't offer the current effort level (Haiku has none) starts without one, in the same restart.
+          if (action === 'model' && p.effort && cat && !(cat.efforts || []).includes(p.effort)) { p.effort = null; opts.effort = null; }
+          r.client.setOptions(opts);
         } else if (action === 'model') {
           const model = r.models.find((x) => x.id === arg);
           if (p.effort && model && !(model.supportedReasoningEfforts || []).some((e) => e.reasoningEffort === p.effort)) p.effort = null;
@@ -907,14 +965,15 @@ async function startLists(ctx) {
     claude: claudeSessions.filter((x) => !startRoom.isRoomConversation('claude', x, made)).slice(0, 40).map((x) => ({ id: x.id, cwd: x.cwd, when: x.mtime, title: x.title || x.preview })),
     codex: codexThreads.filter((t) => !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made) && !startRoom.isChatConversation('codex', t, chats)).slice(0, 40).map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
   };
+  startScreen.lastLists = null;
   startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, note: typeof m.description === 'string' ? m.description.slice(0, 120) : '', efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
   const v = s.claude.version;
-  await refreshClaudeMenu(); // Claude Code's own menu when the CLI answers
   startScreen.claudeModels = claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: m.efforts, older: !!m.older }));
-  return {
+  // Remembered so a later resend (Claude Code's menu arriving) never brings back an older list.
+  return (startScreen.lastLists = {
     conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) }, // rows carry exists: the folder is still there
     models: { claude: startScreen.claudeModels, codex: startScreen.codexModels },
-  };
+  });
 }
 
 // When was a conversation last written? Read now, not when the list was loaded: the screen can stay open a while.
@@ -972,7 +1031,12 @@ async function openStartScreen(context, { existing = false } = {}) {
         const s = settings();
         post({ type: 'init', existing, defaults: { name: `Room ${new Date().toLocaleDateString()}`, folder: s.cwd, folderLabel: displayPath(s.cwd), userName: s.userName }, trusted: vscode.workspace.isTrusted });
         startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => { log(`start screen setup: ${e.message}`); post(setupUnknown()); });
-        startLists(context).then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
+        // Lists first; when the Claude CLI reports its own model menu, send them again with it.
+        startLists(context).then((l) => {
+          post({ type: 'lists', ...l });
+          const asked = refreshClaudeMenu(); // then Claude Code's own menu, without asking Codex again
+          if (asked) asked.then(() => { const v = settings().claude.version; startScreen.claudeModels = claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: m.efforts, older: !!m.older })); const last = startScreen.lastLists || l; post({ type: 'lists', ...last, models: { ...last.models, claude: startScreen.claudeModels } }); }, () => {});
+        }, (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
         try { post({ type: 'setup', ...(await startSetupStatus()) }); } catch (e) { log(`start screen setup: ${e.message}`); post(setupUnknown()); }
         // Trusting the folder unlocks the Codex lists, so reload them too.
