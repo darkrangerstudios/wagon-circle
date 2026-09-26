@@ -224,8 +224,18 @@ test('held posts survive a reload and appear when the task is resumed or finishe
   const r2 = new Room({ agents: { claude: lead, codex: agent() } });
   r2.tasks.mode = 'work'; r2.postFromHuman('@claude job'); await settle();
   r2.pauseTask(); r2.unprompted('claude', { jobs: job }).resolve('held'); await settle();
-  r2.tasks.state.tasks[0].status = 'active'; // the lead's own turn finishes it
   r2._onTool('claude', 'finish_task', { summary: 'ok' }, { run: r2.run, taskId: 't1', generation: 1 });
   assert.strictEqual(r2.state.heldPosts.length, 0);
   assert.ok(r2.state.transcript.some((e) => e.kind === 'post' && e.text === 'held'));
+});
+
+test('a reply the room sent clears a report the CLI folded into it, so a held restart still happens', async () => {
+  const { c, line } = fakeClaude();
+  line(jobs('a')); c.setOptions({ model: 'claude-opus-5-5' });
+  line(jobs()); line(notice('a'));
+  assert.strictEqual(c.finished.length, 1);
+  const reply = c.send('what did it find?'); line(text('It found two files.')); line({ type: 'result', result: 'It found two files.' });
+  assert.strictEqual(await reply, 'It found two files.');
+  assert.deepStrictEqual(c.finished, []);
+  assert.strictEqual(c.proc, null, 'the held restart happened');
 });

@@ -28,7 +28,7 @@ function describeTool(name, input = {}) {
 // 2.1.283: Write/Edit/Bash/WebFetch refused in every agent type). Two more locks, because a workflow script is
 // model-written: the write and network tools are denied by name, and the CLI's own worktree isolation (it runs
 // `git worktree add` in the person's repo, which no tool permission covers) is refused by a WorktreeCreate hook
-// that fails, so such an agent is not started. See test/live-ultracode.js.
+// that fails, so such an agent is not started. See test/live-ultracode-boundary.js.
 const { ULTRACODE } = require('./claudeModels');
 const ULTRA_DENY = ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Agent', 'Task'];
 const NO_WORKTREES = { WorktreeCreate: [{ hooks: [{ type: 'command', command: 'echo "Wagon Wheel rooms are read-only: workflow agents cannot use worktrees" >&2; exit 1' }] }] };
@@ -107,6 +107,7 @@ class ClaudeClient {
     this.waiter = null;
     const cancelled = this.cancelling; this.lastTurnUsage = w.usage || null;
     this.cancelling = false; this.steerQueue = []; clearTimeout(this.intTimer); this.intTimer = null;
+    if (!w.unprompted) this.finished = []; // a reply the room sent took in any report the CLI folded into it
     this._restartIfIdle();
     if (err && cancelled && !err.stopped) { err = new Error('stopped'); err.stopped = true; }
     if (err) w.reject(err); else w.resolve(text);
