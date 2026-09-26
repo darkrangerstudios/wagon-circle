@@ -12,8 +12,11 @@ function readRoom(file, fsx) {
   const r = JSON.parse(fsx.readFileSync(file, 'utf8'));
   const m = r && r.meta;
   if (!m || typeof m.id !== 'string' || !ROOM_ID.test(m.id) || `${m.id}.json` !== path.basename(file)) return null;
-  // meta.seats is the saved roster with each seat's conversation id; meta.participants is a display copy without it.
-  const seats = Array.isArray(m.seats) ? m.seats : Array.isArray(m.participants) ? m.participants : null;
+  // meta.seats is the saved roster with each seat's conversation id; meta.participants is a display copy without it
+  // that also lists experimental agents. Ids come from seats; participants not in seats are added for display only.
+  const base = Array.isArray(m.seats) ? m.seats : Array.isArray(m.participants) ? m.participants : null;
+  const extra = Array.isArray(m.seats) && Array.isArray(m.participants) ? m.participants.filter((p) => p && !m.seats.some((x) => x && x.id === p.id)).map((p) => ({ ...p, sessionId: null })) : [];
+  const seats = base ? [...base, ...extra] : null;
   const text = (v, max) => (typeof v === 'string' ? v.replace(UNSAFE, ' ').slice(0, max) : '');
   // Last activity is the newest message, not the file time: opening and closing a room saves it without activity.
   const t = r.state && Array.isArray(r.state.transcript) ? r.state.transcript : [];

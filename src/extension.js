@@ -888,6 +888,8 @@ async function openStartScreen(context, { existing = false } = {}) {
         startLists().then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
         try { post({ type: 'setup', ...(await startSetupStatus()) }); } catch (e) { log(`start screen setup: ${e.message}`); post(setupUnknown()); }
+        // Trusting the folder unlocks the Codex lists, so reload them too.
+        startLists().then((l) => post({ type: 'lists', ...l }), (e) => log(`start screen lists: ${e.message}`));
       } else if (m.type === 'pickFolder' && Number.isInteger(m.index)) {
         const f = await vscode.window.showOpenDialog({ title: 'Choose the folder this agent works in', canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(settings().cwd), openLabel: 'Use this folder' });
         if (f && f[0]) post({ type: 'folder', index: m.index, folder: f[0].fsPath, folderLabel: displayPath(f[0].fsPath) });

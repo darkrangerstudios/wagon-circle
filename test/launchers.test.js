@@ -279,3 +279,11 @@ test('roomLock: losing the takeover race (another window\'s pid read back) is a 
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.holder.pid, 4242);
 });
+
+test('the rooms list keeps experimental agents for display, with conversation ids only from the saved roster', () => {
+  const d = tmp();
+  writeRoom(d, 3, { name: 'with gemini', seats: [{ id: 'claude', label: 'Claude', provider: 'claude', sessionId: 'cl-1' }],
+    participants: [{ id: 'claude', label: 'Claude', provider: 'claude' }, { id: 'gemini', label: 'Gemini', provider: 'acp', sessionId: 'forged' }] });
+  const [room] = roomsView.listRooms(d);
+  assert.deepStrictEqual(room.seats, [{ label: 'Claude', provider: 'claude', sessionId: 'cl-1' }, { label: 'Gemini', provider: 'acp', sessionId: null }]);
+});

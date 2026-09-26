@@ -120,3 +120,16 @@ test('an open "More detail" stays open when usage refreshes, and a streaming tur
   assert.strictEqual(details()[0].open, true, 'the open section stays open');
   assert.match(h.ids.pop.textContent, /This room/);
 });
+
+test('open sections are remembered by name, so a section that disappears does not pass its state to another', () => {
+  const h = setup();
+  const codexDetail = { ...local.claude, detail: local.claude.detail };
+  h.receive({ type: 'localUsage', usage: { ...local, codex: codexDetail } });
+  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
+  const byName = () => Object.fromEntries(walk(h.ids.pop).filter((e) => e.tagName === 'details').map((d) => [d.dataset.section, d.open]));
+  walk(h.ids.pop).find((e) => e.tagName === 'details' && e.dataset.section === 'Claude').open = true;
+  h.receive({ type: 'localUsage', usage: { ...local, claude: { unknown: true }, codex: codexDetail } }); // Claude's section disappears
+  const now = byName();
+  assert.deepStrictEqual(Object.keys(now), ['Codex']);
+  assert.ok(!now.Codex, 'Codex does not inherit Claude\'s open state');
+});

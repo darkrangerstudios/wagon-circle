@@ -432,7 +432,7 @@
         }
         if (models.length > 3) s.appendChild(el('small', 'note', `${models.length - 3} more model${models.length - 3 === 1 ? '' : 's'}`));
         // The fine print, folded away.
-        const more = el('details', 'more'); more.appendChild(el('summary', null, 'More detail'));
+        const more = el('details', 'more'); more.dataset.section = name; more.appendChild(el('summary', null, 'More detail'));
         const line = (label, value, tip) => { const r = el('div', 'lrow'); r.appendChild(el('span', null, label)); const v = el('span', 'val', value); if (tip) v.title = tip; r.appendChild(v); more.appendChild(r); };
         line('Reused from cache', k(u.cached)); line('New input', k(u.fresh + u.cacheWrite)); line('Written by the model', k(u.output));
         if (u.output && d.thinking) line(name === 'Codex' ? 'Of which reasoning' : 'Of which thinking', k(d.thinking));
@@ -454,10 +454,10 @@
     const pop = $('pop');
     if (pop.hidden || pop.dataset.for !== 'usage') return;
     // Keep what the person had open: which "More detail" sections, and where they had scrolled.
-    const open = walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details').map((d) => d.open);
+    const open = new Set(walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details' && e.open).map((d) => d.dataset.section));
     const top = pop.scrollTop;
     closePop(); openUsage();
-    walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details').forEach((d, i) => { if (open[i]) d.open = true; });
+    walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details').forEach((d) => { if (open.has(d.dataset.section)) d.open = true; });
     pop.scrollTop = top;
   }
   function walk(node) { const out = []; for (const c of node.children || []) out.push(c, ...walk(c)); return out; }
