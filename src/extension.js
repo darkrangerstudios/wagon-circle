@@ -529,6 +529,7 @@ class RoomSession {
     if (!r || !room || this.disposed) return;
     const p = r.seat, L = p.label;
     const unresolved = () => room.held.has(id) || room.tasks._requests().some((q) => ['open', 'delivered'].includes(q.status) && (q.from === id || q.to === id));
+    if ((r.jobs || []).length) { room.note(`${L} has a background job running. Let it finish, or press Stop, before changing its conversation.`); return; }
     if (room.busy[id] || r.switching || unresolved()) { room.note(`${L} is busy. Let it finish, or press Stop, before changing its conversation.`); return; }
     const epoch = this.switchEpoch || 0, live = () => !this.disposed && (this.switchEpoch || 0) === epoch;
     const cursor = room.state.transcript.length;

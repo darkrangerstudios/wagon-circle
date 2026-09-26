@@ -24,8 +24,14 @@ function describeTool(name, input = {}) {
 }
 
 // Ultracode is one of Claude Code's effort levels ("xhigh + dynamic workflow orchestration"): the session runs at
-// xhigh with the Workflow tool, whose agents inherit this process's read-only tools and folder confinement.
+// xhigh with the Workflow tool. Workflow agents inherit this process's tools and folder confinement (probed live,
+// 2.1.283: Write/Edit/Bash/WebFetch refused in every agent type). Two more locks, because a workflow script is
+// model-written: the write and network tools are denied by name, and the CLI's own worktree isolation (it runs
+// `git worktree add` in the person's repo, which no tool permission covers) is refused by a WorktreeCreate hook
+// that fails, so such an agent is not started. See test/live-ultracode.js.
 const { ULTRACODE } = require('./claudeModels');
+const ULTRA_DENY = ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Agent', 'Task'];
+const NO_WORKTREES = { WorktreeCreate: [{ hooks: [{ type: 'command', command: 'echo "Wagon Wheel rooms are read-only: workflow agents cannot use worktrees" >&2; exit 1' }] }] };
 
 class ClaudeClient {
   // tools: typed room tools ([{name, description, inputSchema}]), answered by the current send()'s onTool.
@@ -51,8 +57,9 @@ class ClaudeClient {
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: this.typed ? { [SERVER]: { type: 'sdk', name: SERVER } } : {} }), '--append-system-prompt', this.systemPrompt];
     if (this.model && this.model !== 'default') a.push('--model', this.model); // Default (recommended): the CLI's own choice
     if (this.effort) a.push('--effort', ultra ? 'xhigh' : this.effort);
-    const settings = { ...(this.fast ? { fastMode: true } : {}), ...(ultra ? { ultracode: true } : {}) }; // fast mode: Opus, billed to usage credits
+    const settings = { ...(this.fast ? { fastMode: true } : {}), ...(ultra ? { ultracode: true, hooks: NO_WORKTREES } : {}) }; // fast mode: Opus, billed to usage credits
     if (Object.keys(settings).length) a.push('--settings', JSON.stringify(settings));
+    if (ultra) a.push('--disallowedTools', ULTRA_DENY.join(','));
     for (const d of this.addDirs) a.push('--add-dir', d); // lets Read open attachments stored outside cwd
     if (this.sessionId) a.push('--resume', this.sessionId);
     else if (this.forkFrom) a.push('--resume', this.forkFrom, '--fork-session');
@@ -114,13 +121,15 @@ class ClaudeClient {
     if (m.type === 'system' && m.subtype === 'background_tasks_changed' && Array.isArray(m.tasks)) {
       this.jobs = m.tasks.filter((t) => t && typeof t.task_id === 'string').map((t) => ({ id: t.task_id, description: clip(t.description, 120) }));
       this.onJobs(this.jobs);
-      // A job that was stopped gets no report turn, so a restart held for it happens once nothing follows.
-      if (!this.jobs.length && this.restartPending) { clearTimeout(this.idleTimer); this.idleTimer = setTimeout(() => this._restartIfIdle(), 5000); }
       return;
     }
     if (m.type === 'system' && m.subtype === 'task_notification') {
-      // Finished while Claude was idle: it takes a turn of its own next to report it. Inside a reply, it's part of that reply.
-      if (!this.waiter) this.finished.push({ id: String(m.task_id || ''), status: String(m.status || ''), summary: clip(m.summary, 160) });
+      // Finished while Claude was idle: it takes a turn of its own next to report it (inside a reply, it's part of that
+      // reply). A stopped job gets no report turn, so a restart held for it can happen now.
+      const status = String(m.status || '');
+      if (this.waiter) return;
+      if (status === 'stopped' || status === 'killed') this._restartIfIdle();
+      else this.finished.push({ id: String(m.task_id || ''), status, summary: clip(m.summary, 160) });
       return;
     }
     // A turn nobody sent: Claude answering a finished background job. The host takes it or stops it.
@@ -178,9 +187,10 @@ class ClaudeClient {
     return this.jobs.length;
   }
 
-  // A restart (model or effort change) kills the process, and with it any background job: it waits for both.
+  // A restart (model or effort change) kills the process, and with it any background job: it waits for the reply,
+  // the jobs, and the report turn a finished job is owed.
   _restartIfIdle() {
-    if (!this.restartPending || this.waiter || this.jobs.length) return;
+    if (!this.restartPending || this.waiter || this.jobs.length || this.finished.length) return;
     this.restartPending = false; this.stop();
   }
 
@@ -232,9 +242,9 @@ class ClaudeClient {
   }
 
   // Background jobs run inside the process: they end with it.
-  _dropJobs() { clearTimeout(this.idleTimer); this.finished = []; if (this.jobs.length) { this.jobs = []; this.onJobs([]); } }
+  _dropJobs() { this.finished = []; if (this.jobs.length) { this.jobs = []; this.onJobs([]); } }
 
   stop() { this._dropJobs(); if (this.proc) { this.proc.stdin.end(); this.proc.kill(); this.proc = null; } }
 }
 
-module.exports = { ClaudeClient, READ_ONLY_TOOLS, ULTRACODE, describeTool };
+module.exports = { ClaudeClient, READ_ONLY_TOOLS, ULTRA_DENY, describeTool };

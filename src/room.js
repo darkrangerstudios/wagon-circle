@@ -81,7 +81,7 @@ class Room extends EventEmitter {
     this.labels = { ...LABEL, ...Object.fromEntries(this.names.map((n) => [n, labels[n] || LABEL[n] || n[0].toUpperCase() + n.slice(1)])) };
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
     this.maxTurns = maxTurns; this.turns = this._each(0); this.turnNoted = {};
-    this.postCap = postCap; this.lastRun = this._each(0);
+    this.postCap = postCap; this.lastRun = this._each(0); this.posting = new Set(); // agents in a turn they started on their own
     this.state = state || { transcript: [], cursors: this._each(0), lastTargets: [...this.names], seq: 0 };
     // A participant added to an existing room starts at the present: the room's past is not replayed into it.
     for (const n of this.names) if (!Number.isInteger(this.state.cursors[n])) this.state.cursors[n] = this.state.transcript.length;
@@ -159,7 +159,9 @@ class Room extends EventEmitter {
   // Steer: send a message INTO a running turn. Goes to the busy agents it @mentions, or to every busy agent
   // if it mentions none. If it only mentions idle agents (or nobody is busy), it is an ordinary message.
   steerFromHuman(text, attachments = [], ide = null) {
-    const busyNow = this.names.filter((a) => this.busy[a] && this.agents[a] && this.agents[a].steer);
+    // A post an agent is making on its own isn't steered: the human's message would become part of the post. It waits
+    // and is delivered as an ordinary message when the post ends.
+    const busyNow = this.names.filter((a) => this.busy[a] && !this.posting.has(a) && this.agents[a] && this.agents[a].steer);
     const named = mentions(text, this.names);
     const targets = named.length ? named.filter((a) => busyNow.includes(a)) : busyNow;
     if (!targets.length) return { steered: [], targets: this.postFromHuman(text, attachments, ide) };
@@ -299,20 +301,22 @@ class Room extends EventEmitter {
     posts.counts[name] = used + 1;
     if (t) { this.tasks.recordTurn(name); this._taskChanged(); }
     const ctx = { run, taskId: t ? t.id : null, generation: t ? t.generation : 0 };
-    this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
+    this.busy[name] = true; this.posting.add(name); this.emit('status', { name, busy: true, since: Date.now() });
     const steps = [], started = Date.now();
     const end = () => {
       const tt = ctx.taskId && this.tasks.get(ctx.taskId);
       if (tt) this.tasks.addUsage(tt.id, name, this.agents[name].lastTurnUsage || null);
       if (tt) this._taskChanged(); else this.emit('changed', this.state);
-      this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
+      this.busy[name] = false; this.posting.delete(name); this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
     };
     return {
       onDelta: (partial) => this.emit('draft', { name, text: partial }),
       onActivity: (a) => { if (a.phase === 'diff') return; if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); },
-      onTool: (tool, args) => this._onTool(name, tool, args, ctx),
+      // A post reports; it can't start or end work. Reading shared history is still allowed.
+      onTool: (tool, args) => (tool === 'read_session_history' ? this._onTool(name, tool, args, ctx)
+        : { ok: false, text: `Not available in a post you make on your own: ${this.human} decides what happens next. Report what you found.` }),
       resolve: (text) => {
         if (this._live(run) && String(text || '').trim()) {
           const model = this.labelFor ? this.labelFor(name) : null;
@@ -365,7 +369,7 @@ class Room extends EventEmitter {
     }
     if (tool === 'finish_task') {
       const t = this.tasks.active(); const r = this.tasks.finish(name, args && args.summary, ctx);
-      if (r.ok) { this.note(`Task ${t.id} finished by ${this.labels[name]}: ${t.summary || ''}`); this._taskChanged(); }
+      if (r.ok) { this._releaseHeld(); this.note(`Task ${t.id} finished by ${this.labels[name]}: ${t.summary || ''}`); this._taskChanged(); }
       return r;
     }
     if (tool === 'read_session_history') {
@@ -378,14 +382,16 @@ class Room extends EventEmitter {
     return { ok: false, text: `Unknown tool ${tool}.` };
   }
 
+  // Posts held while their task was paused are shown once it leaves pause (resumed or finished); Stop discards them.
+  _releaseHeld() { for (const p of (this.state.heldPosts || []).splice(0)) { const { from, text, ...rest } = p; this._append(from, text, rest); } }
+
   pauseTask() { if (this.tasks.pause('human')) { this.note(`Task paused by ${this.human}. Running turns finish; nothing new starts.`); this._taskChanged(); } }
 
   resumeTask() {
     const resumed = this.tasks.resume('human');
     if (!resumed && !this.held.size) return;
     this.heldNoted = null; if (resumed) this.note(`Task resumed by ${this.human}.`);
-    for (const p of (this.state.heldPosts || []).splice(0)) { const { from, text, ...rest } = p; this._append(from, text, rest); }
-    this._taskChanged();
+    this._releaseHeld(); this._taskChanged();
     const held = [...this.held]; this.held.clear();
     for (const n of held) this.deliver(n, this.run);
   }
