@@ -3,7 +3,7 @@
   "displayName": "Wagon Wheel",
   "icon": "media/icon.png",
   "description": "One VS Code room for your local Claude Code and Codex sessions. Named participants run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -18,7 +18,7 @@
     "commands": [
       {
         "command": "wagonWheel.newRoom",
-        "title": "Wagon Wheel: New Room",
+        "title": "Wagon Wheel: Start a Room",
         "icon": {
           "light": "media/wheel-light.svg",
           "dark": "media/wheel-dark.svg"
@@ -26,15 +26,15 @@
       },
       {
         "command": "wagonWheel.joinExisting",
-        "title": "Wagon Wheel: Join Existing Conversations (fork)"
+        "title": "Wagon Wheel: Start a Room With One of Your Conversations"
       },
       {
         "command": "wagonWheel.openRoom",
-        "title": "Wagon Wheel: Reopen a Room"
+        "title": "Wagon Wheel: Open a Saved Room"
       },
       {
         "command": "wagonWheel.checkSetup",
-        "title": "Wagon Wheel: Check Setup"
+        "title": "Wagon Wheel: Check My Setup"
       },
       {
         "command": "wagonWheel.reportProblem",
@@ -76,11 +76,11 @@
     "viewsWelcome": [
       {
         "view": "wagonWheel.start",
-        "contents": "One room for your local Claude Code and Codex sessions.\n[New Room](command:wagonWheel.newRoom)\n[Join Existing Conversations](command:wagonWheel.joinExisting)\n[Check Setup](command:wagonWheel.checkSetup) · [Report a Problem](command:wagonWheel.reportProblem)"
+        "contents": "Talk to Claude and Codex together in one room. You can bring in conversations you already have.\n[Start a Room](command:wagonWheel.newRoom)\n[Check my setup](command:wagonWheel.checkSetup) · [Report a problem](command:wagonWheel.reportProblem)"
       },
       {
         "view": "wagonWheel.rooms",
-        "contents": "No saved rooms yet. Rooms you create appear here, newest first; click one to reopen it."
+        "contents": "No rooms yet. Rooms you start show up here, most recent first. Click one to open it again."
       }
     ],
     "menus": {
@@ -310,12 +310,12 @@
       {
         "id": "wagonWheel.start",
         "title": "Get started with Wagon Wheel",
-        "description": "Claude and Codex in one room, working on local sessions.",
+        "description": "Talk to Claude and Codex together, in one room, about the code on this computer.",
         "steps": [
           {
             "id": "setup",
-            "title": "Get your agents ready",
-            "description": "Check that the Claude Code and Codex command-line tools are installed and signed in on this host.\n[Check setup](command:wagonWheel.checkSetup)\nSomething not working? [Report a problem](command:wagonWheel.reportProblem)",
+            "title": "Get Claude and Codex ready",
+            "description": "Wagon Wheel uses the Claude Code and Codex apps already on this computer. Check that they are installed and signed in.\n[Check my setup](command:wagonWheel.checkSetup)\nSomething not working? [Report a problem](command:wagonWheel.reportProblem)",
             "media": {
               "markdown": "walkthrough/setup.md"
             },
@@ -325,24 +325,24 @@
           },
           {
             "id": "sessions",
-            "title": "Choose where the work happens",
-            "description": "Each agent has its own local working session: new, continued or forked.",
+            "title": "Bring in conversations you already have",
+            "description": "Start each agent fresh, or pick up one of your Claude or Codex conversations. A copy keeps your original exactly as it is.",
             "media": {
               "markdown": "walkthrough/sessions.md"
             }
           },
           {
             "id": "tasks",
-            "title": "Stay in the conversation while work continues",
-            "description": "Tasks, allowances, Pause and Stop. Local sessions only.",
+            "title": "Keep talking while they work",
+            "description": "Agents can ask each other for help. You can add a thought, pause or stop at any time.",
             "media": {
               "markdown": "walkthrough/tasks.md"
             }
           },
           {
             "id": "try",
-            "title": "Try one small handoff",
-            "description": "A small read-only review in a new room.\n[New room](command:wagonWheel.newRoom)",
+            "title": "Start your first room",
+            "description": "Try a small review of one file.\n[Start a Room](command:wagonWheel.newRoom)",
             "media": {
               "markdown": "walkthrough/try-it.md"
             },

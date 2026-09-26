@@ -1,7 +1,7 @@
-# Try one small handoff
+# Start your first room
 
-Start with a small read-only review of a file in your workspace. Ask one agent to explain a potential problem and ask the other to check its reasoning. Watch the request and result return to the task without manually relaying them.
+Open **Start a Room**, keep Claude and Codex, and start them fresh. Then ask one of them to review a small file and check its reasoning with the other.
 
-This uses your provider allowance: every agent turn is a real model call.
+Watch the question and the answer pass between them. Try asking a quick side question while they work, then try **Pause** and **Stop**, before you trust them with anything bigger.
 
-During the review, ask a short side question. Then check that the original review still has its objective and pending work. Try Pause and Stop before trusting a larger unattended task.
+Every agent turn uses your Claude or Codex plan.

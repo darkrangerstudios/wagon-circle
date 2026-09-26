@@ -27,7 +27,7 @@ function specs(ctx = {}) {
     { group: 'Room', cmd: '/history add', desc: 'Add a local Claude Code session or Codex thread as reference both agents can read (local only)' },
     { group: 'Room', cmd: '/history remove', desc: 'Stop sharing a history source' },
     { group: 'Room', cmd: '/history all', desc: 'Include a shared source\'s earlier history (on) or only what is said from now on (off): /history all <h1|claude|codex> on|off' },
-    { group: 'Room', cmd: '/history share', args: ['claude on', 'claude off', 'codex on', 'codex off'], desc: 'Share an agent\'s working session with the other agent (read-only reference)' },
+    { group: 'Room', cmd: '/history share', args: ['claude on', 'claude off', 'codex on', 'codex off'], desc: 'Let the other agent read an agent\'s conversation (it can\'t change it)' },
     { group: 'Claude', cmd: '/claude model', args: CLAUDE_MODELS, allowAnyArg: true, desc: 'Switch Claude model (restarts on the same session)' },
     { group: 'Claude', cmd: '/claude effort', args: CLAUDE_EFFORTS, desc: 'Claude thinking effort' },
     { group: 'Claude', cmd: '/claude fast', args: ['on', 'off'], desc: 'Opus fast mode, ~2.5x faster; billed to usage credits' },
@@ -51,7 +51,7 @@ function participantSpecs({ participants, controls = {} }) {
     ...['on', 'off'].map((value) => `${source} ${value}`),
     ...ids.filter((reader) => reader !== source).flatMap((reader) => ['on', 'off'].map((value) => `${source} ${reader} ${value}`))
   ]);
-  share.desc = 'Share a working session as read-only reference: <source> <reader> on|off; omit the reader to apply to every peer';
+  share.desc = 'Let agents read each other\'s conversations: <agent> <reader> on|off; leave out the reader to share with everyone';
   return room.concat(participants.filter((p) => ['claude', 'codex'].includes(p.provider)).flatMap((p) => {
     const control = controls[p.id] || {};
     const models = Array.isArray(control.models) ? control.models : p.provider === 'claude' ? CLAUDE_CATALOG : [];
@@ -65,8 +65,8 @@ function participantSpecs({ participants, controls = {} }) {
         desc: p.provider === 'claude' ? 'Switch Claude model (restarts on the same session)' : 'Switch Codex model (applies from the next turn)' }),
       command('effort', { args: efforts, desc: `Thinking effort for ${p.label || p.id}${current ? ` (${current.id})` : ''}` }),
       command('fast', { args: ['on', 'off'], desc: p.provider === 'claude' ? 'Opus fast mode; billed to usage credits' : 'Priority tier: faster, uses more of your Codex quota' }),
-      command('compact', { desc: `Summarize ${p.label || p.id}'s working session to free space` }),
-      command('session', { args: ['new', 'continue', 'fork'], desc: `Choose a new, continued or forked working session for ${p.label || p.id}` })
+      command('compact', { desc: `Summarize ${p.label || p.id}'s conversation to free up space` }),
+      command('session', { args: ['new', 'switch', 'continue', 'fork'], desc: `Start ${p.label || p.id} over (new), or switch it to one of your conversations (switch asks copy or original)` })
     ];
   }));
 }

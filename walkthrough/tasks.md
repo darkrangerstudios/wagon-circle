@@ -1,11 +1,9 @@
-# Stay in the conversation while work continues
+# Keep talking while they work
 
-Ask the lead agent for a specific result. A work task keeps its objective, assignments and limits while agents ask each other for help.
+Ask for something specific, like "review this function for bugs". The agent you're talking to can ask the other one for help. You'll see the question and the answer in the room without copying anything between apps.
 
-You can ask a question, change direction, pause or stop. Check the task card to see what is running and what is waiting for an answer. Task controls adjust this task; saving defaults is a separate choice. Higher effort does not grant broader tools.
+While they work, you can add a thought, change direction, **Pause** or **Stop**. The card above the message box shows what's running, how many turns are left and what's still waiting for an answer.
 
-Empty polling checks do not start a model. A useful new result can wake the waiting task within its remaining allowance. Reopening the room should preserve that allowance and any unanswered requests.
+Every agent turn is a real request to Claude or Codex and uses your plan, so each piece of work has a limit on turns and minutes. You can change it from **Controls**.
 
-The initial core supports read-only collaboration. Editing, test execution and external tools depend on the capability shown for the selected session.
-
-**Local sessions only.** Working sessions and shared history come from Claude Code sessions and Codex threads on this machine. Use `/history add` to give both agents a local session as read-only reference, or share an agent's working session from its model panel. Cloud sessions are managed in each provider's own tools, not in Wagon Wheel.
+Agents can read files in their folder. They can't edit files or change anything on your computer.

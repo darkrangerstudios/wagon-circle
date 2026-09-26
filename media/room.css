@@ -207,3 +207,38 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .pop .note.cap { cursor: help; }
 .row.system .ts { margin-left: 8px; font-size: .85em; opacity: .75; }
 .avatar:not(.claude):not(.codex) { background: var(--bubble); color: var(--muted); }
+
+/* Usage: one header button with a meter per app; the popover leads with bars, fine print folded away. */
+.usagebtn { display: inline-flex; align-items: center; gap: 10px; }
+.usagebtn .ulabel { font-weight: 600; color: var(--ink); }
+.gauge { display: inline-flex; align-items: center; gap: 5px; }
+.gauge .gname { color: var(--muted); }
+.gauge.warn .gpct { color: var(--vscode-editorWarning-foreground); } .gauge.full .gpct { color: var(--vscode-editorError-foreground); }
+.meter { position: relative; display: block; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; flex: 1; min-width: 60px; }
+.meter.mini { width: 38px; min-width: 38px; flex: none; height: 5px; }
+.meter .fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--muted); }
+.meter.claude .fill { background: var(--claude); } .meter.codex .fill { background: var(--codex); }
+.gauge.claude .fill { background: var(--claude); } .gauge.codex .fill { background: var(--codex); }
+.meter.warn .fill { background: var(--vscode-editorWarning-foreground); } .meter.full .fill { background: var(--vscode-editorError-foreground); }
+.usagepop { min-width: min(380px, 92vw); }
+.usagepop .usec { display: grid; gap: 8px; padding-top: 4px; }
+.usagepop .usec + .usec { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 10px; }
+.usagepop .limit { display: grid; gap: 4px; }
+.usagepop .seg button { white-space: nowrap; }
+.usagepop .lrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.usagepop .lrow .val, .usagepop .lpct { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.usagepop .lpct.warn { color: var(--vscode-editorWarning-foreground); } .usagepop .lpct.full { color: var(--vscode-editorError-foreground); }
+.usagepop .psec { display: grid; gap: 6px; padding: 6px 0; }
+.usagepop .pname { font-weight: 600; }
+.mix { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.mix span { display: block; height: 100%; }
+.m-cached { background: color-mix(in srgb, var(--muted) 45%, transparent); } .m-fresh { background: var(--vscode-charts-blue, #3794ff); } .m-out { background: var(--vscode-charts-purple, #b180d7); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .82em; color: var(--muted); }
+.legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.usagepop .model { display: grid; grid-template-columns: minmax(0, 1fr) 90px 38px; align-items: center; gap: 8px; font-size: .9em; }
+.usagepop .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usagepop details.more { font-size: .88em; }
+.usagepop details.more summary { cursor: pointer; color: var(--muted); }
+.usagepop details.more .lrow { padding: 2px 0; }
+.usagepop details.more .lrow > span:first-child { white-space: nowrap; }

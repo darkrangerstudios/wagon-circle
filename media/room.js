@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.5.4';
+  const EXPECT = '0.6.0';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -226,45 +226,44 @@
     lb.appendChild(el('span', 'muted', 'Lead')); lb.appendChild(el('span', `glyph ${provider(lead)}`, lead === 'both' ? '◎' : GLYPH[lead]));
     lb.appendChild(el('span', null, lead === 'both' ? allLabel() : NAMES[lead]));
   }
+  // ---------- usage: one header button with a meter per app, details one click away ----------
+  // Plan limits as rows: { who, label, pct, resets }. Claude from its /usage screen, Codex from its rate limits.
+  function limitRows() {
+    const rows = [];
+    const span = (w, fb) => !w.windowDurationMins ? fb : w.windowDurationMins >= 10080 ? 'this week' : w.windowDurationMins >= 1440 ? `${Math.round(w.windowDurationMins / 1440)} days` : `${Math.round(w.windowDurationMins / 60)} hours`;
+    const at = (sec) => (sec ? new Date(sec * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '');
+    if (cusage) {
+      if (cusage.session) rows.push({ who: 'claude', label: 'Claude · current session', pct: cusage.session.pct, resets: cusage.session.resets || '' });
+      if (cusage.week) rows.push({ who: 'claude', label: 'Claude · this week', pct: cusage.week.pct, resets: cusage.week.resets || '' });
+      for (const [name, v] of Object.entries(cusage.models || {})) if (v && v.pct >= 50) rows.push({ who: 'claude', label: `${name} · this week`, pct: v.pct, resets: v.resets || '' });
+    }
+    if (quota) for (const [fb, w] of [['short window', quota.primary], ['long window', quota.secondary]]) if (w) rows.push({ who: 'codex', label: `Codex · ${span(w, fb)}`, pct: w.usedPercent, resets: at(w.resetsAt) });
+    return rows;
+  }
+  const level = (pct) => (pct >= 100 ? ' full' : pct >= 80 ? ' warn' : '');
+  // A limit meter turns amber at 80% and red at 100%; a share meter (plain) never does.
+  function meter(pct, cls, plain = false) {
+    const m = el('span', `meter${cls ? ' ' + cls : ''}${plain ? '' : level(pct)}`); const f = el('span', 'fill');
+    f.style.width = `${Math.max(0, Math.min(100, Math.round(pct)))}%`; m.appendChild(f); return m;
+  }
   function renderQuota() {
     const box = $('quota'); box.textContent = '';
-    const q = quota;
-    const span = (w, fb) => !w.windowDurationMins ? fb : w.windowDurationMins >= 10080 ? 'week' : w.windowDurationMins >= 1440 ? `${Math.round(w.windowDurationMins / 1440)}d` : `${Math.round(w.windowDurationMins / 60)}h`;
-    if (q) for (const [fb, w] of [['short', q.primary], ['long', q.secondary]]) if (w) {
-      const p = el('span', `pill${w.usedPercent >= 100 ? ' full' : w.usedPercent >= 80 ? ' warn' : ''}`, `Codex ${span(w, fb)} ${Math.round(w.usedPercent)}%`);
-      if (w.resetsAt) p.title = `Resets ${new Date(w.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`; box.appendChild(p);
+    const rows = limitRows();
+    const b = el('button', 'pill btn usagebtn'); b.setAttribute('aria-label', 'Usage: plan limits and token use');
+    b.appendChild(el('span', 'ulabel', 'Usage'));
+    for (const who of ['claude', 'codex']) {
+      const mine = rows.filter((r) => r.who === who); // the header shows each app's closest limit
+      if (!mine.length) continue;
+      const worst = mine.reduce((x, y) => (y.pct > x.pct ? y : x));
+      const g = el('span', `gauge ${who}${level(worst.pct)}`); g.appendChild(el('span', 'gname', who === 'claude' ? 'Claude' : 'Codex'));
+      g.appendChild(meter(worst.pct, 'mini')); g.appendChild(el('span', 'gpct', `${Math.round(worst.pct)}%`));
+      b.appendChild(g);
     }
-    const cp = (label, v) => { if (!v) return; const p = el('span', `pill${v.pct >= 100 ? ' full' : v.pct >= 80 ? ' warn' : ''}`, `${label} ${Math.round(v.pct)}%`); if (v.resets) p.title = `Resets ${v.resets}`; box.appendChild(p); };
-    if (cusage) {
-      cp('Claude session', cusage.session); cp('Claude week', cusage.week);
-      for (const [name, v] of Object.entries(cusage.models || {})) if (v.pct >= 80) cp(`${name} week`, v);
-    }
-    // This computer's token totals across all local sessions (not only this room). Hover for the totals, click for
-    // the breakdown by model, lane, thinking, cache tier and tool.
-    if (local) {
-      const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
-      const part = (n, x) => (x === null ? `${n} no logs` : x.unknown ? `${n} unknown` : `${n} ${k(total(x.window))}`);
-      const p = el('button', 'pill btn', `This computer · ${local.windowDays} days: ${part('Claude', local.claude)} · ${part('Codex', local.codex)}`);
-      p.setAttribute('aria-label', 'This computer: token usage breakdown'); p.addEventListener('click', () => openUsage());
-      const line = (n, x, w) => (x && !x.unknown ? `${n} ${w === 'today' ? 'today' : `${local.windowDays} days`}: ${k(x[w].fresh)} new in · ${k(x[w].cached)} cached · ${k(x[w].cacheWrite)} cache writes · ${k(x[w].output)} out` : `${n}: ${x === null ? 'no local logs found' : 'log format not recognised'}`);
-      p.title = [line('Claude', local.claude, 'today'), line('Claude', local.claude, 'window'), line('Codex', local.codex, 'today'), line('Codex', local.codex, 'window'),
-        'Tokens from every Claude Code and Codex session on this computer, read from their local logs. Not included: web apps, other machines, cloud tasks. Most are cached reads, which cost far less than new input.',
-        `Updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`].join('\n');
-      box.appendChild(p);
-    }
-    if (Object.keys(participantUsage).length || Object.keys(participantCost).length) {
-      for (const p of participants()) {
-        const u = participantUsage[p.id], dollars = participantCost[p.id];
-        if (!u && !dollars) continue;
-        const pill = el('span', 'pill', `${p.label}${dollars ? ` ≈$${dollars.toFixed(2)} at API rates` : ''}${u ? ` · last turn ${k(u.fresh + u.cacheWrite)} new, ${k(u.cached)} cached` : ''}`);
-        pill.title = [u ? `Output ${k(u.output)}` : '', dollars ? 'API-equivalent estimate, not a separate charge.' : '', 'Provider account limits above are shared across sessions.'].filter(Boolean).join('\n'); box.appendChild(pill);
-      }
-    } else {
-      // Old saved rooms and older hosts have only the provider-level last-turn fields.
-      if (codexUsage) { const p = el('span', 'pill', `Codex last turn ${k(codexUsage.fresh + codexUsage.cacheWrite)} new, ${k(codexUsage.cached)} cached`); p.title = `Output ${k(codexUsage.output)}`; box.appendChild(p); }
-      if (cost) { const p = el('span', 'pill', `Claude ≈$${cost.toFixed(2)} at API rates${usage ? ` · last turn ${k(usage.input + usage.cacheWrite)} new, ${k(usage.cacheRead)} cached` : ''}`); p.title = 'API-equivalent estimate, not a separate charge.'; box.appendChild(p); }
-    }
+    b.title = rows.length ? `${rows.map((r) => `${r.label}: ${Math.round(r.pct)}% used${r.resets ? `, resets ${r.resets}` : ''}`).join('\n')}\nClick for details.` : 'Plan limits and token use. Click for details.';
+    b.addEventListener('click', () => openUsage());
+    box.appendChild(b);
   }
+
   // ---------- task card and controls ----------
   const STATUS = { active: 'Working', paused: 'Paused', exhausted: 'Allowance used', completed: 'Complete', stopped: 'Stopped' };
   const mins = (ms) => `${Math.floor(ms / 60000)}m`;
@@ -353,57 +352,112 @@
   // ---------- this computer's usage, broken down ----------
   let usageWin = 'window';
   const chars = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M chars` : n >= 1000 ? `${(n / 1000).toFixed(1)}k chars` : `${n} chars`);
+  // Tokens split into what they cost: cached reads are cheap; new input and output are what a plan really spends.
+  const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
+  function mixBar(u) {
+    const bar = el('div', 'mix'), t = total(u) || 1;
+    for (const [key, v, label] of [['cached', u.cached, 'reused from cache'], ['fresh', u.fresh + u.cacheWrite, 'new input'], ['out', u.output, 'written by the model']]) {
+      if (!v) continue; const seg = el('span', `m-${key}`); seg.style.width = `${Math.max(1, (v / t) * 100)}%`; seg.title = `${k(v)} ${label}`; bar.appendChild(seg);
+    }
+    return bar;
+  }
   function openUsage() {
     const pop = $('pop');
     if (!pop.hidden && pop.dataset.for === 'usage') return closePop();
-    if (!local) return;
-    pop.dataset.for = 'usage'; pop.textContent = ''; pop.hidden = false;
-    const h = el('h4'); h.appendChild(el('span', null, 'This computer'));
-    h.appendChild(el('small', null, `updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)); pop.appendChild(h);
-    const seg = el('div', 'seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Period');
-    const body = el('div', 'usage');
-    for (const [v, label] of [['today', 'Today'], ['window', `${local.windowDays} days`]]) {
-      const x = el('button', v === usageWin ? 'on' : '', label); x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', String(v === usageWin));
-      x.addEventListener('click', () => { usageWin = v; for (const b of seg.children) { b.classList.toggle('on', b === x); b.setAttribute('aria-checked', String(b === x)); } render(); });
-      seg.appendChild(x);
+    pop.dataset.for = 'usage'; pop.textContent = ''; pop.hidden = false; pop.classList.add('usagepop');
+    pop.appendChild(el('h4', null, 'Usage'));
+
+    // 1. Plan limits: the numbers that decide whether the next turn works.
+    const lim = el('div', 'usec'); lim.appendChild(el('div', 'lbl', 'Plan limits'));
+    const rows = limitRows();
+    if (!rows.length) lim.appendChild(el('small', 'note', 'Shown after the first reply from each app.'));
+    for (const r of rows) {
+      const row = el('div', 'limit');
+      const top = el('div', 'lrow'); top.appendChild(el('span', null, r.label)); top.appendChild(el('span', `lpct${level(r.pct)}`, `${Math.round(r.pct)}%`));
+      row.appendChild(top); row.appendChild(meter(r.pct, r.who));
+      if (r.resets) row.appendChild(el('small', 'note', `Resets ${r.resets}`));
+      lim.appendChild(row);
     }
-    pop.appendChild(seg); pop.appendChild(body);
-    const stat = (box, label, value, tip) => { const r = el('div', 'stat'); r.appendChild(el('span', null, label)); const v = el('span', 'val', value); if (tip) v.title = tip; r.appendChild(v); box.appendChild(r); };
-    const tok = (u) => `${k(u.fresh + u.cacheWrite)} new · ${k(u.cached)} cached · ${k(u.output)} out`;
-    const total = (u) => u.fresh + u.cached + u.cacheWrite + u.output;
-    function section(name, x) {
-      const s = el('div', 'usec'); body.appendChild(s);
-      if (x === null) { s.appendChild(el('div', 'lbl', `${name}: no local logs found`)); return; }
-      if (x.unknown) { s.appendChild(el('div', 'lbl', `${name}: log format not recognised`)); return; }
-      const u = x[usageWin], d = x.detail && x.detail[usageWin];
-      s.appendChild(el('div', 'lbl', `${name} · ${k(total(u))} tokens${usageWin === 'window' && x.sessions ? ` · ${x.sessions} session${x.sessions === 1 ? '' : 's'}` : ''}`));
-      stat(s, 'All', tok(u), `${k(u.fresh)} new input · ${k(u.cacheWrite)} cache writes · ${k(u.cached)} cached reads · ${k(u.output)} output`);
-      if (!d) { s.appendChild(el('small', 'note', 'Breakdown needs a newer Wagon Wheel host; reload the window.')); return; }
-      const models = Object.entries(d.models).filter(([, mu]) => total(mu) > 0).sort((a, b) => total(b[1]) - total(a[1])); // Claude Code logs a zero-token placeholder model ('<synthetic>'); it is not a row
-      if (models.length > 1 || (models[0] && models[0][0] !== 'unknown')) for (const [m, mu] of models) stat(s, m === 'unknown' ? 'model not logged' : m, `${tok(mu)}${mu.thinking ? ` · ${k(mu.thinking)} thinking` : ''}`);
-      if (total(d.lanes.subagent)) { stat(s, 'Main conversation', tok(d.lanes.main)); stat(s, 'Subagents', tok(d.lanes.subagent)); }
-      if (u.output) stat(s, name === 'Codex' ? 'Reasoning' : 'Thinking', `${k(d.thinking)} of ${k(u.output)} output tokens`, name === 'Codex' ? 'Reasoning tokens as Codex reports them in its running total' : 'Thinking tokens as Claude Code logs them per API message');
-      if (d.tiers && (d.tiers.h1 || d.tiers.m5)) stat(s, 'Cache writes', `${k(d.tiers.h1)} 1-hour · ${k(d.tiers.m5)} 5-minute`, 'Prompt-cache tiers: the 1-hour tier costs more to write and lasts longer between turns');
-      const tools = Object.entries(d.tools).sort((a, b) => b[1].calls - a[1].calls);
-      if (tools.length) {
-        s.appendChild(el('div', 'lbl', `Tool calls · ${d.toolCalls}`));
-        for (const [t, tu] of tools.slice(0, 12)) stat(s, t, `${tu.calls}× · ≈${chars(tu.chars)} back${tu.unsized ? ` (${tu.unsized} unsized)` : ''}`, 'Estimated: characters of text returned to the model. Neither CLI reports tokens per tool. Unsized: no text came back (an image, an interrupted call, or a result not logged yet).');
-        if (tools.length > 12) s.appendChild(el('small', 'note', `${tools.length - 12} more tools not shown`));
+    pop.appendChild(lim);
+
+    // 2. This room: each agent's last reply, plus Claude's running cost at API prices.
+    const seats = participants().filter((p) => participantUsage[p.id] || participantCost[p.id]);
+    if (seats.length) {
+      const rm = el('div', 'usec'); rm.appendChild(el('div', 'lbl', 'This room'));
+      for (const p of seats) {
+        const u = participantUsage[p.id], dollars = participantCost[p.id];
+        const line = el('div', 'lrow');
+        line.appendChild(el('span', null, p.label || NAMES[p.id]));
+        const parts = [];
+        if (u) { const t = u.fresh + u.cacheWrite + u.cached; parts.push(`last reply read ${k(t)} tokens${t ? `, ${Math.round((u.cached / t) * 100)}% reused` : ''}`); }
+        if (dollars) parts.push(`≈$${dollars.toFixed(2)} so far at API prices`);
+        line.appendChild(el('span', 'val', parts.join(' · ')));
+        rm.appendChild(line);
       }
+      rm.appendChild(el('small', 'note', 'API prices are for comparison only. A subscription doesn\'t charge per token.'));
+      pop.appendChild(rm);
     }
-    function render() { body.textContent = ''; section('Claude', local.claude); section('Codex', local.codex); }
-    render();
-    pop.appendChild(el('small', 'note', 'Every Claude Code and Codex session on this computer, read from their local logs; nothing here is a model call. Not included: web apps, other machines, cloud tasks. Tool result sizes are estimates in characters, not tokens.'));
+
+    // 3. This computer: every local Claude Code and Codex session, from their own logs.
+    if (local) {
+      const pc = el('div', 'usec'); pop.appendChild(pc);
+      const head = el('div', 'lrow'); head.appendChild(el('span', 'lbl', 'This computer'));
+      const seg = el('div', 'seg'); seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'Period');
+      head.appendChild(seg); pc.appendChild(head);
+      const body = el('div', 'usage'); pc.appendChild(body);
+      for (const [v, label] of [['today', 'Today'], ['window', `${local.windowDays} days`]]) {
+        const x = el('button', v === usageWin ? 'on' : '', label); x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', String(v === usageWin));
+        x.addEventListener('click', () => { usageWin = v; for (const b of seg.children) { b.classList.toggle('on', b === x); b.setAttribute('aria-checked', String(b === x)); } render(); });
+        seg.appendChild(x);
+      }
+      const legend = el('div', 'legend');
+      for (const [key, label] of [['cached', 'Reused from cache (cheap)'], ['fresh', 'New input'], ['out', 'Written by the model']]) { const l = el('span'); l.appendChild(el('span', `sw m-${key}`)); l.appendChild(el('span', null, label)); legend.appendChild(l); }
+      function section(name, x) {
+        const s = el('div', 'psec'); body.appendChild(s);
+        if (x === null) { s.appendChild(el('div', 'lrow', `${name}: no conversations on this computer`)); return; }
+        if (x.unknown) { s.appendChild(el('div', 'lrow', `${name}: couldn't read its logs`)); return; }
+        const u = x[usageWin], d = x.detail && x.detail[usageWin];
+        const top = el('div', 'lrow'); top.appendChild(el('span', 'pname', name));
+        top.appendChild(el('span', 'val', `${k(total(u))} tokens${usageWin === 'window' && x.sessions ? ` · ${x.sessions} conversation${x.sessions === 1 ? '' : 's'}` : ''}`));
+        s.appendChild(top);
+        if (total(u)) s.appendChild(mixBar(u));
+        if (!d) { s.appendChild(el('small', 'note', 'Reload the window to see models and details.')); return; }
+        const models = Object.entries(d.models).filter(([, mu]) => total(mu) > 0).sort((a, b) => total(b[1]) - total(a[1])); // Claude Code logs a zero-token placeholder model ('<synthetic>'); it is not a row
+        const all = total(u) || 1;
+        for (const [m, mu] of models.slice(0, 3)) {
+          const r = el('div', 'model'); r.appendChild(el('span', 'mname', m === 'unknown' ? 'model not logged' : m));
+          const share = (total(mu) / all) * 100;
+          r.appendChild(meter(share, name === 'Claude' ? 'claude' : 'codex', true)); r.appendChild(el('span', 'val', share > 0 && share < 1 ? '<1%' : `${Math.round(share)}%`));
+          s.appendChild(r);
+        }
+        if (models.length > 3) s.appendChild(el('small', 'note', `${models.length - 3} more model${models.length - 3 === 1 ? '' : 's'}`));
+        // The fine print, folded away.
+        const more = el('details', 'more'); more.appendChild(el('summary', null, 'More detail'));
+        const line = (label, value, tip) => { const r = el('div', 'lrow'); r.appendChild(el('span', null, label)); const v = el('span', 'val', value); if (tip) v.title = tip; r.appendChild(v); more.appendChild(r); };
+        line('Reused from cache', k(u.cached)); line('New input', k(u.fresh + u.cacheWrite)); line('Written by the model', k(u.output));
+        if (u.output && d.thinking) line(name === 'Codex' ? 'Of which reasoning' : 'Of which thinking', k(d.thinking));
+        if (total(d.lanes.subagent)) line('Helper agents (subagents)', `${Math.round((total(d.lanes.subagent) / all) * 100)}% of tokens`);
+        const tools = Object.entries(d.tools).sort((a, b) => b[1].calls - a[1].calls);
+        // Connector tools are logged as mcp__<server>__<tool>; show the tool, with the server when it has a readable name.
+        const friendly = (t) => { if (!t.startsWith('mcp__')) return t; const [, server, ...rest] = t.split('__'); const tool = rest.join('__') || server; return /^[0-9a-f-]{16,}$/i.test(server) || !rest.length ? tool : `${server} ${tool}`; };
+        if (tools.length) line('Tools used most', tools.slice(0, 3).map(([t, tu]) => `${friendly(t)} ${tu.calls}×`).join(', '), `${d.toolCalls} tool calls in total`);
+        s.appendChild(more);
+      }
+      function render() { body.textContent = ''; section('Claude', local.claude); section('Codex', local.codex); body.appendChild(legend); }
+      render();
+      pc.appendChild(el('small', 'note', 'Every Claude Code and Codex conversation on this computer, read from their own logs. Web apps, other computers and cloud tasks aren\'t included.'));
+      pc.appendChild(el('small', 'note', `Updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`));
+    }
   }
-  function closePop() { $('pop').hidden = true; }
+  function closePop() { $('pop').hidden = true; $('pop').classList.toggle('usagepop', false); }
   function cmd(text) { vscode.postMessage({ type: 'command', text }); }
   function openPop(name) {
     const pop = $('pop'); if (!controls) return;
     if (!pop.hidden && pop.dataset.for === name) return closePop();
-    pop.dataset.for = name; pop.textContent = ''; pop.hidden = false;
+    pop.dataset.for = name; pop.textContent = ''; pop.hidden = false; pop.classList.toggle('usagepop', false);
     const c = controls[name] || participants().find((p) => p.id === name); if (!c) { closePop(); return; }
     const kind = c.provider || provider(name);
-    const h = el('h4'); h.appendChild(el('span', null, `${GLYPH[name]}  ${NAMES[name]}`)); h.appendChild(el('small', null, kind === 'claude' ? `Claude Code ${c.cli || ''}` : kind === 'codex' ? 'Codex app-server' : 'Experimental ACP')); pop.appendChild(h);
+    const h = el('h4'); h.appendChild(el('span', null, `${GLYPH[name]}  ${NAMES[name]}`)); h.appendChild(el('small', null, kind === 'claude' ? `Claude Code ${c.cli || ''}` : kind === 'codex' ? 'Codex on this computer' : 'Experimental ACP')); pop.appendChild(h);
     pop.appendChild(el('small', 'note seatcontext', `@${name}${c.cwd ? ' · ' + c.cwd : ''}`));
     if (!['claude', 'codex'].includes(kind)) { pop.appendChild(el('small', 'note', 'Experimental agent: local process, provider-managed permissions. Model, effort and history controls are not available here.')); return; }
     const models = el('div'); models.appendChild(el('div', 'lbl', 'Model'));
@@ -419,7 +473,7 @@
     const cur = (c.models || []).find((m) => m.id === c.model) || {};
     const efforts = kind === 'claude' ? (c.efforts || []) : (cur.efforts || []);
     if (efforts.length) {
-      const e = el('div'); e.appendChild(el('div', 'lbl', `Effort${kind === 'codex' && cur.defaultEffort ? ` · default ${cur.defaultEffort}` : ''}`));
+      const e = el('div'); e.appendChild(el('div', 'lbl', `Thinking${kind === 'codex' && cur.defaultEffort ? ` · default ${cur.defaultEffort}` : ''}`));
       const seg = el('div', 'seg');
       for (const v of efforts) { const b = el('button', v === c.effort ? 'on' : '', v); b.addEventListener('click', () => { cmd(`/${name} effort ${v}`); closePop(); }); seg.appendChild(b); }
       e.appendChild(seg); pop.appendChild(e);
@@ -432,19 +486,20 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
-    const ws = el('div'); ws.appendChild(el('div', 'lbl', `Working session${c.session ? ` · ${String(c.session).slice(0, 8)}` : ''}${c.typed ? '' : ' · no typed requests'}`));
+    const ws = el('div'); ws.appendChild(el('div', 'lbl', `Conversation${c.typed ? '' : ' · reached by @mention'}`));
     const wseg = el('div', 'seg');
-    for (const [a, label, tip] of [['new', 'New', 'Start a fresh session for this agent'], ['continue', 'Continue…', 'Resume an existing session itself (you will be warned first)'], ['fork', 'Fork…', 'Branch a copy of an existing session; the original is untouched']]) {
+    for (const [a, label, tip] of [['new', 'Start over', 'Give this agent a brand-new conversation. The room keeps its messages.'],
+      ['switch', 'Switch to one of your conversations…', 'Bring in a conversation you already had. Next you choose a copy (recommended) or the original.']]) {
       const x = el('button', '', label); x.title = tip; x.disabled = !!busy[name];
       x.addEventListener('click', () => { vscode.postMessage({ type: 'session', vendor: name, action: a }); closePop(); }); wseg.appendChild(x);
     }
     ws.appendChild(wseg); pop.appendChild(ws);
-    pop.appendChild(el('div', 'lbl', 'Shared history'));
+    pop.appendChild(el('div', 'lbl', 'Sharing'));
     const readers = c.readers || participants().filter((p) => p.id !== name).map((p) => ({ ...p, shared: !!c.shared }));
     for (const reader of readers) {
       const hr = el('div', 'fastrow'); const ht = el('div');
-      ht.appendChild(el('span', null, `Let ${reader.label || NAMES[reader.id]} read this session`));
-      ht.appendChild(el('small', null, 'Read-only reference for this specific working session.'));
+      ht.appendChild(el('span', null, `Let ${reader.label || NAMES[reader.id]} read this conversation`));
+      ht.appendChild(el('small', null, 'They can look things up in it but can\'t change it.'));
       const hs = el('button', `switch${reader.shared ? ' on' : ''}`); hs.setAttribute('role', 'switch'); hs.setAttribute('aria-checked', String(!!reader.shared)); hs.setAttribute('aria-label', `Share ${NAMES[name]} history with ${reader.label || NAMES[reader.id]}`);
       hs.addEventListener('click', () => { vscode.postMessage({ type: 'historyShare', source: name, reader: reader.id, on: !reader.shared }); closePop(); });
       hr.appendChild(ht); hr.appendChild(hs); pop.appendChild(hr);
@@ -458,11 +513,11 @@
       ar.appendChild(at); ar.appendChild(as); pop.appendChild(ar);
     }
     // What this agent can do here: one line, full detail on hover.
-    const cap = el('small', 'note cap', kind === 'claude' ? 'Read-only · no shell, web or edits' : 'Read-only sandbox · no edits, web or connectors');
+    const cap = el('small', 'note cap', kind === 'claude' ? 'Can read files. Can\'t edit them, run commands or use the web.' : 'Can read files and run look-only commands. Can\'t edit files, use the web or connectors.');
     cap.title = kind === 'claude' ? 'Read, Glob and Grep inside the room folder, plus the room tools (ask the other agent, read shared history, finish a task). No edits, no shell, no web, no other MCP servers. Your own Claude settings do not apply here.'
       : 'Read-only sandbox for local inspection, plus the room tools when its thread has them. Read access is not confined to the room folder. Every approval request is declined. Web search, connected apps and external MCP tools are disabled and checked before the thread is used.';
     pop.appendChild(cap);
-    const save = el('button', 'link', 'Use as provider defaults for new rooms');
+    const save = el('button', 'link', 'Use these settings for new rooms');
     save.addEventListener('click', () => { vscode.postMessage({ type: 'saveDefaults', vendor: name }); closePop(); });
     pop.appendChild(save);
   }

@@ -98,7 +98,7 @@ const fakes = {
     fileFor: (id) => path.join(historyRoot, `${id}.jsonl`), recentMessages: () => [] }
 };
 const realLoad = Module._load;
-let RoomSession, newMeta, chooseParticipants;
+let RoomSession, newMeta;
 try {
   Module._load = function (request, parent, ...args) {
     if (request === 'vscode') return vscode;
@@ -106,7 +106,7 @@ try {
     return fakes[resolved] || realLoad.call(this, request, parent, ...args);
   };
   delete require.cache[require.resolve('../src/extension')];
-  ({ RoomSession, newMeta, chooseParticipants } = require('../src/extension'));
+  ({ RoomSession, newMeta } = require('../src/extension'));
 } finally { Module._load = realLoad; }
 
 test.beforeEach(() => { codexClients = []; claudeClients = []; claudeUsageReads = []; threadChoices = []; claudeChoices = []; picks = []; warnings = []; inputs = []; folders = []; codexBarrier = null; });
@@ -224,7 +224,7 @@ test('saving and reopening four seats preserves bindings while polling account q
 
 for (const provider of ['codex', 'claude']) test(`duplicate saved ${provider} session ids fail before starting a provider`, async (t) => {
   const f = fixture(t, [provider, provider]); f.seats.forEach((seat) => { seat.sessionId = 'same-session'; });
-  const s = f.create(); await assert.rejects(s.boot(), /already owned/);
+  const s = f.create(); await assert.rejects(s.boot(), /already in use/);
   assert.equal(codexClients.length, 0); assert.equal(claudeClients.length, 0);
   const only = f.create({ ...newMeta('Recover released claim'), seats: [{ ...f.seats[0] }] });
   await only.boot(); assert.equal(only.controls().app.session, 'same-session');
@@ -238,7 +238,7 @@ for (const provider of ['codex', 'claude']) test(`Continue cannot take a ${provi
   picks.push((items) => items.find((item) => item.id === `${provider}-db`));
   const before = structuredClone(s.meta.seats), clients = provider === 'codex' ? codexClients : claudeClients;
   const count = clients.length;
-  await assert.rejects(s.switchSession('app', 'continue'), /already owned/);
+  await assert.rejects(s.switchSession('app', 'continue'), /already in use/);
   assert.equal(warnings.length, 1); assert.equal(clients.length, count);
   assert.deepEqual(s.meta.seats, before); assert.equal(clients[0].stops, 0); assert.equal(clients[1].stops, 0);
   assert.equal(s.room.busy.app, false);
@@ -401,38 +401,6 @@ test('a rejected room never gains save ownership merely because the original own
   assert.equal(fs.readFileSync(owner.file, 'utf8'), checkpoint);
 });
 
-test('the default participant wizard returns the legacy pair without starting providers', async () => {
-  picks.push((items) => items.find((item) => item.kind === 'default'));
-  const meta = newMeta('Default wizard'), result = await chooseParticipants(meta);
-  assert.deepEqual(result.map(({ id, provider }) => ({ id, provider })), [{ id: 'claude', provider: 'claude' }, { id: 'codex', provider: 'codex' }]);
-  assert.equal(meta.seats, undefined);
-  assert.equal(codexClients.length + claudeClients.length, 0);
-});
-
-test('the custom participant wizard creates two named Codex seats with independent folders', async (t) => {
-  const f = fixture(t);
-  picks.push((items) => items.find((item) => item.kind === 'custom'), (items) => items.find((item) => item.provider === 'codex'),
-    (items) => items.find((item) => item.provider === 'codex'), (items) => items.find((item) => item.done));
-  inputs.push('Application', (options) => { assert.ok(options.validateInput('h1')); return 'app'; }, 'Database',
-    (options) => { assert.ok(options.validateInput('app'), 'duplicate id rejected by the wizard'); return 'db'; });
-  folders.push([{ fsPath: f.seats[0].cwd }], [{ fsPath: f.seats[1].cwd }]);
-  const result = await chooseParticipants(newMeta('Custom wizard'));
-  assert.deepEqual(result.map(({ id, label, provider, cwd }) => ({ id, label, provider, cwd })), [
-    { id: 'app', label: 'Application', provider: 'codex', cwd: f.seats[0].cwd },
-    { id: 'db', label: 'Database', provider: 'codex', cwd: f.seats[1].cwd }
-  ]);
-  assert.equal(codexClients.length + claudeClients.length, 0);
-});
-
-test('canceling participant selection or its folder picker returns no partial roster or provider process', async () => {
-  picks.push(() => undefined);
-  assert.equal(await chooseParticipants(newMeta('Canceled choice')), null);
-  picks.push((items) => items.find((item) => item.kind === 'custom'), (items) => items.find((item) => item.provider === 'claude'));
-  inputs.push('Draft', 'draft'); folders.push(undefined);
-  assert.equal(await chooseParticipants(newMeta('Canceled folder')), null);
-  assert.equal(codexClients.length + claudeClients.length, 0);
-});
-
 test('re-adding a history source stops before new consent and accurately retains its existing policy', async (t) => {
   const s = fixture(t).create(); await s.boot();
   const existing = s.history.add({ provider:'codex', sessionId:'external-reference', title:'Synthetic reference', readers:['app'], allHistory:true });
@@ -475,7 +443,7 @@ test('a Claude seat claims its session the moment the CLI reports it, so a sibli
   assert.equal(s.meta.seats[0].sessionId, app.nextId); // claimed before any save or turn end
   claudeChoices = [{ id: app.nextId, cwd: f.seats[0].cwd, title: 'Fresh sibling', mtime: Date.now() }];
   picks.push((items) => items.find((item) => item.id === app.nextId));
-  await assert.rejects(s.switchSession('db', 'continue'), /already owned/); // the claim already belongs to app
+  await assert.rejects(s.switchSession('db', 'continue'), /already in use/); // the claim already belongs to app
   assert.equal(warnings.length, 1); assert.equal(db.stops, 0); assert.equal(s.meta.seats[1].sessionId, null);
   released.resolve(); await settle(s);
   assert.equal(s.room.busy.app, false); assert.equal(JSON.parse(fs.readFileSync(s.file, 'utf8')).meta.seats[0].sessionId, app.nextId);
@@ -523,4 +491,27 @@ test('the Continue warning says when the session changed in the last two minutes
   claudeChoices = [{ id: 'old-claude', cwd: f.seats[0].cwd, title: 'Old', mtime: Date.now() - 3600e3 }];
   picks.push((items) => items[0]); await s.switchSession('app', 'continue');
   assert.doesNotMatch(warnings[1][1].detail, /last two minutes/);
+});
+
+test('Switch to one of your conversations: a copy behaves as Fork, the original as Continue (with its warning), cancel changes nothing', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const source = s.controls().db.session, cwd = s.meta.seats[1].cwd;
+  threadChoices = [{ id: source, cwd, name: 'Sibling source' }];
+  // Copy.
+  picks.push((items) => items.find((item) => item.id === source), (items) => { assert.deepEqual(items.map((i) => i.label), ['Work on a copy (recommended)', 'Keep going in the original']); return items[0]; });
+  await s.switchSession('app', 'switch');
+  let replacement = codexClients.at(-1);
+  assert.ok(replacement.calls.some(([action, id]) => action === 'fork' && id === source));
+  assert.equal(warnings.length, 0);
+  assert.match(s.room.state.transcript.at(-1).text, /now uses a copy of "Sibling source"/);
+  // Cancel at the copy-or-original question.
+  const before = codexClients.length;
+  picks.push((items) => items.find((item) => item.id === source), () => undefined);
+  await s.switchSession('app', 'switch');
+  assert.equal(codexClients.length, before, 'nothing started');
+  // Original: goes through Continue, which warns first and refuses a conversation another agent owns.
+  picks.push((items) => items.find((item) => item.id === source), (items) => items[1]);
+  await assert.rejects(s.switchSession('app', 'switch'), /already in use/);
+  assert.equal(warnings.length, 1);
+  void replacement;
 });

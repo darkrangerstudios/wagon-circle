@@ -80,20 +80,6 @@ test('cliVersion reports a version, not found, or unknown and never raw output',
   assert.strictEqual(await setup.cliVersion('gemini', 'gemini', { run: run({ code: 0, stdout: '1.0.0' }) }), 'unknown');
 });
 
-test('first run checks only the room\'s providers that have not passed before', () => {
-  const seats = [{ provider: 'claude' }, { provider: 'claude' }, { provider: 'codex' }, { provider: 'acp' }];
-  assert.deepStrictEqual(setup.firstRunProviders(seats, {}), ['claude', 'codex']);
-  assert.deepStrictEqual(setup.firstRunProviders(seats, { claude: true }), ['codex']);
-  assert.deepStrictEqual(setup.firstRunProviders(seats, { claude: true, codex: true }), []);
-  assert.deepStrictEqual(setup.firstRunProviders(seats, 'garbage'), ['claude', 'codex']);
-  assert.ok(setup.blocking({ installation: 'missing' }));
-  assert.ok(setup.blocking({ installation: 'available', authentication: 'signed-out' }));
-  assert.ok(!setup.blocking({ installation: 'available', authentication: 'unknown' }));
-  assert.ok(!setup.passes({ installation: 'available', authentication: 'unknown' }));
-  assert.ok(setup.blocking({ installation: 'unknown', issue: 'not-executable' }));
-  for (const issue of ['timed-out', 'unrecognized-version', 'check-failed']) assert.ok(!setup.blocking({ installation: 'unknown', issue }), `${issue} must not block`);
-});
-
 // Extension glue with VS Code and the CLI probe stubbed. Uri.parse is lossy like the real path: it decodes the query
 // and re-encodes it with encodeURI, so & # ? and literal + are lost. Passing a Uri instead of the string would corrupt the issue.
 const lossyUri = (u) => { const [base, query = ''] = String(u).split('?'); return { lossy: encodeURI(`${base}?${decodeURIComponent(query.replace(/\+/g, ' '))}`), toString() { return this.lossy; } }; };
@@ -131,42 +117,6 @@ function loadExtension(ui) {
 const memo = () => { const m = new Map(); return { get: (k) => m.get(k), update: async (k, v) => { m.set(k, v); }, m }; };
 const ui = (o = {}) => ({ warnings: [], infos: [], opened: [], checked: [], probed: [], results: {}, ...o });
 
-test('first New Room: a passing provider is recorded and not probed again', async () => {
-  const u = ui({ results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' } } });
-  const ext = loadExtension(u), context = { globalState: memo() };
-  assert.strictEqual(await ext.firstRunCheck(context, [{ provider: 'claude' }]), true);
-  assert.deepStrictEqual(context.globalState.get(setup.PASSED_KEY), { claude: true });
-  assert.strictEqual(await ext.firstRunCheck(context, [{ provider: 'claude' }]), true);
-  assert.deepStrictEqual(u.checked, [['claude']]);
-  assert.strictEqual(u.warnings.length, 0);
-});
-
-test('first New Room: a signed-out CLI warns before any turn; dismissing cancels, and nothing is recorded', async () => {
-  const u = ui({ answer: undefined, results: { codex: { installation: 'available', version: '0.99.0', authentication: 'signed-out' } } });
-  const ext = loadExtension(u), context = { globalState: memo() };
-  assert.strictEqual(await ext.firstRunCheck(context, [{ provider: 'codex' }]), false);
-  assert.strictEqual(u.warnings.length, 1);
-  assert.ok(u.warnings[0].opts.modal);
-  assert.match(u.warnings[0].msg, /Codex CLI: v0\.99\.0, signed out/);
-  assert.deepStrictEqual(u.warnings[0].buttons, ['Create room anyway', 'Open Codex CLI guide']);
-  assert.strictEqual(context.globalState.get(setup.PASSED_KEY), undefined);
-});
-
-test('first New Room: the person can continue anyway, or open the guide (which cancels)', async () => {
-  const results = { claude: { installation: 'missing' } };
-  let u = ui({ answer: 'Create room anyway', results });
-  assert.strictEqual(await loadExtension(u).firstRunCheck({ globalState: memo() }, [{ provider: 'claude' }]), true);
-  u = ui({ answer: 'Open Claude Code guide', results });
-  assert.strictEqual(await loadExtension(u).firstRunCheck({ globalState: memo() }, [{ provider: 'claude' }]), false);
-  assert.deepStrictEqual(u.opened, [setup.GUIDES.claude]);
-});
-
-test('first New Room: an untrusted workspace is not probed', async () => {
-  const u = ui({ trusted: false });
-  assert.strictEqual(await loadExtension(u).firstRunCheck({ globalState: memo() }, [{ provider: 'claude' }]), true);
-  assert.deepStrictEqual(u.checked, []);
-});
-
 test('Report a Problem never puts room transcript text in the issue, and cancelling opens nothing', async () => {
   let u = ui({ answer: undefined });
   const ext = loadExtension(u);
@@ -197,7 +147,8 @@ test('Report a Problem never puts room transcript text in the issue, and cancell
 test('opt-in: the lines previewed are exactly the lines GitHub receives, with & # + ? intact', async () => {
   const u = ui({ claudePath: '/opt/R&D #1/c++?x=1/claude', results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' } } });
   const ext = loadExtension(u);
-  await ext.firstRunCheck({ globalState: memo() }, [{ provider: 'claude' }]); // writes a log line with the odd path
+  ext.activate({ subscriptions: [], globalState: memo(), globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwfb-')) }, extensionUri: { fsPath: path.join(__dirname, '..') } });
+  await ext.handlers['wagonWheel.checkSetup'](); // logs "setup: … [<the odd path>]"
   const s = new ext.RoomSession({ globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwfb-')) } }, ext.newMeta('r'), null);
   s.meta.participants = [{ id: 'rd', label: 'R&D #1 C++?', provider: 'claude', model: 'claude-sonnet-5' }];
   s.attach({ active: true, webview: { onDidReceiveMessage: () => {}, postMessage: () => {} }, onDidDispose: () => {} });
@@ -220,16 +171,3 @@ test('untrusted workspace: Report a Problem runs no CLI', async () => {
   assert.match(u.infos[0].opts.detail, /Claude Code CLI not checked, Codex CLI not checked/);
 });
 
-test('Check Setup records each provider that passes, so New Room does not probe it again', async () => {
-  const u = ui({ results: { claude: { installation: 'available', version: '2.1.282', authentication: 'present' }, codex: { installation: 'available', version: '0.99.0', authentication: 'signed-out' } } });
-  const ext = loadExtension(u);
-  const context = { subscriptions: [], globalState: memo(), globalStorageUri: { fsPath: fs.mkdtempSync(path.join(os.tmpdir(), 'wwcs-')) } };
-  ext.activate(context);
-  await ext.handlers['wagonWheel.checkSetup']();
-  assert.deepStrictEqual(context.globalState.get(setup.PASSED_KEY), { claude: true });
-  assert.strictEqual(u.warnings.length, 1, 'the signed-out Codex is still reported');
-  u.checked.length = 0;
-  u.answer = undefined;
-  assert.strictEqual(await ext.firstRunCheck(context, [{ provider: 'claude' }, { provider: 'codex' }]), false);
-  assert.deepStrictEqual(u.checked, [['codex']], 'only the provider that has not passed is probed');
-});

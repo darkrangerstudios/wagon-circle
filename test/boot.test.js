@@ -25,7 +25,7 @@ class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } asyn
   async recentMessages() { return [{ role: 'human', text: 'CODEX_SEED_PRIVATE' }]; } async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {
-  [path.join(__dirname, '../src/claudeHistory.js')]: { ROOT: os.tmpdir(), recentMessages: () => [{ role: 'human', text: 'CLAUDE_SEED_PRIVATE' }] },
+  [path.join(__dirname, '../src/claudeHistory.js')]: { ROOT: os.tmpdir(), recentMessages: () => [{ role: 'human', text: 'CLAUDE_SEED_PRIVATE' }], fileFor: (id) => `/synthetic/${id}.jsonl` },
   [path.join(__dirname, '../src/acpClient.js')]: { AcpClient: FakeAcp },
   [path.join(__dirname, '../src/codexClient.js')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
   [path.join(__dirname, '../src/claudeClient.js')]: { ClaudeClient: FakeClaude, READ_ONLY_TOOLS: ['Read', 'Glob', 'Grep'] },
@@ -162,7 +162,7 @@ test('reopen: a Codex thread this room created that was never written starts fre
     assert.match(seat.sessionId, /^th-new-/, 'a fresh thread replaced the unwritten one');
     assert.deepStrictEqual(seat.typedThreads, ['th-never-written', seat.sessionId]);
     assert.strictEqual(seat.typed, true);
-    assert.ok(quiet.room.state.transcript.some((e) => e.from === 'system' && /was never saved \(it had no turns yet\)/.test(e.text)), 'the person is told');
+    assert.ok(quiet.room.state.transcript.some((e) => e.from === 'system' && /Codex never saved Codex's earlier conversation because it had no replies yet/.test(e.text)), 'the person is told');
     const again = new RoomSession(context(), { ...newMeta('other room'), codexThreadId: 'th-never-written', codexTypedThreads: ['th-never-written'] }, state([]));
     resumeFailure = null;
     await again.boot(); // the old id was released, so another room may bind it
@@ -197,4 +197,27 @@ test('closing the window (deactivate) releases the locks of rooms this window ha
   deactivate();
   assert.ok(!fs.existsSync(roomLock.lockPath(s.file)));
   s.dispose();
+});
+
+test('Start a Room: any agent can start from a copy or the original, and sharing reaches every other agent only', async () => {
+  const dir = os.tmpdir();
+  const meta = { ...newMeta('from the start screen'), seats: [
+    { id: 'app', label: 'App', provider: 'codex', cwd: dir, forkFrom: 'th-src', typed: false },
+    { id: 'rev', label: 'Reviewer', provider: 'claude', cwd: dir, forkFrom: 'cl-src' },
+    { id: 'orig', label: 'Original', provider: 'claude', cwd: dir, sessionId: 'cl-orig' },
+    { id: 'fresh', label: 'Fresh', provider: 'codex', cwd: dir }] };
+  const s = new RoomSession(context(), meta, null);
+  try {
+    await s.boot({ shareSeed: { app: true, orig: true } });
+    const app = s.slots.app.seat, rev = s.slots.rev, orig = s.slots.orig, fresh = s.slots.fresh.seat;
+    assert.match(app.sessionId, /^th-fork-/, 'a copy of the Codex conversation');
+    assert.strictEqual(app.forkFrom, 'th-src'); assert.strictEqual(app.typed, false);
+    assert.strictEqual(rev.client.forkFrom, 'cl-src', 'Claude starts from a copy');
+    assert.strictEqual(orig.client.sessionId, 'cl-orig'); assert.strictEqual(orig.client.forkFrom, null, 'the original is resumed, not copied');
+    assert.match(fresh.sessionId, /^th-new-/); assert.strictEqual(fresh.typed, true);
+    // Shared: App's copy reaches the three others; Original's reaches the others; Reviewer shared nothing.
+    for (const id of ['rev', 'orig', 'fresh']) assert.ok(s.room.payloadFor(id).text.includes('CODEX_SEED_PRIVATE'), `${id} sees App's shared messages`);
+    assert.ok(!s.room.payloadFor('app').text.includes('CODEX_SEED_PRIVATE'), 'not echoed to its own agent');
+    assert.ok(!s.room.payloadFor('orig').text.includes('CLAUDE_SEED_PRIVATE') && s.room.payloadFor('app').text.includes('CLAUDE_SEED_PRIVATE'));
+  } finally { s.dispose(); }
 });

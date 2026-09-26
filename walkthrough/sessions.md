@@ -1,11 +1,14 @@
-# Choose where the work happens
+# Bring in conversations you already have
 
-When creating a room, choose the default pair or a custom roster of named local Codex and Claude Code participants. You can select the same provider more than once and give each seat a working folder. The roster stays fixed for that room. Each participant has its own working session. The room is where you ask questions, see results and coordinate help.
+On the **Start a Room** screen, each agent can start one of two ways:
 
-Select a new session or an existing local one from the agent's model panel. **Fork** creates a separate conversation and leaves the original untouched. **Continue** writes to the chosen session itself: Wagon Wheel warns you first because it cannot see whether another Claude Code or Codex window has that session open, so close it there before continuing. Claude can only continue sessions started in that seat's folder. Wagon Wheel prevents duplicate writers within this extension host, but not in other apps or VS Code windows.
+- **A fresh conversation.** It starts knowing nothing but what you tell it in the room.
+- **One of your conversations.** Pick a conversation you already had in Claude Code or Codex, so the agent picks up where you left off. Then choose:
+  - **Work on a copy (recommended).** Your original conversation stays exactly as it is.
+  - **Keep going in the original.** The agent adds to your original conversation. Only do this if it isn't open in Claude Code, Codex or another window right now, because two apps writing to one conversation can mix up its history.
 
-**Local sessions only.** Cloud sessions are managed in each provider's own tools.
+You can also let the other agents read its last few messages, so everyone starts on the same page. That's off unless you turn it on.
 
-Session-history sharing is separate from selecting a working session. History starts private. Share a participant's working session with specific peers from its model panel, or add any local session with `/history add`; the agents then retrieve relevant passages as reference, and old requests in it do not start new work. Changing an agent's session turns its sharing off until you share again.
+Already in a room? Click an agent's model button and choose **Start over** or **Switch to one of your conversations**.
 
-Capabilities vary by provider and session. An unavailable control does not become available just by choosing Work mode.
+Only conversations on this computer are listed. Cloud conversations stay in each app.

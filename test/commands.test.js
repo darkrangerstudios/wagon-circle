@@ -45,7 +45,7 @@ test('two Codex slots get independent model, effort and session commands with ro
       assert.ok(command);
       assert.deepStrictEqual([command.participant, command.action, command.provider], [participant.id, action, participant.provider]);
     }
-    assert.deepStrictEqual(s.find((x) => x.cmd === `/${participant.id} session`).args, ['new', 'continue', 'fork']);
+    assert.deepStrictEqual(s.find((x) => x.cmd === `/${participant.id} session`).args, ['new', 'switch', 'continue', 'fork']);
   }
   assert.match(parse('/db effort high', s).error, /accepts: medium/);
   assert.equal(parse('/db session fork', s).spec.participant, 'db');

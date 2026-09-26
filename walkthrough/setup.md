@@ -1,12 +1,12 @@
-# Get your agents ready
+# Get Claude and Codex ready
 
-Wagon Wheel uses the Claude Code and Codex command-line tools. Their desktop apps are optional.
+Wagon Wheel doesn't have its own AI. It brings the Claude Code and Codex apps that are already on this computer into one room, signed in with your own accounts. You need at least one of them.
 
-Your first New Room runs this check for each CLI it needs. You can also run it any time from this IDE window. It checks the host where the extension runs: a local install does not automatically exist inside SSH, WSL or a development container.
+**Check my setup** looks for each app and whether you're signed in. It doesn't start a conversation or use any of your plan. The Start a Room screen shows the same check on each agent, with a link to fix anything that isn't ready.
 
-If a tool is missing, follow its official guide or select an existing executable in the extension settings:
+If something is missing, follow the official guide, sign in with that app, then check again:
 
 - [Install Claude Code](https://code.claude.com/docs/en/setup)
-- [Install Codex CLI](https://learn.chatgpt.com/docs/codex/cli)
+- [Install Codex](https://learn.chatgpt.com/docs/codex/cli)
 
-Sign in with the provider's own tool, then rerun the check. The extension does not collect your password, install software on activation, or launch a model for these checks. A successful sign-in check does not guarantee remaining quota or access to every model.
+Wagon Wheel never asks for your password and never installs anything for you. If you work over SSH, WSL or in a dev container, the apps need to be installed there too, because that's where the check runs.

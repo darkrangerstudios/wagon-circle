@@ -77,15 +77,7 @@ async function cliVersion(provider, executable, { run = runProbe } = {}) {
   return m ? m[1] : 'unknown';
 }
 
-// First run: check each provider the new room's seats use, once. A provider that passed before is not probed
-// again. Only a missing or non-executable CLI or an explicit signed-out answer stops a room. A probe that timed
-// out, failed or could not read the version does not: it is not proof of a broken setup.
-const PASSED_KEY = 'wagonWheel.setupPassed';
-function firstRunProviders(seats, passed) {
-  const done = passed && typeof passed === 'object' ? passed : {};
-  return [...new Set((seats || []).map((p) => p && p.provider))].filter((p) => Object.hasOwn(GUIDES, p) && done[p] !== true);
-}
-const blocking = (p) => p.installation === 'missing' || p.issue === 'missing' || p.issue === 'not-executable' || p.authentication === 'signed-out';
+// A provider that is installed and signed in.
 const passes = (p) => p.installation === 'available' && p.authentication === 'present';
 
-module.exports = { checkProvider, checkSetup, runProbe, cliVersion, firstRunProviders, blocking, passes, PASSED_KEY, GUIDES };
+module.exports = { checkProvider, checkSetup, runProbe, cliVersion, passes, GUIDES };

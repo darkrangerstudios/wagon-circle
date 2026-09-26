@@ -1,6 +1,6 @@
 'use strict';
-// The "This computer" pill opens the usage breakdown: per model, lane, thinking, cache tier and tool, for today or
-// the window. Everything renders as text; nothing is posted to the host.
+// The Usage button: one meter per app in the header; the popover leads with bars (plan limits, this room, this
+// computer's token mix and top models) and folds the fine print away. Rendered as text and widths; nothing is posted.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { walk, setup } = require('./fixtures/webview-dom');
@@ -19,51 +19,62 @@ const local = {
   codex: { unknown: true },
 };
 
-test('the pill opens the breakdown for the window and switches to today', () => {
+const button = (h) => walk(h.ids.quota).find((e) => e.tagName === 'button');
+const widthOf = (root, cls) => walk(root).filter((e) => e.className.split(' ').includes(cls)).map((e) => e.style.width);
+
+test('one Usage button shows each app\'s closest limit as a meter, and opens bars for limits, models and token mix', () => {
   const h = setup();
   h.receive({ type: 'localUsage', usage: local });
-  const pill = walk(h.ids.quota).find((e) => e.tagName === 'button');
-  assert.match(pill.textContent, /This computer · 7 days: Claude 7\.2k · Codex unknown/);
-  pill.fire('click');
+  h.receive({ type: 'quota', quota: { primary: { usedPercent: 42, windowDurationMins: 300 }, secondary: { usedPercent: 85, windowDurationMins: 10080 } } });
+  h.receive({ type: 'claudeUsage', usage: { session: { pct: 20, resets: '7pm' }, week: { pct: 34, resets: 'Fri 9am' }, models: {} } });
+  assert.equal(walk(h.ids.quota).filter((e) => e.tagName === 'button').length, 1, 'one button, not a row of text pills');
+  const b = button(h);
+  assert.match(b.textContent, /^UsageClaude34%Codex85%$/);
+  assert.ok(walk(b).some((e) => /gauge codex warn/.test(e.className)), 'a limit at 80% or more is marked');
+  assert.match(b.title, /Codex · this week: 85% used/);
+  b.fire('click');
   assert.equal(h.ids.pop.hidden, false); assert.equal(h.ids.pop.dataset.for, 'usage');
   const text = h.ids.pop.textContent;
-  assert.match(text, /Claude · 7\.2k tokens · 3 sessions/);
-  assert.match(text, /claude-opus-5-5.*1\.2k new · 4\.0k cached · 800 out · 70 thinking/);
-  assert.match(text, /claude-haiku-4-5/);
-  assert.match(text, /Main conversation.*Subagents/);
-  assert.match(text, /Thinking70 of 900 output tokens/);
-  assert.match(text, /Cache writes250 1-hour · 50 5-minute/);
-  assert.match(text, /Tool calls · 52/); assert.match(text, /Read40× · ≈120\.0k chars back/); assert.match(text, /Grep12× · ≈3\.0k chars back/);
-  assert.match(text, /Codex: log format not recognised/);
-  assert.match(text, /estimates in characters, not tokens/);
+  assert.match(text, /Plan limits/);
+  assert.match(text, /Claude · current session20%Resets 7pm/); assert.match(text, /Claude · this week34%/);
+  assert.match(text, /Codex · 5 hours42%/); assert.match(text, /Codex · this week85%/);
+  assert.deepEqual(widthOf(walk(h.ids.pop).find((e) => e.className === 'usec'), 'fill'), ['20%', '34%', '42%', '85%']);
+  assert.match(text, /Claude7\.2k tokens · 3 conversations/);
+  assert.match(text, /claude-opus-5-583%/); assert.match(text, /claude-haiku-4-517%/);
+  assert.ok(!walk(h.ids.pop).some((e) => /meter claude warn|meter claude full/.test(e.className)), 'an 83% model share is not a warning');
+  const mix = walk(h.ids.pop).find((e) => e.className === 'mix');
+  assert.deepEqual(mix.children.map((c) => [c.className, Math.round(parseFloat(c.style.width))]), [['m-cached', 69], ['m-fresh', 18], ['m-out', 13]]);
+  assert.match(text, /Codex: couldn't read its logs/);
+  assert.match(text, /More detail/); assert.match(text, /Of which thinking70/); assert.match(text, /Tools used mostRead 40×, Grep 12×/);
+  assert.match(text, /Reused from cache \(cheap\)/);
   h.click(h.ids.pop, 'Today');
   const today = h.ids.pop.textContent;
-  assert.match(today, /Claude · 135 tokens/); assert.doesNotMatch(today, /sessions/);
-  assert.doesNotMatch(today, /claude-haiku-4-5/); assert.doesNotMatch(today, /Subagents/); // no subagent tokens today
-  assert.match(today, /Read2× · ≈1\.5k chars back \(1 unsized\)/);
+  assert.match(today, /Claude135 tokens/); assert.doesNotMatch(today, /conversations/); assert.doesNotMatch(today, /claude-haiku-4-5/);
   assert.equal(h.sent.filter((m) => m.type !== 'ready').length, 0); // nothing posted to the host
-  pill.fire('click'); assert.equal(h.ids.pop.hidden, true); // the pill toggles
+  b.fire('click'); assert.equal(h.ids.pop.hidden, true); // the button toggles
 });
 
-test('an older host without breakdowns still opens with totals and says to reload', () => {
+test('before any reply the button still opens, says when limits appear, and an older host shows totals', () => {
   const h = setup();
+  assert.match(button(h).textContent, /^Usage$/);
   h.receive({ type: 'localUsage', usage: { scannedAt: local.scannedAt, windowDays: 7, claude: { today: u(1, 2, 3, 4), window: u(1, 2, 3, 4), sessions: 1 }, codex: null } });
-  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
-  assert.match(h.ids.pop.textContent, /All4 new · 2 cached · 4 out/);
-  assert.match(h.ids.pop.textContent, /needs a newer Wagon Wheel host/);
-  assert.match(h.ids.pop.textContent, /Codex: no local logs found/);
+  button(h).fire('click');
+  const text = h.ids.pop.textContent;
+  assert.match(text, /Shown after the first reply from each app/);
+  assert.match(text, /Claude10 tokens · 1 conversation/);
+  assert.match(text, /Reload the window to see models and details/);
+  assert.match(text, /Codex: no conversations on this computer/);
 });
 
-test('a refresh while open re-renders in place, and a click on the pill itself does not close it', () => {
+test('a refresh while open re-renders in place, and a click on the button itself does not close it', () => {
   const h = setup();
   h.receive({ type: 'localUsage', usage: local });
-  const pill = () => walk(h.ids.quota).find((e) => e.tagName === 'button');
-  pill().fire('click');
-  assert.match(h.ids.pop.textContent, /Tool calls · 52/);
-  h.docFire('click', pill()); assert.equal(h.ids.pop.hidden, false); // the outside-click handler exempts the pill
-  h.receive({ type: 'localUsage', usage: { ...local, scannedAt: local.scannedAt + 5 * 60e3, claude: { ...local.claude, detail: { ...local.claude.detail, window: { ...local.claude.detail.window, toolCalls: 53 } } } } });
-  assert.equal(h.ids.pop.hidden, false); assert.match(h.ids.pop.textContent, /Tool calls · 53/);
-  assert.match(h.ids.pop.textContent, /updated 10:05/);
+  button(h).fire('click');
+  assert.match(h.ids.pop.textContent, /3 conversations/);
+  h.docFire('click', button(h)); assert.equal(h.ids.pop.hidden, false); // the outside-click handler exempts the button
+  h.receive({ type: 'localUsage', usage: { ...local, scannedAt: local.scannedAt + 5 * 60e3, claude: { ...local.claude, sessions: 4 } } });
+  assert.equal(h.ids.pop.hidden, false); assert.match(h.ids.pop.textContent, /4 conversations/);
+  assert.match(h.ids.pop.textContent, /Updated 10:05/);
   h.docFire('click', h.ids.log); assert.equal(h.ids.pop.hidden, true); // a click elsewhere closes it
 });
 
@@ -74,4 +85,13 @@ test('a zero-token placeholder model (Claude Code logs "<synthetic>") is not sho
   walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
   assert.match(h.ids.pop.textContent, /claude-opus-5-5/); assert.match(h.ids.pop.textContent, /claude-haiku-4-5/);
   assert.doesNotMatch(h.ids.pop.textContent, /<synthetic>/);
+});
+
+test('connector tools show their tool name (and a readable server name), not the raw mcp__ id', () => {
+  const h = setup();
+  const tools = { Bash: { calls: 20, chars: 1 }, 'mcp__707c2a62-f8cd-45dd-9c5c-1c9b8b1ca0d3__execute_sql': { calls: 9, chars: 1 }, mcp__supabase__execute_sql: { calls: 5, chars: 1 } };
+  h.receive({ type: 'localUsage', usage: { ...local, claude: { ...local.claude, detail: { ...local.claude.detail, window: { ...local.claude.detail.window, tools, toolCalls: 34 } } } } });
+  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
+  assert.match(h.ids.pop.textContent, /Tools used mostBash 20×, execute_sql 9×, supabase execute_sql 5×/);
+  assert.doesNotMatch(h.ids.pop.textContent, /mcp__/);
 });

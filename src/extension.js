@@ -20,6 +20,7 @@ const { LocalUsage } = require('./localUsage');
 const feedback = require('./feedback');
 const roomsView = require('./roomsView');
 const roomLock = require('./roomLock');
+const startRoom = require('./startRoom');
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -59,28 +60,6 @@ const hostLabel = () => (vscode.env.remoteName ? `remote (${vscode.env.remoteNam
 const PROVIDER_NAMES = { claude: 'Claude Code', codex: 'Codex CLI' };
 const setupLine = (p) => `${PROVIDER_NAMES[p.provider]}: ${p.installation === 'available' ? `v${p.version}` : p.installation}${p.installation === 'available' ? `, ${p.authentication === 'present' ? 'signed in' : p.authentication === 'signed-out' ? 'signed out' : 'sign-in unknown'}` : ''}${p.issue ? ` (${p.issue})` : ''}`;
 
-// First New Room with a given provider: check its CLI before any turn is spent. Returns false to cancel the room.
-async function firstRunCheck(context, seats) {
-  if (!vscode.workspace.isTrusted) return true; // Check Setup refuses untrusted workspaces; the room reports its own errors
-  const passed = context.globalState.get(setup.PASSED_KEY) || {};
-  const need = setup.firstRunProviders(seats, passed);
-  if (!need.length) return true;
-  const s = settings(), exes = { claude: s.claude.path, codex: s.codexExe };
-  const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: checking your agents (first run only)' },
-    () => setup.checkSetup({ trusted: true, executionHost: hostLabel(), executables: Object.fromEntries(need.map((p) => [p, exes[p]])) }));
-  for (const p of r.providers) log(`first-run setup: ${setupLine(p)} [${p.executable}]`);
-  const ok = r.providers.filter(setup.passes);
-  if (ok.length) await context.globalState.update(setup.PASSED_KEY, { ...passed, ...Object.fromEntries(ok.map((p) => [p.provider, true])) });
-  const bad = r.providers.filter(setup.blocking);
-  if (!bad.length) return true;
-  const guides = bad.map((p) => `Open ${PROVIDER_NAMES[p.provider]} guide`);
-  const pick = await vscode.window.showWarningMessage(`Not ready yet: ${bad.map(setupLine).join('; ')}.`,
-    { modal: true, detail: `Seats that use ${bad.map((p) => PROVIDER_NAMES[p.provider]).join(' or ')} will not be able to answer until the CLI is installed and signed in on ${r.executionHost}. Nothing was installed or signed in for you.` },
-    'Create room anyway', ...guides);
-  const hit = bad[guides.indexOf(pick)];
-  if (hit) vscode.env.openExternal(hit.guide);
-  return pick === 'Create room anyway';
-}
 
 // Report a Problem: versions and the focused room's roster, plus scrubbed log lines only if the person opts in.
 async function reportProblem() {
@@ -192,7 +171,7 @@ class RoomSession {
   }
 
   bindId(r, id) {
-    if (!sessionClaims.claim(r.seat.provider, id, r.owner)) throw new Error('That working session is already owned by another seat or room in this extension host. Fork it instead.');
+    if (!sessionClaims.claim(r.seat.provider, id, r.owner)) throw new Error('That conversation is already in use by another agent or room in this extension host. Use a copy instead.');
     if (r.seat.sessionId !== id) sessionClaims.release(r.seat.provider, r.seat.sessionId, r.owner);
     r.seat.sessionId = id;
   }
@@ -289,10 +268,15 @@ class RoomSession {
     const seeds = [];
     for (const r of Object.values(this.slots)) {
       const p = r.seat;
+      // Where this seat starts: its own saved session (continue), a copy of another conversation (the legacy Join
+      // Existing picks, or seat.forkFrom set by the Start a Room screen), or fresh.
+      const others = Object.keys(this.slots).filter((id) => id !== p.id);
       if (p.provider === 'codex') {
         const join = p.id === 'codex' && !p.sessionId && forkFrom;
-        let action = p.sessionId ? 'continue' : join ? 'fork' : 'new', made;
-        try { made = await this.makeCodex(r, action, p.sessionId || (join && join.id)); }
+        const src = join ? join.id : (!p.sessionId && p.forkFrom) || null;
+        let action = p.sessionId ? 'continue' : src ? 'fork' : 'new', made;
+        const seedFrom = shareSeed[p.id] ? (action === 'continue' ? p.sessionId : src) : null;
+        try { made = await this.makeCodex(r, action, p.sessionId || src); }
         catch (e) {
           // Codex saves a thread only after its first turn, so a room closed before this seat ever took one has
           // nothing to resume. Only a thread this room created (typedThreads, not forked or continued from the
@@ -300,19 +284,23 @@ class RoomSession {
           const ours = (p.typedThreads || []).includes(p.sessionId) && !p.forkFrom;
           if (!(action === 'continue' && e.noRollout && ours && !this.seatSpoke(p.id)) || this.disposed) throw e;
           log(`${p.id}: its saved Codex thread was never written (no turn yet); starting a fresh thread`);
-          this.pendingNotes = [...(this.pendingNotes || []), `${p.label}'s earlier Codex thread was never saved (it had no turns yet), so ${p.label} started a new one.`];
+          this.pendingNotes = [...(this.pendingNotes || []), `Codex never saved ${p.label}'s earlier conversation because it had no replies yet, so ${p.label} starts a new one.`];
           action = 'new'; made = await this.makeCodex(r, 'new');
         }
         if (this.disposed) return;
         r.client = made.client; r.models = made.models; this.bindId(r, made.id);
         if (action === 'new') { p.typed = true; p.typedThreads = [...(p.typedThreads || []), made.id]; }
-        if (join) { p.typed = false; p.forkFrom = join.id; m.forkedFrom = join.id;
-          if (shareSeed.codex) { let items = []; try { items = await r.client.recentMessages(join.id, 8); } catch (e) { log(`history read failed: ${e.message}`); } if (this.disposed) return; seeds.push({ owner: p.id, readers: ['claude'], items }); }
-        }
+        if (action === 'fork') { p.typed = false; p.forkFrom = src; if (join) m.forkedFrom = src; }
+        if (seedFrom) { let items = []; try { items = await r.client.recentMessages(seedFrom, 8); } catch (e) { log(`history read failed: ${e.message}`); } if (this.disposed) return; seeds.push({ owner: p.id, readers: others, items }); }
       } else {
         const join = p.id === 'claude' && !p.sessionId && claudeFrom;
-        if (join) { p.forkFrom = join.id; m.claudeForkedFrom = join.id; if (shareSeed.claude) { let items = []; try { items = claudeHistory.recentMessages(join.path, 8); } catch (e) { log(`history read failed: ${e.message}`); } seeds.push({ owner: p.id, readers: ['codex'], items }); } }
-        r.client = this.makeClaude(r, p.sessionId, p.sessionId ? null : p.forkFrom); p.typed = true;
+        if (join) { p.forkFrom = join.id; m.claudeForkedFrom = join.id; }
+        const src = p.sessionId ? null : p.forkFrom || null, seedFrom = shareSeed[p.id] ? src || p.sessionId : null;
+        if (seedFrom) {
+          let items = []; try { const file = (join && join.path) || claudeHistory.fileFor(seedFrom); if (file) items = claudeHistory.recentMessages(file, 8); } catch (e) { log(`history read failed: ${e.message}`); }
+          seeds.push({ owner: p.id, readers: others, items });
+        }
+        r.client = this.makeClaude(r, p.sessionId, src); p.typed = true;
       }
     }
     this.updateAliases();
@@ -432,7 +420,7 @@ class RoomSession {
       else if (m.type === 'pickFiles') vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach' }).then((uris) => (uris || []).forEach((u) => this.addAttachment({ name: path.basename(u.fsPath), fromPath: u.fsPath })));
       else if (m.type === 'unattach') { const a = this.pendingAtts.get(m.id); if (a) { this.pendingAtts.delete(m.id); fs.rm(a.path, () => {}); } }
       else if (m.type === 'stop' && this.room) this.room.stopAll();
-      else if (m.type === 'session' && this.room && this.slots[m.vendor] && ['new', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => { if (!this.disposed) this.room.note(`Couldn't switch the working session: ${e.message}`); });
+      else if (m.type === 'session' && this.room && this.slots[m.vendor] && ['new', 'switch', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => { if (!this.disposed) this.room.note(`Couldn't switch the working session: ${e.message}`); });
       else if (m.type === 'taskPause' && this.room) this.room.pauseTask();
       else if (m.type === 'taskResume' && this.room) this.room.resumeTask();
       else if (m.type === 'taskMode' && this.room && ['auto', 'chat', 'work'].includes(m.mode)) { this.room.tasks.mode = m.mode; this.room.note(`Mode: ${MODE_TEXT[m.mode]}`); this.postTask(); }
@@ -487,7 +475,7 @@ class RoomSession {
     if (!r || !room || this.disposed) return;
     const p = r.seat, L = p.label;
     const unresolved = () => room.held.has(id) || room.tasks._requests().some((q) => ['open', 'delivered'].includes(q.status) && (q.from === id || q.to === id));
-    if (room.busy[id] || r.switching || unresolved()) { room.note(`${L} has work in flight. Finish or stop it before changing its working session.`); return; }
+    if (room.busy[id] || r.switching || unresolved()) { room.note(`${L} is busy. Let it finish, or press Stop, before changing its conversation.`); return; }
     const epoch = this.switchEpoch || 0, live = () => !this.disposed && (this.switchEpoch || 0) === epoch;
     const cursor = room.state.transcript.length;
     r.switching = true; room.busy[id] = true; room.emit('status', { name: id, busy: true, since: Date.now() });
@@ -499,9 +487,17 @@ class RoomSession {
           ? claudeHistory.listSessions(40).filter((x) => x.cwd === p.cwd && x.id !== p.sessionId).map((x) => ({ label: x.title || x.preview, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
           : (await r.client.listThreads(null, 40)).filter((t) => t.id !== p.sessionId).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
         if (!live()) return;
-        if (!items.length) { room.note(`No other ${p.provider} sessions available for ${L}.`); return; }
-        pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'fork' ? 'fork a local session' : 'continue a local session'}`, matchOnDetail: true });
+        if (!items.length) { room.note(`No other ${p.provider === 'claude' ? `Claude conversations from ${L}'s folder` : 'Codex conversations'} were found for ${L}.`); return; }
+        pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'switch' ? 'switch to one of your conversations' : action === 'fork' ? 'work on a copy of a conversation' : 'keep going in a conversation'}`, placeHolder: 'Your recent conversations, newest first', matchOnDetail: true });
         if (!pick || !live()) return;
+        if (action === 'switch') {
+          const how = await vscode.window.showQuickPick([
+            { label: 'Work on a copy (recommended)', detail: 'Your original conversation stays exactly as it is. The agent continues from a copy.', action: 'fork' },
+            { label: 'Keep going in the original', detail: 'Adds to your original conversation. Only choose this if it is not open anywhere else right now.', action: 'continue' }],
+            { title: `${L}: use "${String(pick.name || pick.id).slice(0, 50)}" how?` });
+          if (!how || !live()) return;
+          action = how.action;
+        }
         if (action === 'continue') {
           const recent = pick.mtime && Date.now() - pick.mtime < 120000;
           const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" as ${L}?`, { modal: true,
@@ -509,9 +505,9 @@ class RoomSession {
           if (!go || !live()) return; if (go === 'Fork instead') action = 'fork';
         }
       }
-      if (!live() || unresolved()) { if (live()) room.note(`${L} received pending task work; its working session was not changed.`); return; }
+      if (!live() || unresolved()) { if (live()) room.note(`${L} was given new work in the meantime, so its conversation was not changed.`); return; }
       if (action === 'continue') {
-        if (!sessionClaims.claim(p.provider, pick.id, r.owner)) throw new Error('That session is already owned by another seat or room. Fork it instead.');
+        if (!sessionClaims.claim(p.provider, pick.id, r.owner)) throw new Error('That conversation is already in use by another agent or room. Use a copy instead.');
         reserved = pick.id;
       }
       if (p.provider === 'codex') {
@@ -525,7 +521,7 @@ class RoomSession {
       this.history.resetParticipant(id); room.state.cursors[id] = cursor;
       old.stop(); this.ownedClients.delete(old); adopted = true;
       this.updateAliases();
-      room.note(`${L} now uses ${action === 'new' ? 'a new session' : action === 'fork' ? `a fork of ${pick.id.slice(0, 8)}` : `${pick.id.slice(0, 8)}, continued`}. Earlier room messages are not replayed. History grants reset; task consumption is retained.${p.provider === 'codex' && !p.typed ? ' This stored thread has no verified room tool set; requests remain suggestions.' : ''}`);
+      room.note(`${L} now uses ${action === 'new' ? 'a brand-new conversation' : action === 'fork' ? `a copy of "${String(pick.name || pick.id).slice(0, 50)}"` : `your original "${String(pick.name || pick.id).slice(0, 50)}"`}. It doesn't see the room's earlier messages. Sharing settings for it were reset; the task keeps its turn count.${p.provider === 'codex' && !p.typed ? ' Other agents reach it with @mentions, because a conversation brought in from Codex can\'t use the room\'s hand-off tools.' : ''}`);
       this.postMeta(); this.postTask();
     } finally {
       if (reserved && !adopted) sessionClaims.release(p.provider, reserved, r.owner);
@@ -587,7 +583,7 @@ class RoomSession {
           const model = r.models.find((x) => x.id === arg);
           if (p.effort && model && !(model.supportedReasoningEfforts || []).some((e) => e.reasoningEffort === p.effort)) p.effort = null;
         }
-        p[action] = arg; say(`${p.label} ${action} set to ${arg}; its working session and task consumption stay.`);
+        p[action] = arg; say(`${p.label} ${action} set to ${arg}. Its conversation and the task's turn count stay the same.`);
       } else if (action === 'fast') {
         const on = arg === 'on', c = this.controls()[p.id], model = c.models.find((x) => x.id === c.model);
         if (on && !(p.provider === 'claude' ? this.claudeFastOk(p.model) : model?.fast)) { say(`Fast mode is not available for ${p.label}'s selected model.`); return; }
@@ -778,6 +774,103 @@ async function openSession(context, session, opts) {
   } finally { refreshRooms(); } // a new room's file exists once it has booted
 }
 
+// ---------- Start a Room: one plain-English setup screen (media/start.js) ----------
+// Replaces the old chain of quick picks. The page shows setup status, models and recent conversations; this host
+// keeps the lists it sent and validates the finished form (startRoom.buildPlan) before any provider process starts.
+const startScreen = { panel: null, lists: { claude: [], codex: [] }, codexModels: [] };
+
+function startHtml(webview, extUri) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const js = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', 'start.js'));
+  const css = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'media', 'start.css'));
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource};">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${css}"><title>Start a Room</title></head>
+<body><main id="app" aria-live="polite"></main><script nonce="${nonce}" src="${js}"></script></body></html>`;
+}
+
+const displayPath = (p) => { const home = os.homedir(); return p && home && p.startsWith(home) ? `~${p.slice(home.length)}` : p; };
+
+async function startSetupStatus() {
+  if (!vscode.workspace.isTrusted) return { trusted: false, claude: null, codex: null };
+  const s = settings();
+  const r = await setup.checkSetup({ trusted: true, executionHost: hostLabel(), executables: { claude: s.claude.path, codex: s.codexExe } });
+  for (const p of r.providers) log(`start screen setup: ${setupLine(p)}`);
+  const by = Object.fromEntries(r.providers.map((p) => [p.provider, startRoom.setupLine(p)]));
+  return { trusted: true, claude: by.claude || null, codex: by.codex || null };
+}
+
+// Codex models and threads come from a short-lived private Codex process; Claude conversations from its local files.
+async function startLists() {
+  const s = settings(), home = os.homedir();
+  let codexThreads = [], codexModels = [];
+  if (vscode.workspace.isTrusted) {
+    const probe = new CodexClient({ exe: s.codexExe, cwd: s.cwd, log });
+    try { await probe.start(); codexModels = await probe.listModels(); codexThreads = await probe.listThreads(null, 40); } catch (e) { log(`start screen codex: ${e.message}`); } finally { probe.stop(); }
+  }
+  let claudeSessions = [];
+  try { claudeSessions = claudeHistory.listSessions(40); } catch (e) { log(`start screen claude: ${e.message}`); }
+  startScreen.lists = {
+    claude: claudeSessions.map((x) => ({ id: x.id, cwd: x.cwd, when: x.mtime, title: x.title || x.preview })),
+    codex: codexThreads.map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
+  };
+  startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
+  const v = s.claude.version;
+  return {
+    conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) },
+    models: { claude: commands.CLAUDE_CATALOG.filter((m) => atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: commands.CLAUDE_EFFORTS })), codex: startScreen.codexModels },
+  };
+}
+
+async function startFromForm(context, form) {
+  const s = settings();
+  const plan = startRoom.buildPlan(form, { lists: startScreen.lists, codexModels: startScreen.codexModels, defaultCwd: s.cwd, settings: s });
+  const recent = plan.originals.filter((o) => o.when && Date.now() - o.when < 120000);
+  if (recent.length) {
+    const go = await vscode.window.showWarningMessage(`${recent.map((o) => o.label).join(' and ')} will keep going in a conversation that changed in the last two minutes.`,
+      { modal: true, detail: 'It may still be open in Claude Code, Codex or another window. Two apps writing to one conversation can mix up its history. A copy is safer.' }, 'Keep going in the original');
+    if (!go) return false;
+  }
+  const meta = newMeta(plan.name);
+  meta.cwd = plan.seats.some((p) => p.cwd === s.cwd) ? s.cwd : plan.seats[0].cwd;
+  meta.seats = plan.seats;
+  if (startScreen.panel) startScreen.panel.dispose();
+  await openSession(context, new RoomSession(context, meta, null), { shareSeed: plan.shareSeed });
+  return true;
+}
+
+async function openStartScreen(context, { existing = false } = {}) {
+  if (startScreen.panel) { startScreen.panel.reveal(); startScreen.panel.webview.postMessage({ type: 'mode', existing }); return; }
+  const panel = startScreen.panel = vscode.window.createWebviewPanel('wagonWheel.startRoom', 'Wagon Wheel: Start a Room', vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
+  panel.iconPath = { light: vscode.Uri.joinPath(context.extensionUri, 'media', 'wheel-light.svg'), dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'wheel-dark.svg') };
+  panel.webview.html = startHtml(panel.webview, context.extensionUri);
+  panel.onDidDispose(() => { if (startScreen.panel === panel) startScreen.panel = null; });
+  const post = (m) => { if (startScreen.panel === panel) panel.webview.postMessage(m); };
+  panel.webview.onDidReceiveMessage(async (m) => {
+    if (!m || typeof m !== 'object') return;
+    try {
+      if (m.type === 'ready') {
+        const s = settings();
+        post({ type: 'init', existing, defaults: { name: `Room ${new Date().toLocaleDateString()}`, folder: s.cwd, folderLabel: displayPath(s.cwd), userName: s.userName }, trusted: vscode.workspace.isTrusted });
+        startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => log(`start screen setup: ${e.message}`));
+        startLists().then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
+      } else if (m.type === 'recheck') {
+        post({ type: 'setup', ...(await startSetupStatus()) });
+      } else if (m.type === 'pickFolder' && Number.isInteger(m.index)) {
+        const f = await vscode.window.showOpenDialog({ title: 'Choose the folder this agent works in', canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(settings().cwd), openLabel: 'Use this folder' });
+        if (f && f[0]) post({ type: 'folder', index: m.index, folder: f[0].fsPath, folderLabel: displayPath(f[0].fsPath) });
+      } else if (m.type === 'guide' && Object.hasOwn(setup.GUIDES, m.provider)) {
+        vscode.env.openExternal(setup.GUIDES[m.provider]);
+      } else if (m.type === 'start') {
+        post({ type: 'busy', on: true });
+        const ok = await startFromForm(context, m.form);
+        if (!ok) post({ type: 'busy', on: false });
+      }
+    } catch (e) { post({ type: 'error', text: e.message }); post({ type: 'busy', on: false }); }
+  });
+}
+
 // Side panel: the Start view is always empty so VS Code shows its buttons (viewsWelcome in package.json); the Rooms
 // view lists saved rooms, newest activity first. Clicking a room shows it if open, otherwise reopens it.
 class RoomsTree {
@@ -833,43 +926,6 @@ function newMeta(name) {
   return { id: crypto.randomUUID(), name, cwd: settings().cwd, createdAt: new Date().toISOString(), codexThreadId: null, claudeSessionId: null, handoffRule: HANDOFF_RULE };
 }
 
-// Choose the complete roster before starting any CLI: tool peer names are fixed when its thread is created.
-async function chooseParticipants(meta) {
-  const s = settings();
-  const kind = await vscode.window.showQuickPick([
-    { label: 'Claude + Codex', description: 'One fresh local session each', kind: 'default' },
-    { label: 'Custom local participants', description: 'Up to six named Claude Code or Codex sessions', kind: 'custom' }
-  ], { title: 'New room: choose participants' });
-  if (!kind) return null;
-  if (kind.kind === 'default') return normalizeParticipants(meta, s);
-  const seats = [];
-  while (true) {
-    const options = [];
-    if (seats.length < 6) options.push({ label: 'Add Codex', provider: 'codex' }, { label: 'Add Claude Code', provider: 'claude' });
-    if (seats.length) options.push({ label: 'Create room', description: seats.map((p) => `${p.label} (@${p.id})`).join(', '), done: true }, { label: 'Remove last participant', remove: true });
-    const next = await vscode.window.showQuickPick(options, { title: `Local participants (${seats.length}/6)`, placeHolder: 'Each participant owns a separate local session; the roster stays fixed for this room.' });
-    if (!next) return null;
-    if (next.done) return normalizeParticipants({ ...meta, seats }, s);
-    if (next.remove) { seats.pop(); continue; }
-    const provider = next.provider;
-    const label = await vscode.window.showInputBox({ prompt: 'Participant display name', value: provider === 'codex' ? 'Codex' : 'Claude', validateInput: (v) => !v.trim() || v.length > 60 || /[\x00-\x1f\x7f-\x9f]/.test(v) ? 'Use a name of 1–60 characters.' : null });
-    if (label === undefined) return null;
-    let suggestion = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 28);
-    if (!/^[a-z]/.test(suggestion)) suggestion = provider;
-    const base = suggestion; let suffix = 2;
-    while (seats.some((p) => p.id === suggestion)) suggestion = `${base}-${suffix++}`;
-    const validateId = (id) => {
-      try { normalizeParticipants({ ...meta, seats: [...seats, { id, label, provider, cwd: meta.cwd }] }, s); return null; }
-      catch (e) { return e.message; }
-    };
-    const id = await vscode.window.showInputBox({ prompt: 'Participant ID for @mentions and commands', value: suggestion, validateInput: validateId });
-    if (id === undefined) return null;
-    const folder = await vscode.window.showOpenDialog({ title: `${label}: choose its working folder`, canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(meta.cwd), openLabel: 'Use folder' });
-    if (!folder || !folder[0]) return null;
-    seats.push({ id, label, provider, cwd: folder[0].fsPath });
-    normalizeParticipants({ ...meta, seats }, s); // validate picker output before it can become a runtime record
-  }
-}
 
 // The rename changed the extension id, and with it the storage folder. Copy (never move) rooms saved under the
 // old id, so reopening finds them and attachment paths inside them stay valid. The copy is staged and checked,
@@ -904,44 +960,10 @@ function activate(context) {
   track(vscode.window.activeTextEditor);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(track), vscode.window.onDidChangeTextEditorSelection((e) => track(e.textEditor)), vscode.window.onDidChangeTextEditorVisibleRanges((e) => track(e.textEditor)));
 
-  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.newRoom', async () => {
-    const name = await vscode.window.showInputBox({ prompt: 'Room name', value: `Room ${new Date().toLocaleDateString()}` });
-    if (!name) return;
-    const meta = newMeta(name), seats = await chooseParticipants(meta);
-    if (!seats) return;
-    if (!(await firstRunCheck(context, seats))) return;
-    meta.seats = seats;
-    await openSession(context, new RoomSession(context, meta, null), {});
-  }));
-
-  context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.joinExisting', async () => {
-    const FRESH = { label: '$(add) Start fresh', description: 'no earlier conversation' };
-    const probe = new CodexClient({ exe: settings().codexExe, cwd: settings().cwd, log });
-    let threads = [];
-    try { await probe.start(); threads = await probe.listThreads(null, 30); } catch (e) { log(`codex list: ${e.message}`); } finally { probe.stop(); }
-    const cx = await vscode.window.showQuickPick([FRESH, ...threads.map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, description: `codex ${t.id.slice(0, 8)}`, detail: t.cwd, t }))],
-      { title: 'Wagon Wheel (1/2): Codex side', placeHolder: 'Fork a Codex thread into the room? The original is never written to.', matchOnDetail: true });
-    if (!cx) return;
-    const sessions = claudeHistory.listSessions(30);
-    const cl = await vscode.window.showQuickPick([FRESH, ...sessions.map((s) => ({ label: s.title || s.preview, description: `claude ${s.id.slice(0, 8)} · ${new Date(s.mtime).toLocaleString()}`, detail: s.cwd, s }))],
-      { title: 'Wagon Wheel (2/2): Claude side', placeHolder: 'Fork a Claude session into the room? The original is never written to.', matchOnDetail: true });
-    if (!cl) return;
-    if (!cx.t && !cl.s) { vscode.commands.executeCommand('wagonWheel.newRoom'); return; }
-    // Sharing a conversation's recent messages with the OTHER agent is its own choice, off by default.
-    const shareSeed = {};
-    for (const [side, picked, other] of [['codex', cx.t, 'Claude'], ['claude', cl.s, 'Codex']]) {
-      if (!picked) continue;
-      const q = await vscode.window.showQuickPick([{ label: 'Keep it private', description: `${other} does not see it`, share: false }, { label: `Share its last 8 exchanges with ${other}`, description: 'read from disk, no model call', share: true }],
-        { title: `The ${side === 'codex' ? 'Codex thread' : 'Claude session'} you picked is forked for ${side === 'codex' ? 'Codex' : 'Claude'}. Show its recent messages to ${other} too?` });
-      if (!q) return;
-      shareSeed[side] = q.share;
-    }
-    const name = `with ${[cx.t && cx.label, cl.s && cl.label].filter(Boolean).map((l) => l.slice(0, 30)).join(' + ')}`;
-    const meta = newMeta(name);
-    // claude --resume only finds a session from its own project folder, so a forked Claude session sets the room's folder.
-    if (cl.s) meta.cwd = cl.s.cwd;
-    await openSession(context, new RoomSession(context, meta, null), { forkFrom: cx.t || null, claudeFrom: cl.s || null, shareSeed });
-  }));
+  context.subscriptions.push(
+    vscode.commands.registerCommand('wagonWheel.newRoom', () => openStartScreen(context, {})),
+    // Kept for keybindings and old links: the Start a Room screen with "one of your conversations" chosen.
+    vscode.commands.registerCommand('wagonWheel.joinExisting', () => openStartScreen(context, { existing: true })));
 
   // First-run check (setup.js): CLI versions and sign-in on this host. No model calls, no installs, no logins.
   context.subscriptions.push(vscode.commands.registerCommand('wagonWheel.checkSetup', async () => {
@@ -954,9 +976,6 @@ function activate(context) {
     const bad = r.providers.filter((p) => p.installation !== 'available' || p.authentication !== 'present');
     // The walkthrough step completes only on a passing check, not on running the command.
     vscode.commands.executeCommand('setContext', 'wagonWheel.setupOk', !bad.length && r.providers.length > 0);
-    // A full pass also counts as the first-run check for both providers.
-    const passedNow = r.providers.filter(setup.passes);
-    if (passedNow.length) await context.globalState.update(setup.PASSED_KEY, { ...(context.globalState.get(setup.PASSED_KEY) || {}), ...Object.fromEntries(passedNow.map((p) => [p.provider, true])) });
     if (!bad.length) vscode.window.showInformationMessage(msg);
     else { const pick = await vscode.window.showWarningMessage(msg, ...bad.map((p) => `Open ${W[p.provider]} guide`)); const hit = bad.find((p) => pick === `Open ${W[p.provider]} guide`); if (hit) vscode.env.openExternal(hit.guide); }
   }));
@@ -989,4 +1008,4 @@ function activate(context) {
 // Closing the window may skip panel disposal: release this host's room locks so other windows can open them now.
 function deactivate() { for (const x of sessions) if (roomClaims.get(x.file) === x) roomLock.release(x.file); }
 
-module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, chooseParticipants, firstRunCheck, reportProblem, openRoomById, RoomsTree };
+module.exports = { activate, deactivate, roomPrompt, AGENTS, migrateRooms, RoomSession, newMeta, reportProblem, openRoomById, RoomsTree, openStartScreen, startScreen };
