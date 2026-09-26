@@ -55,7 +55,7 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
   if (!name) fail('Give the room a name.');
   if (form.agents.length < 1) fail('Add at least one agent.');
   if (form.agents.length > MAX_AGENTS) fail(`A room can have up to ${MAX_AGENTS} agents.`);
-  const taken = new Set(), originals = new Set(), seats = [], shareSeed = {}, picked = [];
+  const taken = new Set(), originals = new Set(), seats = [], shareSeed = {}, picked = [], sources = {};
   form.agents.forEach((a, i) => {
     const n = i + 1;
     if (!a || !PROVIDERS.includes(a.provider)) fail(`Agent ${n}: choose Claude or Codex.`);
@@ -89,8 +89,10 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
     seats.push(seat);
     if (start !== 'fresh' && a.share === true) shareSeed[id] = true;
     if (start === 'original') picked.push({ label, provider: a.provider, id: conv.id, when: conv.when });
+    // Which of the person's conversations this agent started from, so the room can say so later.
+    if (start !== 'fresh') sources[id] = { kind: start, id: conv.id, title: typeof conv.title === 'string' ? conv.title.slice(0, 120) : null };
   });
-  return { name, seats: normalizeParticipants({ seats }, settings), shareSeed, originals: picked };
+  return { name, seats: normalizeParticipants({ seats }, settings), shareSeed, originals: picked, sources };
 }
 
 // Wagon Wheel's own room conversations don't belong in "your conversations". Claude: sessions Wagon Wheel ran (the

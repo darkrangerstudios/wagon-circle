@@ -73,13 +73,15 @@ class FakeClaude {
   stop() { this.stops++; }
 }
 
+const clipboard = []; let warnAnswer = null; // what the next confirmation answers (null: the default "keep going")
 const vscode = {
   workspace: { isTrusted: true, workspaceFolders: undefined,
     getConfiguration: () => ({ get: (key) => ({ userName: 'Human', cwd: root, ideContext: false }[key]), inspect: () => undefined, update: async () => {} }) },
-  ConfigurationTarget: { Global: 1 }, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) },
+  ConfigurationTarget: { Global: 1 }, commands: { executeCommand: async () => {} }, env: { clipboard: { writeText: async (t) => { clipboard.push(t); } } }, Uri: { file: (p) => ({ fsPath: p }) },
   window: {
     showQuickPick: async (items) => { assert.ok(picks.length, 'a picker response was planned'); return picks.shift()(items); },
-    showWarningMessage: async (...args) => { warnings.push(args); return 'Keep going in the original'; },
+    showWarningMessage: async (...args) => { warnings.push(args); return warnAnswer === null ? 'Keep going in the original' : warnAnswer; },
+    setStatusBarMessage: () => ({ dispose() {} }),
     showInputBox: async (options) => {
       assert.ok(inputs.length, 'an input response was planned');
       const next = inputs.shift(), value = typeof next === 'function' ? next(options) : next;
@@ -540,3 +542,45 @@ test('the Switch list leaves out Wagon Wheel\'s own room conversations', async (
   await s.switchSession('app', 'switch');
   assert.deepStrictEqual(offered, ['th-mine']);
 });
+
+test('an agent\'s conversation can be found again: commands for the original, a copy, and its own once it leaves the room', async (t) => {
+  const f = fixture(t, ['codex', 'claude']); f.seats[1].cwd = f.seats[0].cwd;
+  const s = f.create(); await s.boot();
+  const [app, db] = [s.slots.app, s.slots.db];
+  // A Codex seat that works on a copy of the person's thread, recorded the way Switch records it.
+  threadChoices = [{ id: 'th-users-own-1234', cwd: app.seat.cwd, name: 'Plan the trip' }];
+  picks.push((items) => items[0], (items) => items[0]);
+  await s.switchSession('app', 'switch');
+  assert.deepStrictEqual(s.meta.sources.app, { kind: 'copy', id: 'th-users-own-1234', title: 'Plan the trip' });
+  assert.deepStrictEqual(s.controls().app.source, s.meta.sources.app, 'the menu gets the source');
+  const cd = `cd '${app.seat.cwd}' && `;
+  assert.strictEqual(s.resumeCommand('app', 'source'), `${cd}codex resume th-users-own-1234`);
+  assert.strictEqual(s.resumeCommand('app', 'fork'), `${cd}codex fork ${app.seat.sessionId}`);
+  // Claude: a copy of the agent's conversation uses --fork-session; no id yet means no command.
+  assert.strictEqual(s.resumeCommand('db', 'fork'), null);
+  db.client.sessionId = 'cl-live-5678'; db.seat.sessionId = 'cl-live-5678';
+  assert.strictEqual(s.resumeCommand('db', 'fork'), `${cd}claude --resume cl-live-5678 --fork-session`);
+  assert.strictEqual(s.resumeCommand('db', 'source'), null, 'a fresh agent has no source');
+  // Folders with a quote are shell-quoted.
+  db.seat.cwd = "/tmp/it's here"; assert.strictEqual(s.resumeCommand('db', 'fork'), `cd '/tmp/it'\\''s here' && claude --resume cl-live-5678 --fork-session`);
+});
+
+test('Move it out: asks first, starts the agent over, then hands over the old conversation; decline or busy changes nothing', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const app = s.slots.app, old = app.seat.sessionId, cd = `cd '${app.seat.cwd}' && `;
+  clipboard.length = 0;
+  warnAnswer = undefined; // decline
+  await s.moveOut('app');
+  assert.strictEqual(app.seat.sessionId, old); assert.deepStrictEqual(clipboard, []);
+  s.room.busy.app = true; warnAnswer = 'Move it out';
+  await s.moveOut('app');
+  assert.strictEqual(app.seat.sessionId, old, 'a busy agent is not switched'); assert.deepStrictEqual(clipboard, []);
+  s.room.busy.app = false;
+  await s.moveOut('app');
+  assert.notStrictEqual(app.seat.sessionId, old, 'the agent starts over');
+  assert.deepStrictEqual(clipboard, [`${cd}codex resume ${old}`], 'the old conversation is handed over only after the room let go of it');
+  assert.match(s.room.state.transcript.at(-1).text, /earlier conversation has left the room/);
+  assert.ok(!sessionClaimsHeld(s, old), 'no agent in the room holds it any more');
+  warnAnswer = null;
+});
+function sessionClaimsHeld(s, id) { return Object.values(s.slots).some((r) => r.seat.sessionId === id); }

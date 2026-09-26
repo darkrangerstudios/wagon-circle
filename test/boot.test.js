@@ -25,7 +25,7 @@ class FakeCodex { constructor(o) { this.o = o; this.lastTurnUsage = null; } asyn
   async recentMessages() { return [{ role: 'human', text: 'CODEX_SEED_PRIVATE' }]; } async setName() {} async listModels() { return []; } async rateLimits() { return null; } async listThreads() { return []; } stop() {} }
 class FakeClaude { constructor(o) { Object.assign(this, o); this.totalCostUsd = 0; this.lastUsage = null; this.typed = true; } stop() {} setOptions() {} }
 const fakes = {
-  [path.join(__dirname, '../src/claudeHistory.js')]: { ROOT: os.tmpdir(), recentMessages: () => [{ role: 'human', text: 'CLAUDE_SEED_PRIVATE' }], fileFor: (id) => `/synthetic/${id}.jsonl` },
+  [path.join(__dirname, '../src/claudeHistory.js')]: { ROOT: os.tmpdir(), recentMessages: () => [{ role: 'human', text: 'CLAUDE_SEED_PRIVATE' }], fileFor: (id) => `/synthetic/${id}.jsonl`, titleFor: (id) => (id === 'source-claude' ? 'My Claude chat' : null) },
   [path.join(__dirname, '../src/acpClient.js')]: { AcpClient: FakeAcp },
   [path.join(__dirname, '../src/codexClient.js')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
   [path.join(__dirname, '../src/claudeClient.js')]: { ClaudeClient: FakeClaude, READ_ONLY_TOOLS: ['Read', 'Glob', 'Grep'] },
@@ -241,4 +241,16 @@ test('a saved room exposes each seat\'s conversation id to the rooms list (what 
   const [room] = roomsView.listRooms(path.dirname(s.file));
   assert.deepStrictEqual(room.seats.find((x) => x.provider === 'claude').sessionId, 'cl-orig');
   assert.match(room.seats.find((x) => x.provider === 'codex').sessionId, /^th-new-/);
+});
+
+test('a room made before sources were recorded looks up its copies\' titles once it starts', async () => {
+  const meta = { ...newMeta('older room'), claudeForkedFrom: 'source-claude', forkedFrom: 'source-codex', claudeSessionId: null, codexThreadId: null };
+  const s = new RoomSession(context(), meta, null);
+  try {
+    await s.boot();
+    s.slots.codex.client.listThreads = async () => [{ id: 'source-codex', name: 'My Codex thread' }];
+    await s.fillSourceTitles();
+    assert.deepStrictEqual(s.meta.sources, { claude: { kind: 'copy', id: 'source-claude', title: 'My Claude chat' }, codex: { kind: 'copy', id: 'source-codex', title: 'My Codex thread' } });
+    assert.deepStrictEqual(s.controls().claude.source, s.meta.sources.claude);
+  } finally { s.dispose(); }
 });

@@ -35,6 +35,25 @@ function textOf(rec) {
   return t.length > MAX_CHARS ? t.slice(0, MAX_CHARS) + ' …[trimmed]' : t;
 }
 
+// One session file -> { id, path, cwd, mtime, title, preview, mode }, or null for an empty or tool-only session.
+function describeFile(fp, mtime) {
+  const head = parse(readSlice(fp, false, 65536)), tail = parse(readSlice(fp, true, 524288));
+  const first = head.find((r) => r.type === 'user' && textOf(r));
+  const cwd = (head.find((r) => r.cwd) || tail.find((r) => r.cwd) || {}).cwd;
+  if (!first || !cwd) return null;
+  const titled = [...head, ...tail].filter((r) => r.customTitle || r.aiTitle);
+  const t = titled.reverse().find((r) => r.customTitle) || titled.find((r) => r.aiTitle);
+  // mode: the permission mode of the first message. Wagon Wheel runs Claude as dontAsk, so its own rooms' sessions
+  // (fresh or copies) carry it; a person's session keeps its own mode even if a room later keeps going in it.
+  return { id: path.basename(fp, '.jsonl'), path: fp, cwd, mtime, title: t ? (t.customTitle || t.aiTitle) : null, preview: textOf(first).slice(0, 100), mode: typeof first.permissionMode === 'string' ? first.permissionMode : null };
+}
+
+// A session's title as Claude Code shows it (or its first message), for "which conversation is this agent using?".
+function titleFor(id) {
+  const fp = fileFor(id); if (!fp) return null;
+  try { const d = describeFile(fp, fs.statSync(fp).mtimeMs); return d ? d.title || d.preview : null; } catch { return null; }
+}
+
 function listSessions(limit = 25) {
   if (!fs.existsSync(ROOT)) return [];
   const files = [];
@@ -47,15 +66,8 @@ function listSessions(limit = 25) {
   const sessions = [];
   for (const { fp, mtime } of files) {
     if (sessions.length >= limit) break;
-    const head = parse(readSlice(fp, false, 65536)), tail = parse(readSlice(fp, true, 524288));
-    const first = head.find((r) => r.type === 'user' && textOf(r));
-    const cwd = (head.find((r) => r.cwd) || tail.find((r) => r.cwd) || {}).cwd;
-    if (!first || !cwd) continue; // empty or tool-only session
-    const titled = [...head, ...tail].filter((r) => r.customTitle || r.aiTitle);
-    const t = titled.reverse().find((r) => r.customTitle) || titled.find((r) => r.aiTitle);
-    // mode: the permission mode of the first message. Wagon Wheel runs Claude as dontAsk, so its own rooms' sessions
-    // (fresh or copies) carry it; a person's session keeps its own mode even if a room later keeps going in it.
-    sessions.push({ id: path.basename(fp, '.jsonl'), path: fp, cwd, mtime, title: t ? (t.customTitle || t.aiTitle) : null, preview: textOf(first).slice(0, 100), mode: typeof first.permissionMode === 'string' ? first.permissionMode : null });
+    const d = describeFile(fp, mtime);
+    if (d) sessions.push(d);
   }
   return sessions;
 }
@@ -83,4 +95,4 @@ function fileFor(id) {
   return null;
 }
 
-module.exports = { listSessions, recentMessages, textOf, fileFor, ROOT };
+module.exports = { listSessions, recentMessages, textOf, fileFor, titleFor, ROOT };

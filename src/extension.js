@@ -425,6 +425,12 @@ class RoomSession {
       else if (m.type === 'pickFiles') vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Attach' }).then((uris) => (uris || []).forEach((u) => this.addAttachment({ name: path.basename(u.fsPath), fromPath: u.fsPath })));
       else if (m.type === 'unattach') { const a = this.pendingAtts.get(m.id); if (a) { this.pendingAtts.delete(m.id); fs.rm(a.path, () => {}); } }
       else if (m.type === 'stop' && this.room) this.room.stopAll();
+      else if (m.type === 'moveOut' && this.room && this.slots[m.vendor]) this.moveOut(m.vendor).catch((e) => this.room && this.room.note(`Couldn't move the conversation out: ${e.message}`));
+      else if (m.type === 'copyResume' && this.room && this.slots[m.vendor] && ['source', 'fork'].includes(m.which)) {
+        const cmd = this.resumeCommand(m.vendor, m.which);
+        if (!cmd) this.room.note(`${this.slots[m.vendor].seat.label}'s conversation doesn't have an id yet. It gets one with its first reply.`);
+        else vscode.env.clipboard.writeText(cmd).then(() => vscode.window.setStatusBarMessage(`Wagon Wheel: copied "${cmd.length > 60 ? cmd.slice(0, 57) + '…' : cmd}". Paste it in a terminal to open that conversation.`, 6000));
+      }
       else if (m.type === 'session' && this.room && this.slots[m.vendor] && ['new', 'switch', 'continue', 'fork'].includes(m.action)) this.switchSession(m.vendor, m.action).catch((e) => { if (!this.disposed) this.room.note(`Couldn't switch the working session: ${e.message}`); });
       else if (m.type === 'taskPause' && this.room) this.room.pauseTask();
       else if (m.type === 'taskResume' && this.room) this.room.resumeTask();
@@ -523,6 +529,9 @@ class RoomSession {
       const old = r.client;
       this.bindId(r, made.id); r.client = made.client; r.models = made.models || [];
       p.forkFrom = action === 'fork' ? pick.id : null;
+      const sources = { ...(this.meta.sources || {}) };
+      if (action === 'new') delete sources[id]; else sources[id] = { kind: action === 'fork' ? 'copy' : 'original', id: pick.id, title: pick.name ? String(pick.name).slice(0, 120) : null };
+      this.meta.sources = sources;
       if (p.provider === 'codex') { if (action === 'new') p.typedThreads = [...(p.typedThreads || []), made.id]; p.typed = (p.typedThreads || []).includes(made.id); }
       this.history.resetParticipant(id); room.state.cursors[id] = cursor;
       old.stop(); this.ownedClients.delete(old); adopted = true;
@@ -550,6 +559,62 @@ class RoomSession {
   }
 
   // What the pickers show: each vendor's models, efforts and fast mode, gated by what this machine can run.
+  // Which of the person's conversations a seat started from: { kind: 'copy'|'original', id, title } or null (fresh).
+  sourceOf(p) {
+    const known = this.meta.sources && this.meta.sources[p.id];
+    if (known && typeof known.id === 'string') return known;
+    if (p.forkFrom) return { kind: 'copy', id: p.forkFrom, title: null };
+    return null;
+  }
+
+  // Rooms made before sources were recorded (or by Switch without a title) look the title up once after starting.
+  async fillSourceTitles() {
+    let changed = false;
+    for (const r of Object.values(this.slots)) {
+      const p = r.seat, src = this.sourceOf(p);
+      if (!src || src.title) continue;
+      let title = null;
+      try {
+        if (p.provider === 'claude') title = claudeHistory.titleFor(src.id);
+        else if (r.client) { const t = (await r.client.listThreads(null, 100)).find((x) => x.id === src.id); title = t ? t.name || t.preview : null; }
+      } catch (e) { log(`source title: ${e.message}`); }
+      if (this.disposed) return;
+      if (title) { this.meta.sources = { ...(this.meta.sources || {}), [p.id]: { ...src, title: String(title).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 120) } }; changed = true; }
+    }
+    if (changed) this.postMeta();
+  }
+
+  // Commands that open a conversation in its own app, built here from ids the room holds (never from the page):
+  // 'source' reopens the person's original a copy came from; 'fork' opens a copy of this agent's conversation as it
+  // is now; 'resume' reopens this agent's own conversation (only offered once the room has let go of it).
+  resumeCommand(id, which) {
+    const r = this.slots[id]; if (!r) return null;
+    const p = r.seat, src = this.sourceOf(p);
+    const own = p.provider === 'claude' ? r.client?.sessionId || p.sessionId : p.sessionId;
+    const conv = which === 'source' ? src && src.id : own;
+    if (typeof conv !== 'string' || !/^[A-Za-z0-9-]{8,80}$/.test(conv)) return null;
+    const cd = `cd '${String(p.cwd).replace(/'/g, `'\\''`)}' && `;
+    if (p.provider === 'codex') return `${cd}codex ${which === 'fork' ? 'fork' : 'resume'} ${conv}`;
+    return `${cd}claude --resume ${conv}${which === 'fork' ? ' --fork-session' : ''}`;
+  }
+
+  // Move an agent's conversation out of the room: the agent starts over here, and the person gets the command to keep
+  // going in that conversation in Claude Code or Codex. The room stops writing to it before the command is handed over.
+  async moveOut(id) {
+    const r = this.slots[id]; if (!r || !this.room || this.disposed) return;
+    const p = r.seat, L = p.label, app = p.provider === 'claude' ? 'Claude Code' : 'Codex';
+    const cmd = this.resumeCommand(id, 'resume');
+    if (!cmd) { this.room.note(`${L}'s conversation doesn't have an id yet. It gets one with its first reply.`); return; }
+    const go = await vscode.window.showWarningMessage(`Move ${L}'s conversation out of the room?`, { modal: true,
+      detail: `${L} starts a fresh conversation here and won't remember this one. You keep going in this one yourself in ${app}: the command to open it is copied to your clipboard.` }, 'Move it out');
+    if (go !== 'Move it out' || this.disposed) return;
+    const before = r.client;
+    await this.switchSession(id, 'new');
+    if (r.client === before || this.disposed) return; // the switch was refused (busy, pending work); its note says why
+    await vscode.env.clipboard.writeText(cmd);
+    this.room.note(`${L}'s earlier conversation has left the room, and ${L} starts fresh. To keep going in it, paste this in a terminal: ${cmd}`);
+  }
+
   controls() {
     const v = this.claudeVersion;
     return Object.fromEntries(Object.values(this.slots).map((r) => {
@@ -557,7 +622,9 @@ class RoomSession {
       const models = p.provider === 'claude'
         ? commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
         : r.models.map((x) => ({ id: x.id, name: x.displayName, efforts: (x.supportedReasoningEfforts || []).map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
-      return [p.id, { provider: p.provider, label: p.label, cwd: p.cwd, session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
+      return [p.id, { provider: p.provider, label: p.label, cwd: p.cwd, source: this.sourceOf(p),
+        own: (p.provider === 'claude' ? r.client?.sessionId || p.sessionId : p.sessionId) || null, // this agent's own conversation id; a Claude copy has none until its first reply
+        session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
         shared: !!this.history?.describe().share[p.id], readers: this.history ? this.history.readers(p.id) : [], allHistory: !this.history || this.history.allHistory(p.id),
         cli: p.provider === 'claude' && v ? v.join('.') : undefined, model: p.model || models[0]?.id || null, effort: p.effort, fast: !!p.fast, models,
         efforts: p.provider === 'claude' ? commands.CLAUDE_EFFORTS : undefined }];
@@ -774,6 +841,7 @@ async function openSession(context, session, opts) {
   try {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting local sessions…' }, () => session.boot(opts));
     session.postInit();
+    session.fillSourceTitles().catch((e) => log(`source titles: ${e.message}`));
     return true;
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
@@ -860,7 +928,7 @@ async function startFromForm(context, form) {
   }
   const meta = newMeta(plan.name);
   meta.cwd = plan.seats.some((p) => p.cwd === s.cwd) ? s.cwd : plan.seats[0].cwd;
-  meta.seats = plan.seats;
+  meta.seats = plan.seats; meta.sources = plan.sources;
   const screen = startScreen.panel;
   // A retry closes the tab of the attempt that failed, so failed tries don't pile up.
   if (startScreen.failed && startScreen.failed.panel) startScreen.failed.panel.dispose();

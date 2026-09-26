@@ -242,3 +242,12 @@ body.dropping .composer { box-shadow: 0 0 0 3px var(--focus); }
 .usagepop details.more summary { cursor: pointer; color: var(--muted); }
 .usagepop details.more .lrow { padding: 2px 0; }
 .usagepop details.more .lrow > span:first-child { white-space: nowrap; }
+
+/* Agent settings: which conversation it's on */
+.pop .conv { display: grid; gap: 4px; }
+.pop .convwhat { font-size: .92em; }
+.pop .convtitle { font-weight: 600; overflow-wrap: anywhere; }
+.pop .note.mono { font-family: var(--mono); }
+.pop .findrow { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 2px; }
+.pop .findrow .link { color: var(--vscode-textLink-foreground); text-decoration: underline; text-underline-offset: 2px; padding: 0; font-size: .9em; }
+.pop .findrow .link:disabled { color: var(--muted); text-decoration: none; }

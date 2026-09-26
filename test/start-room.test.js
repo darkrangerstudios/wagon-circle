@@ -35,6 +35,7 @@ test('plan: a copy or the original must be one of the listed conversations; Clau
   assert.strictEqual(old.cwd, home, 'a Codex conversation whose folder is gone keeps the chosen folder'); assert.strictEqual(old.forkFrom, 'th-gone');
   assert.deepStrictEqual(p.shareSeed, { claude: true, 'old': true });
   assert.deepStrictEqual(p.originals, [{ label: 'Codex', provider: 'codex', id: 'th-1', when: 2 }]);
+  assert.deepStrictEqual(p.sources, { claude: { kind: 'copy', id: 'cl-1', title: null }, codex: { kind: 'original', id: 'th-1', title: null }, old: { kind: 'copy', id: 'th-gone', title: null } }, 'each agent remembers where it started');
 });
 
 test('plan: refuses what the screen should never send, with a sentence a person can act on', () => {

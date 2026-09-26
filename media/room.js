@@ -214,7 +214,7 @@
       btn.appendChild(el('span', 'seatlabel', NAMES[name]));
       if (v) btn.appendChild(el('span', 'seatmodel', `${modelTag(name) || 'default'} · ${v.effort || 'auto'}`));
       if (v && v.fast) btn.appendChild(el('span', 'bolt', '⚡'));
-      btn.title = `${NAMES[name]} (@${name}): session, model and history${p.cwd ? '\n' + p.cwd : ''}`;
+      btn.title = `${NAMES[name]} (@${name}): click for its settings: model, thinking, and which conversation it's on${p.cwd ? '\n' + p.cwd : ''}`;
       btn.setAttribute('aria-label', `${NAMES[name]} controls`);
       btn.addEventListener('click', () => openPop(name)); box.appendChild(btn);
     }
@@ -498,7 +498,23 @@
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });
     row.appendChild(txt); row.appendChild(sw); pop.appendChild(row);
-    const ws = el('div'); ws.appendChild(el('div', 'lbl', `Conversation${c.typed ? '' : ' · reached by @mention'}`));
+    // Which conversation this agent is on, in words, with a way to find it again in Claude Code or Codex.
+    const ws = el('div', 'conv'); ws.appendChild(el('div', 'lbl', 'Conversation'));
+    const src = c.source, app = kind === 'claude' ? 'Claude Code' : 'Codex', short = (x) => String(x).slice(0, 8);
+    ws.appendChild(el('div', 'convwhat', !src ? 'A fresh conversation started in this room.' : src.kind === 'original' ? 'Keeping going in your conversation' : 'Working on a copy of your conversation'));
+    if (src) ws.appendChild(el('div', 'convtitle', src.title ? `“${src.title}”` : 'Its title wasn\'t found. It may have been deleted or moved.'));
+    if (src && src.kind === 'copy') ws.appendChild(el('small', 'note', 'Your original stays exactly as it was.'));
+    if (!c.typed) ws.appendChild(el('small', 'note', 'Other agents reach it with @mentions.'));
+    const idLine = [src ? `${src.kind === 'copy' ? 'original' : 'conversation'} ${short(src.id)}` : '', (!src || src.kind === 'copy') && c.own ? `${src ? 'this agent\'s copy' : 'conversation'} ${short(c.own)}` : ''].filter(Boolean).join(' · ');
+    if (idLine) ws.appendChild(el('small', 'note mono', `id: ${idLine}`));
+    const find = el('div', 'findrow');
+    const act = (label, msg, tip, disabled) => { const b = el('button', 'link', label); b.title = tip; b.disabled = !!disabled; b.addEventListener('click', () => { vscode.postMessage({ vendor: name, ...msg }); closePop(); }); find.appendChild(b); };
+    const noId = !c.own;
+    if (src && src.kind === 'copy') act('Copy command to open your original', { type: 'copyResume', which: 'source' }, `Copies a terminal command that opens your original conversation in ${app}. The room never writes to it.`);
+    act('Continue a copy yourself', { type: 'copyResume', which: 'fork' }, `Copies a terminal command that opens a copy of this conversation, as it is now, in ${app}. ${NAMES[name]} keeps its own here.`, noId);
+    act('Move it out of the room', { type: 'moveOut' }, `${NAMES[name]} starts over here, and you keep going in this conversation yourself in ${app}. Asks first.`, noId || !!busy[name]);
+    ws.appendChild(find);
+    ws.appendChild(el('small', 'note', `Commands are copied for you to paste in a terminal. You can also look for the title in ${app}'s history.${noId ? ' A new conversation gets its id after the first reply.' : ''}`));
     const wseg = el('div', 'seg');
     for (const [a, label, tip] of [['new', 'Start over', 'Give this agent a brand-new conversation. The room keeps its messages.'],
       ['switch', 'Switch to one of your conversations…', 'Bring in a conversation you already had. Next you choose a copy (recommended) or the original.']]) {

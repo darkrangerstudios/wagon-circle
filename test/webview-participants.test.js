@@ -35,3 +35,29 @@ test('account quota stays singular and last-turn usage remains seat-specific', (
   h.receive({ type: 'message', entry: { from: 'codex-2', text: 'Independent answer', ts: Date.now() } });
   assert.equal(h.ids.log.children.at(-1).dataset.participant, 'codex-2'); assert.match(h.ids.log.children.at(-1).className, /codex/); assert.match(h.ids.log.textContent, /Checker/);
 });
+
+test('the agent menu says which conversation it is on and offers safe ways to take it with you', () => {
+  const h = setup();
+  h.controls['codex-2'] = { ...h.controls['codex-2'], source: { kind: 'copy', id: 'th-users-own-1234', title: 'Plan the trip' }, own: 'th-copy-9999', session: 'th-copy-9999', typed: false };
+  h.controls.claude = { ...h.controls.claude, source: { kind: 'copy', id: 'cl-src-1111', title: 'My chat' }, own: null, session: 'cl-src-1111' }; // a Claude copy before its first reply
+  h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
+  h.click(h.ids.participants, 'Checker controls');
+  let t = h.ids.pop.textContent;
+  assert.match(t, /Working on a copy of your conversation“Plan the trip”Your original stays exactly as it was\./);
+  assert.match(t, /id: original th-users · this agent's copy th-copy-/);
+  h.click(h.ids.pop, 'Copy command to open your original'); assert.deepEqual(h.sent.at(-1), { vendor: 'codex-2', type: 'copyResume', which: 'source' });
+  h.click(h.ids.participants, 'Checker controls'); h.click(h.ids.pop, 'Continue a copy yourself'); assert.deepEqual(h.sent.at(-1), { vendor: 'codex-2', type: 'copyResume', which: 'fork' });
+  h.click(h.ids.participants, 'Checker controls'); h.click(h.ids.pop, 'Move it out of the room'); assert.deepEqual(h.sent.at(-1), { vendor: 'codex-2', type: 'moveOut' });
+  h.click(h.ids.participants, 'Research controls');
+  t = h.ids.pop.textContent;
+  assert.match(t, /Working on a copy of your conversation“My chat”/);
+  assert.match(t, /id: original cl-src-1/); assert.doesNotMatch(t, /this agent's copy/, 'the source id is never shown as the agent\'s own');
+  assert.ok(walk(h.ids.pop).filter((e) => ['Continue a copy yourself', 'Move it out of the room'].includes(e.textContent)).every((e) => e.disabled), 'no id yet: nothing to take');
+  assert.match(t, /gets its id after the first reply/);
+  h.controls.codex = { ...h.controls.codex, source: null, own: 'th-fresh-7777' };
+  h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
+  h.click(h.ids.participants, 'Builder controls');
+  t = h.ids.pop.textContent;
+  assert.match(t, /A fresh conversation started in this room\./); assert.doesNotMatch(t, /open your original/);
+  assert.match(t, /id: conversation th-fresh/);
+});
