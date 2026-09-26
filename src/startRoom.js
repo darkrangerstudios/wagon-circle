@@ -14,7 +14,7 @@ const NAMES = { claude: 'Claude', codex: 'Codex' };
 const APPS = { claude: 'Claude Code', codex: 'Codex' };
 const MAX_AGENTS = 6;
 const STARTS = ['fresh', 'copy', 'original'];
-const RESERVED = new Set(['both', 'all', 'human', 'system']);
+const RESERVED = new Set(['both', 'all', 'human', 'system', ...Object.getOwnPropertyNames(Object.prototype).map((k) => k.toLowerCase())]);
 
 // Setup check result -> { ready, text, fix } in plain English for one provider card.
 function setupLine(p) {
@@ -31,7 +31,7 @@ function setupLine(p) {
 function conversationRow(c, home = os.homedir()) {
   const clean = (v, max) => String(v || '').replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, max);
   const folder = typeof c.cwd === 'string' ? (home && c.cwd.startsWith(home) ? `~${c.cwd.slice(home.length)}` : c.cwd) : '';
-  return { id: c.id, title: clean(c.title, 120) || 'Untitled conversation', folder: clean(folder, 200), when: Number.isFinite(c.when) ? c.when : null };
+  return { id: c.id, title: clean(c.title, 120) || 'Untitled conversation', folder: clean(folder, 200), when: Number.isFinite(c.when) ? c.when : null, exists: typeof c.cwd === 'string' && isDir(c.cwd) };
 }
 
 function slug(label, provider, taken) {
@@ -72,13 +72,14 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
         originals.add(key);
       }
       // Claude reopens a conversation only from the folder it started in; Codex keeps its own folder when it has one.
-      if (a.provider === 'claude') cwd = conv.cwd;
+      if (a.provider === 'claude') { if (!isDir(conv.cwd)) fail(`${label}: the folder that conversation started in no longer exists, so Claude can't reopen it. Pick another conversation or start fresh.`); cwd = conv.cwd; }
       else if (conv.cwd && isDir(conv.cwd)) cwd = conv.cwd;
     }
     if (!isDir(cwd)) fail(`${label}: its folder no longer exists. Choose another folder.`);
     const models = a.provider === 'claude' ? CLAUDE_MODELS : codexModels.map((m) => m.id);
     const model = a.model == null || a.model === '' ? null : models.includes(a.model) ? a.model : fail(`${label}: that model isn't available.`);
-    const efforts = a.provider === 'claude' ? CLAUDE_EFFORTS : ((codexModels.find((m) => m.id === model) || codexModels[0] || {}).efforts || []);
+    // No model chosen means Codex's own default, which the host can't name: accept any effort a listed model offers.
+    const efforts = a.provider === 'claude' ? CLAUDE_EFFORTS : model ? (codexModels.find((m) => m.id === model).efforts || []) : [...new Set(codexModels.flatMap((m) => m.efforts || []))];
     const effort = a.effort == null || a.effort === '' ? null : efforts.includes(a.effort) ? a.effort : fail(`${label}: that thinking effort isn't available for this model.`);
     const id = slug(label, a.provider, taken);
     const seat = { id, label, provider: a.provider, cwd, model, effort };
@@ -92,4 +93,4 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
   return { name, seats: normalizeParticipants({ seats }, settings), shareSeed, originals: picked };
 }
 
-module.exports = { buildPlan, setupLine, conversationRow, slug, MAX_AGENTS, NAMES };
+module.exports = { buildPlan, setupLine, conversationRow, slug, isDir, MAX_AGENTS, NAMES };

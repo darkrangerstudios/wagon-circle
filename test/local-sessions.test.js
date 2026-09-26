@@ -79,7 +79,7 @@ const vscode = {
   ConfigurationTarget: { Global: 1 }, commands: { executeCommand: async () => {} }, env: {}, Uri: { file: (p) => ({ fsPath: p }) },
   window: {
     showQuickPick: async (items) => { assert.ok(picks.length, 'a picker response was planned'); return picks.shift()(items); },
-    showWarningMessage: async (...args) => { warnings.push(args); return 'Continue'; },
+    showWarningMessage: async (...args) => { warnings.push(args); return 'Keep going in the original'; },
     showInputBox: async (options) => {
       assert.ok(inputs.length, 'an input response was planned');
       const next = inputs.shift(), value = typeof next === 'function' ? next(options) : next;
@@ -463,11 +463,11 @@ test('a conflicting id learned late is noted once and never breaks saving or str
   assert.equal(s.meta.seats[1].sessionId, 'shared-claude'); assert.equal(db.stops, 1);
   released.resolve(); await settle(s);
   assert.equal(s.room.busy.app, false); // the turn ended cleanly despite the claim conflict
-  const notes = s.room.state.transcript.filter((e) => e.from === 'system' && /already continues/.test(e.text));
+  const notes = s.room.state.transcript.filter((e) => e.from === 'system' && /is also using/.test(e.text));
   assert.equal(notes.length, 1);
   assert.equal(s.room.state.transcript.filter((e) => e.kind === 'error').length, 0);
   s.room.postFromHuman('@app again'); await settle(s); // a second turn: still no throw, still one note
-  assert.equal(s.room.state.transcript.filter((e) => e.from === 'system' && /already continues/.test(e.text)).length, 1);
+  assert.equal(s.room.state.transcript.filter((e) => e.from === 'system' && /is also using/.test(e.text)).length, 1);
   const saved = JSON.parse(fs.readFileSync(s.file, 'utf8'));
   assert.equal(saved.state.transcript.at(-1).text, 'Late first reply'); // saving kept working after the conflict
   assert.equal(saved.meta.seats[1].sessionId, 'shared-claude'); assert.equal(saved.meta.seats[0].sessionId, null); // app never took the claim
@@ -514,4 +514,15 @@ test('Switch to one of your conversations: a copy behaves as Fork, the original 
   await assert.rejects(s.switchSession('app', 'switch'), /already in use/);
   assert.equal(warnings.length, 1);
   void replacement;
+});
+
+test('keeping going in a person\'s original Codex conversation never renames it; copies and new threads are named', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  assert.ok(codexClients[0].calls.some(([a]) => a === 'name'), 'a thread the room creates is named');
+  threadChoices = [{ id: 'th-users-own', cwd: s.meta.seats[0].cwd, name: 'My own thread' }];
+  picks.push((items) => items.find((item) => item.id === 'th-users-own'));
+  await s.switchSession('app', 'continue');
+  const replacement = codexClients.at(-1);
+  assert.ok(replacement.calls.some(([a, id]) => a === 'continue' && id === 'th-users-own'));
+  assert.ok(!replacement.calls.some(([a]) => a === 'name'), 'the original keeps its own name');
 });

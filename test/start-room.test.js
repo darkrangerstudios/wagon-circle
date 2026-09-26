@@ -52,6 +52,12 @@ test('plan: refuses what the screen should never send, with a sentence a person 
   bad({ name: 'r', agents: [A('codex', { model: 'gpt-x', effort: 'max' })] }, /thinking effort isn't available/);
   bad({ name: 'r', agents: [A('claude', { start: 'sideways' })] }, /choose how it starts/);
   bad(null, /Something went wrong/);
+  bad({ name: 'r', agents: [A('claude', { start: 'copy', conversation: 'cl-gone' })] }, /folder that conversation started in no longer exists/, { lists: { claude: [{ id: 'cl-gone', cwd: '/no/such/folder', when: 1 }], codex: [] } });
+  // No model means Codex's own default: any effort a listed model offers is accepted.
+  const models2 = [{ id: 'a', efforts: ['low'] }, { id: 'b', efforts: ['low', 'xhigh'] }];
+  assert.strictEqual(startRoom.buildPlan({ name: 'r', agents: [A('codex', { effort: 'xhigh' })] }, { defaultCwd: cwd, codexModels: models2 }).seats[0].effort, 'xhigh');
+  // Names that collide with JavaScript object keys fall back to the app name instead of failing validation.
+  assert.strictEqual(startRoom.buildPlan({ name: 'r', agents: [A('claude', { label: 'Constructor' })] }, { defaultCwd: cwd }).seats[0].id, 'claude');
   // Two copies of one conversation are fine; only a second writer on the original is refused.
   assert.strictEqual(startRoom.buildPlan({ name: 'r', agents: [A('claude', { start: 'copy', conversation: 'cl-1' }), A('claude', { label: 'Two', start: 'copy', conversation: 'cl-1' })] }, { lists, defaultCwd: cwd }).seats.length, 2);
 });
@@ -62,12 +68,13 @@ test('setup lines and conversation rows read as plain English and carry no contr
   assert.strictEqual(startRoom.setupLine({ provider: 'claude', installation: 'available', version: '2.1.0', authentication: 'signed-out' }).fix, 'signin');
   assert.strictEqual(startRoom.setupLine({ provider: 'codex', installation: 'available', version: '0.1.0', authentication: 'unknown' }).ready, true);
   const row = startRoom.conversationRow({ id: 'x', cwd: '/home/alex/code/app', when: 5, title: 'Fix‮ the\nbug' }, '/home/alex');
-  assert.deepStrictEqual(row, { id: 'x', title: 'Fix  the bug', folder: '~/code/app', when: 5 });
+  assert.deepStrictEqual(row, { id: 'x', title: 'Fix  the bug', folder: '~/code/app', when: 5, exists: false });
+  assert.strictEqual(startRoom.conversationRow({ id: 'z', cwd: os.tmpdir() }).exists, true);
   assert.strictEqual(startRoom.conversationRow({ id: 'y', cwd: null }, '/h').title, 'Untitled conversation');
 });
 
 // The host side of the screen, with VS Code, the CLIs and their histories stubbed.
-function loadHost({ lists = {}, recentMs = null, answer } = {}) {
+function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [] } = {}) {
   const disposable = { dispose() {} };
   const rec = { panels: [], warnings: [], opened: [] };
   const convDir = dir();
@@ -98,7 +105,7 @@ function loadHost({ lists = {}, recentMs = null, answer } = {}) {
   const now = Date.now();
   const fakes = {
     [require.resolve('../src/codexClient')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
-    [require.resolve('../src/claudeHistory')]: { ROOT: os.tmpdir(), listSessions: () => lists.claude || [{ id: 'cl-1', path: '/x', cwd: convDir, mtime: recentMs ? now - recentMs : now - 3600e3, title: 'Old chat', preview: 'hi' }], recentMessages: () => [], fileFor: () => null },
+    [require.resolve('../src/claudeHistory')]: { ROOT: os.tmpdir(), listSessions: () => lists.claude || [{ id: 'cl-1', path: '/x', cwd: convDir, mtime: recentMs ? now - recentMs : now - 3600e3, title: 'Old chat', preview: 'hi' }], recentMessages: () => [], fileFor: () => fileFor },
     [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: 'claude', version: [2, 1, 282] }), atLeast: () => true },
     [require.resolve('../src/setup')]: { ...require('../src/setup'), checkSetup: async ({ executables }) => ({ executionHost: 'this computer', providers: Object.keys(executables).map((p) => ({ provider: p, installation: 'available', version: '1.0.0', authentication: p === 'codex' ? 'signed-out' : 'present' })) }) },
   };
@@ -111,6 +118,8 @@ function loadHost({ lists = {}, recentMs = null, answer } = {}) {
   let ext;
   try { delete require.cache[require.resolve('../src/extension')]; ext = require('../src/extension'); } finally { Module._load = realLoad; }
   const context = { subscriptions: [], globalState: { get: () => undefined, update: async () => {} }, globalStorageUri: { fsPath: dir() }, extensionUri: { fsPath: path.join(__dirname, '..') } };
+  const roomDir = path.join(context.globalStorageUri.fsPath, 'rooms'); fs.mkdirSync(roomDir, { recursive: true });
+  for (const r of rooms) fs.writeFileSync(path.join(roomDir, `${r.meta.id}.json`), JSON.stringify(r));
   ext.activate(context);
   return { ext, rec, convDir };
 }
@@ -216,4 +225,35 @@ test('page: add and remove agents up to six, change a folder, and show the host\
   assert.ok(pg.text().includes('Claude: pick one of your Claude conversations, or start fresh.'));
   pg.receive({ type: 'busy', on: true });
   assert.ok(pg.buttons().find((b) => b.textContent === 'Starting…').disabled);
+});
+
+test('host: an original another saved room already uses is refused while the screen is still open', async () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const { rec } = loadHost({ rooms: [{ meta: { id, name: 'Earlier room', participants: [{ id: 'claude', label: 'Claude', provider: 'claude', sessionId: 'cl-1' }] }, state: { transcript: [] } }] });
+  await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
+  await p.recv({ type: 'ready' }); await settle();
+  await p.recv({ type: 'start', form: { name: 'r', agents: [{ provider: 'claude', label: 'Claude', start: 'original', conversation: 'cl-1' }] } });
+  assert.deepStrictEqual(p.sent.slice(-2), [{ type: 'error', text: 'Claude: that conversation is already used by the room "Earlier room". Use a copy instead.' }, { type: 'busy', on: false }]);
+  assert.strictEqual(p.disposed, false); assert.strictEqual(rec.panels.length, 1);
+});
+
+test('host: the two-minute warning reads the conversation\'s time at Start, not from the list loaded earlier', async () => {
+  const fresh = path.join(dir(), 'cl-1.jsonl'); fs.writeFileSync(fresh, '{}\n'); // written just now
+  const { rec } = loadHost({ fileFor: fresh, answer: undefined }); // the list says an hour ago
+  await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
+  await p.recv({ type: 'ready' }); await settle();
+  await p.recv({ type: 'start', form: { name: 'r', agents: [{ provider: 'claude', label: 'Claude', start: 'original', conversation: 'cl-1' }] } });
+  assert.strictEqual(rec.warnings.length, 1); assert.match(rec.warnings[0].m, /changed in the last two minutes/);
+  assert.strictEqual(rec.panels.length, 1);
+});
+
+test('page: an untrusted folder says why it can\'t check, and a Codex conversation whose folder is gone keeps the chosen folder', () => {
+  const pg = loadPage();
+  pg.receive({ type: 'init', existing: false, defaults: { name: 'R', folder: '/w', folderLabel: '~/w' }, trusted: false });
+  assert.ok(pg.text().includes('Trust this folder in VS Code to check Claude Code.'));
+  pg.receive({ type: 'lists', conversations: { claude: [], codex: [{ id: 'th-1', title: 'Old Codex chat', folder: '/gone', when: 1, exists: false }] }, models: { claude: [], codex: [] } });
+  pg.click('One of your Codex conversations'); pg.click('Old Codex chat');
+  const t = pg.text();
+  assert.ok(t.includes('~/w') && !t.includes('Uses the folder where this conversation started'), 'the folder shown is the one that will be used');
+  assert.ok(t.includes('Codex can also read files elsewhere on this computer'), 'Codex\'s read scope is stated plainly');
 });

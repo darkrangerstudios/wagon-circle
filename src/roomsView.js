@@ -26,8 +26,8 @@ function readRoom(file, fsx) {
     cwd: text(m.cwd, 400),
     createdAt: typeof m.createdAt === 'string' ? m.createdAt : null,
     lastActivity: last != null ? last : created,
-    seats: seats ? seats.filter((p) => p && typeof p === 'object').map((p) => ({ label: text(p.label || p.id, 60), provider: text(p.provider, 20) }))
-      : [{ label: 'Claude', provider: 'claude' }, { label: 'Codex', provider: 'codex' }], // rooms saved before named seats
+    seats: seats ? seats.filter((p) => p && typeof p === 'object').map((p) => ({ label: text(p.label || p.id, 60), provider: text(p.provider, 20), sessionId: typeof p.sessionId === 'string' ? p.sessionId : null }))
+      : [{ label: 'Claude', provider: 'claude', sessionId: typeof m.claudeSessionId === 'string' ? m.claudeSessionId : null }, { label: 'Codex', provider: 'codex', sessionId: typeof m.codexThreadId === 'string' ? m.codexThreadId : null }], // rooms saved before named seats
   };
 }
 

@@ -107,6 +107,9 @@ class SessionClaims {
     return true;
   }
 
+  // Read-only: is this conversation owned by any seat or room in this extension host?
+  isClaimed(provider, id) { const key = this.key(provider, id, {}); return key !== null && this.claims.has(key); }
+
   release(provider, id, owner) {
     const key = this.key(provider, id, owner);
     if (key === null || this.claims.get(key) !== owner) return false;

@@ -132,3 +132,12 @@ test('claims reject malformed identities and missing owner tokens', () => {
   }
   assert.throws(() => claims.releaseOwner(null), /Invalid/);
 });
+
+test('SessionClaims.isClaimed reports ownership without taking it', () => {
+  const { SessionClaims } = require('../src/participants');
+  const c = new SessionClaims(), owner = {};
+  assert.strictEqual(c.isClaimed('codex', 'th-1'), false);
+  c.claim('codex', 'th-1', owner);
+  assert.strictEqual(c.isClaimed('codex', 'th-1'), true); assert.strictEqual(c.isClaimed('claude', 'th-1'), false);
+  assert.strictEqual(c.claim('codex', 'th-1', owner), true, 'the owner still owns it');
+});

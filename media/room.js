@@ -18,7 +18,7 @@
   const GLYPH = { claude: '✳', codex: '>_' };
   const providers = { claude: 'claude', codex: 'codex' };
   const participantUsage = {}, participantCost = {};
-  let busy = {}, cost = 0, usage = null, codexUsage = null, local = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
+  let busy = {}, local = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
   const drafts = {}, act = {}, since = {};           // in-progress replies per agent
   const menu = { items: [], sel: 0, open: false };
@@ -449,6 +449,8 @@
       pc.appendChild(el('small', 'note', `Updated ${new Date(local.scannedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`));
     }
   }
+  // An open usage popover re-renders in place when its numbers change (limits, this room, this computer).
+  function refreshUsagePop() { if (!$('pop').hidden && $('pop').dataset.for === 'usage') { closePop(); openUsage(); } }
   function closePop() { $('pop').hidden = true; $('pop').classList.toggle('usagepop', false); }
   function cmd(text) { vscode.postMessage({ type: 'command', text }); }
   function openPop(name) {
@@ -541,7 +543,7 @@
       $('title').textContent = meta.name || 'Wagon Wheel';
       $('ids').textContent = [meta.cwd, meta.forkedFrom && `codex fork of ${meta.forkedFrom.slice(0, 8)}`, meta.claudeForkedFrom && `claude fork of ${meta.claudeForkedFrom.slice(0, 8)}`].filter(Boolean).join(' · ');
       (m.transcript || []).forEach((e) => add(render(e)));
-      busy = m.busy || {}; cost = m.cost || 0; if (m.quota) quota = m.quota;
+      busy = m.busy || {}; if (m.quota) quota = m.quota;
       for (const id of Object.keys(participantUsage)) delete participantUsage[id];
       for (const id of Object.keys(participantCost)) delete participantCost[id];
       Object.assign(participantUsage, m.participantUsage || {}); Object.assign(participantCost, m.participantCost || {});
@@ -552,15 +554,14 @@
     else if (m.type === 'status') {
       busy[m.name] = m.busy;
       if (m.busy) since[m.name] = m.since || Date.now(); else { delete act[m.name]; delete since[m.name]; }
-      if (typeof m.cost === 'number') cost = m.cost; if (m.usage) usage = m.usage; if (m.codexUsage) codexUsage = m.codexUsage;
       if (m.participantUsage) participantUsage[m.name] = m.participantUsage;
       if (typeof m.participantCost === 'number') participantCost[m.name] = m.participantCost;
-      renderWho(); renderQuota();
+      renderWho(); renderQuota(); refreshUsagePop();
     }
-    else if (m.type === 'quota') { quota = m.quota; renderQuota(); }
-    else if (m.type === 'localUsage') { local = m.usage; renderQuota(); if (!$('pop').hidden && $('pop').dataset.for === 'usage') { closePop(); openUsage(); } } // a refresh while open re-renders it
+    else if (m.type === 'quota') { quota = m.quota; renderQuota(); refreshUsagePop(); }
+    else if (m.type === 'localUsage') { local = m.usage; renderQuota(); refreshUsagePop(); } // a refresh while open re-renders it
     else if (m.type === 'task') { task = m.task; taskMode = m.mode || 'auto'; taskDefaults = m.defaults; presets = m.presets || presets; typedAgents = m.typed || {}; renderTask(); }
-    else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); }
+    else if (m.type === 'claudeUsage') { cusage = m.usage; renderQuota(); refreshUsagePop(); }
     else if (m.type === 'meta') { meta = m.meta; syncParticipants(); specs = m.commands || specs; controls = m.controls || controls; renderChips(); }
     else if (m.type === 'ide') { ideSummary = m.summary; renderChips(); }
     else if (m.type === 'attached') { pending.push(m.att); renderTray(); }

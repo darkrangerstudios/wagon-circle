@@ -6,7 +6,7 @@
   const NAME = { claude: 'Claude', codex: 'Codex' };
   const APP = { claude: 'Claude Code', codex: 'Codex' };
   const MAX = 6;
-  const S = { init: false, name: '', folder: '', folderLabel: '', agents: [], setup: null, lists: null, busy: false, error: '', existing: false };
+  const S = { init: false, trusted: true, name: '', folder: '', folderLabel: '', agents: [], setup: null, lists: null, busy: false, error: '', existing: false };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const help = (text) => el('div', 'help', text);
@@ -69,6 +69,7 @@
   function statusLine(a) {
     const box = el('div', 'status');
     const st = S.setup && S.setup[a.provider];
+    if (!S.trusted) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', `Trust this folder in VS Code to check ${APP[a.provider]}.`)); return box; }
     if (!S.setup) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', `Checking ${APP[a.provider]}…`)); return box; }
     if (!st) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', 'Couldn\'t check this app.')); return box; }
     box.appendChild(el('span', `dot ${st.ready ? 'ok' : 'bad'}`));
@@ -127,18 +128,19 @@
     // Folder.
     const frow = el('div', 'row folder');
     const conv = bringsIn(a) ? picked(a) : null;
-    const locked = conv && (a.provider === 'claude' || conv.folder);
+    const locked = conv && (a.provider === 'claude' || conv.exists); // Codex falls back to the chosen folder when its own is gone
     frow.appendChild(el('span', 'label inline', 'Works in'));
     frow.appendChild(el('code', null, locked ? conv.folder : a.folderLabel || a.folder));
     if (!locked) { const ch = el('button', 'link', 'Change…'); ch.title = 'Choose a different folder for this agent.'; ch.addEventListener('click', () => vscode.postMessage({ type: 'pickFolder', index: i })); frow.appendChild(ch); }
     c.appendChild(frow);
-    c.appendChild(help(locked ? 'Uses the folder where this conversation started, so it can pick up where it left off.' : 'It can read files in this folder and its subfolders.'));
+    c.appendChild(help(locked ? 'Uses the folder where this conversation started, so it can pick up where it left off.' : a.provider === 'codex' ? 'It starts in this folder. Codex can also read files elsewhere on this computer, but it can\'t change anything.' : 'It can read files in this folder and its subfolders.'));
     return c;
   }
 
   function efforts(a) {
     const ms = models(a.provider);
-    const m = ms.find((x) => x.id === a.model) || (a.provider === 'codex' ? ms[0] : ms[0]);
+    if (!a.model && a.provider === 'codex') return [...new Set(ms.flatMap((x) => x.efforts || []))]; // Codex's own default model isn't named
+    const m = ms.find((x) => x.id === a.model) || ms[0];
     return (m && m.efforts) || [];
   }
 
@@ -205,7 +207,7 @@
   window.addEventListener('message', ({ data: m }) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'init') {
-      S.init = true; S.existing = !!m.existing; S.name = m.defaults.name; S.folder = m.defaults.folder; S.folderLabel = m.defaults.folderLabel;
+      S.init = true; S.existing = !!m.existing; S.trusted = m.trusted !== false; S.name = m.defaults.name; S.folder = m.defaults.folder; S.folderLabel = m.defaults.folderLabel;
       S.agents = [agent('claude', 1), agent('codex', 1)];
     } else if (m.type === 'mode') { if (m.existing) for (const a of S.agents) if (a.start === 'fresh') a.start = 'copy'; }
     else if (m.type === 'setup') S.setup = { claude: m.claude, codex: m.codex };

@@ -77,7 +77,4 @@ async function cliVersion(provider, executable, { run = runProbe } = {}) {
   return m ? m[1] : 'unknown';
 }
 
-// A provider that is installed and signed in.
-const passes = (p) => p.installation === 'available' && p.authentication === 'present';
-
-module.exports = { checkProvider, checkSetup, runProbe, cliVersion, passes, GUIDES };
+module.exports = { checkProvider, checkSetup, runProbe, cliVersion, GUIDES };

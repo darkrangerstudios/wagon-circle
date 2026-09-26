@@ -184,7 +184,7 @@ class RoomSession {
     try { this.bindId(r, id); } catch (e) {
       if (r.claimNoted === id) return; r.claimNoted = id;
       log(`${r.seat.id}: could not claim ${id}: ${e.message}`);
-      if (this.room) this.room.note(`${r.seat.label} is writing to session ${String(id).slice(0, 8)}, which another seat or room already continues. Fork one of them so they stop sharing it.`);
+      if (this.room) this.room.note(`${r.seat.label} is using a conversation (${String(id).slice(0, 8)}) that another agent or room is also using. Switch one of them to a copy so they stop sharing it.`);
     }
   }
 
@@ -203,7 +203,8 @@ class RoomSession {
       else if (action === 'fork') t = await c.forkThread(source, this.brief(r, false));
       else t = await c.startThread(this.brief(r, true));
       if (!valid()) return null;
-      await c.setName(t.id, `Wagon Wheel: ${this.meta.name} · ${p.label}`); if (!valid()) return null;
+      // Name threads the room creates; never rename a conversation the person brought in as the original.
+      if (action !== 'continue') { await c.setName(t.id, `Wagon Wheel: ${this.meta.name} · ${p.label}`); if (!valid()) return null; }
       const models = await c.listModels(); if (!valid()) return null;
       c.on('notification', (method) => { if (method === 'account/rateLimits/updated' && this.room) this.refreshQuota(); });
       c.on('exit', (e) => this.post({ type: 'notice', text: `${p.label} process exited: ${e.message}. Reopen the room to restart it.` }));
@@ -251,7 +252,7 @@ class RoomSession {
   seatSpoke(id) { return !!(this.state && Array.isArray(this.state.transcript) && this.state.transcript.some((e) => e && e.from === id && e.kind !== 'history')); }
 
   // A roster is fixed before creating any thread: Codex dynamic-tool peer enums are immutable on a thread.
-  async bootSeats({ forkFrom = null, claudeFrom = null, shareSeed = {} } = {}) {
+  async bootSeats({ shareSeed = {} } = {}) {
     const s = this.options = settings(), m = this.meta;
     m.humanName = s.userName; this.claudeVersion = s.claude.version;
     m.seats = normalizeParticipants(m, s);
@@ -268,36 +269,40 @@ class RoomSession {
     const seeds = [];
     for (const r of Object.values(this.slots)) {
       const p = r.seat;
-      // Where this seat starts: its own saved session (continue), a copy of another conversation (the legacy Join
-      // Existing picks, or seat.forkFrom set by the Start a Room screen), or fresh.
+      // Where this seat starts: its own saved conversation (continue), a copy of another one (seat.forkFrom, set by
+      // the Start a Room screen), or fresh.
       const others = Object.keys(this.slots).filter((id) => id !== p.id);
       if (p.provider === 'codex') {
-        const join = p.id === 'codex' && !p.sessionId && forkFrom;
-        const src = join ? join.id : (!p.sessionId && p.forkFrom) || null;
+        let src = (!p.sessionId && p.forkFrom) || null;
         let action = p.sessionId ? 'continue' : src ? 'fork' : 'new', made;
         const seedFrom = shareSeed[p.id] ? (action === 'continue' ? p.sessionId : src) : null;
         try { made = await this.makeCodex(r, action, p.sessionId || src); }
         catch (e) {
-          // Codex saves a thread only after its first turn, so a room closed before this seat ever took one has
-          // nothing to resume. Only a thread this room created (typedThreads, not forked or continued from the
-          // person's own sessions) that never spoke here may be replaced; everything else keeps failing.
+          // Codex saves a thread only after its first turn, so a room closed before this seat ever answered has
+          // nothing to resume. If it never spoke here: a copy is made again from the same source conversation, and
+          // a thread this room created starts fresh. Anything else (it spoke, or it continued someone's original)
+          // keeps failing: never drop history silently.
+          const quiet = action === 'continue' && e.noRollout && !this.seatSpoke(p.id) && !this.disposed;
           const ours = (p.typedThreads || []).includes(p.sessionId) && !p.forkFrom;
-          if (!(action === 'continue' && e.noRollout && ours && !this.seatSpoke(p.id)) || this.disposed) throw e;
-          log(`${p.id}: its saved Codex thread was never written (no turn yet); starting a fresh thread`);
-          this.pendingNotes = [...(this.pendingNotes || []), `Codex never saved ${p.label}'s earlier conversation because it had no replies yet, so ${p.label} starts a new one.`];
-          action = 'new'; made = await this.makeCodex(r, 'new');
+          if (quiet && p.forkFrom) {
+            log(`${p.id}: its saved Codex copy was never written (no turn yet); copying the source again`);
+            this.pendingNotes = [...(this.pendingNotes || []), `Codex never saved ${p.label}'s copy because it had no replies yet, so ${p.label} starts from a new copy of the same conversation.`];
+            src = p.forkFrom; action = 'fork'; made = await this.makeCodex(r, 'fork', src);
+          } else if (quiet && ours) {
+            log(`${p.id}: its saved Codex thread was never written (no turn yet); starting a fresh thread`);
+            this.pendingNotes = [...(this.pendingNotes || []), `Codex never saved ${p.label}'s earlier conversation because it had no replies yet, so ${p.label} starts a new one.`];
+            action = 'new'; made = await this.makeCodex(r, 'new');
+          } else throw e;
         }
         if (this.disposed) return;
         r.client = made.client; r.models = made.models; this.bindId(r, made.id);
         if (action === 'new') { p.typed = true; p.typedThreads = [...(p.typedThreads || []), made.id]; }
-        if (action === 'fork') { p.typed = false; p.forkFrom = src; if (join) m.forkedFrom = src; }
+        if (action === 'fork') { p.typed = false; p.forkFrom = src; }
         if (seedFrom) { let items = []; try { items = await r.client.recentMessages(seedFrom, 8); } catch (e) { log(`history read failed: ${e.message}`); } if (this.disposed) return; seeds.push({ owner: p.id, readers: others, items }); }
       } else {
-        const join = p.id === 'claude' && !p.sessionId && claudeFrom;
-        if (join) { p.forkFrom = join.id; m.claudeForkedFrom = join.id; }
         const src = p.sessionId ? null : p.forkFrom || null, seedFrom = shareSeed[p.id] ? src || p.sessionId : null;
         if (seedFrom) {
-          let items = []; try { const file = (join && join.path) || claudeHistory.fileFor(seedFrom); if (file) items = claudeHistory.recentMessages(file, 8); } catch (e) { log(`history read failed: ${e.message}`); }
+          let items = []; try { const file = claudeHistory.fileFor(seedFrom); if (file) items = claudeHistory.recentMessages(file, 8); } catch (e) { log(`history read failed: ${e.message}`); }
           seeds.push({ owner: p.id, readers: others, items });
         }
         r.client = this.makeClaude(r, p.sessionId, src); p.typed = true;
@@ -500,9 +505,9 @@ class RoomSession {
         }
         if (action === 'continue') {
           const recent = pick.mtime && Date.now() - pick.mtime < 120000;
-          const go = await vscode.window.showWarningMessage(`Continue "${String(pick.name || pick.id).slice(0, 60)}" as ${L}?`, { modal: true,
-            detail: `${recent ? 'It changed in the last two minutes, so it may be open elsewhere right now. ' : ''}This writes to that session directly. Wagon Wheel prevents another seat or room in this extension host from owning it, but cannot see other apps or VS Code windows. Close it there first, or fork instead.` }, 'Continue', 'Fork instead');
-          if (!go || !live()) return; if (go === 'Fork instead') action = 'fork';
+          const go = await vscode.window.showWarningMessage(`Keep going in "${String(pick.name || pick.id).slice(0, 60)}" as ${L}?`, { modal: true,
+            detail: `${recent ? 'It changed in the last two minutes, so it may be open somewhere else right now. ' : ''}${L} will add to that conversation directly. Wagon Wheel stops its other agents and rooms in this window from using it, but it can't see other apps or VS Code windows. Close it there first, or use a copy.` }, 'Keep going in the original', 'Use a copy instead');
+          if (!go || !live()) return; if (go === 'Use a copy instead') action = 'fork';
         }
       }
       if (!live() || unresolved()) { if (live()) room.note(`${L} was given new work in the meantime, so its conversation was not changed.`); return; }
@@ -768,9 +773,11 @@ async function openSession(context, session, opts) {
   try {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting local sessions…' }, () => session.boot(opts));
     session.postInit();
+    return true;
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
     vscode.window.showErrorMessage(`Wagon Wheel could not start: ${e.message}`); // the panel notice was posted by boot()
+    return false;
   } finally { refreshRooms(); } // a new room's file exists once it has booted
 }
 
@@ -817,15 +824,32 @@ async function startLists() {
   startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
   const v = s.claude.version;
   return {
-    conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) },
+    conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) }, // rows carry exists: the folder is still there
     models: { claude: commands.CLAUDE_CATALOG.filter((m) => atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: commands.CLAUDE_EFFORTS })), codex: startScreen.codexModels },
   };
+}
+
+// When was a conversation last written? Read now, not when the list was loaded: the screen can stay open a while.
+async function lastWritten(o, fallback) {
+  try {
+    if (o.provider === 'claude') { const f = claudeHistory.fileFor(o.id); return f ? fs.statSync(f).mtimeMs : fallback; }
+    const probe = new CodexClient({ exe: settings().codexExe, cwd: settings().cwd, log });
+    try { await probe.start(); const t = (await probe.listThreads(null, 100)).find((x) => x.id === o.id); return t && t.updatedAt ? t.updatedAt * 1000 : fallback; } finally { probe.stop(); }
+  } catch { return fallback; }
 }
 
 async function startFromForm(context, form) {
   const s = settings();
   const plan = startRoom.buildPlan(form, { lists: startScreen.lists, codexModels: startScreen.codexModels, defaultCwd: s.cwd, settings: s });
-  const recent = plan.originals.filter((o) => o.when && Date.now() - o.when < 120000);
+  // Keeping going in an original: refuse one another room already uses (open in this window, or saved), before the
+  // screen closes, so the person can still change the choice.
+  const saved = roomsView.listRooms(path.join(context.globalStorageUri.fsPath, 'rooms'));
+  for (const o of plan.originals) {
+    const room = saved.find((x) => x.seats.some((seat) => seat.provider === o.provider && seat.sessionId === o.id));
+    if (sessionClaims.isClaimed(o.provider, o.id) || room) throw new Error(`${o.label}: that conversation is already used by ${room ? `the room "${room.name}"` : 'another room'}. Use a copy instead.`);
+  }
+  const recent = [];
+  for (const o of plan.originals) { const when = await lastWritten(o, o.when); if (when && Date.now() - when < 120000) recent.push(o); }
   if (recent.length) {
     const go = await vscode.window.showWarningMessage(`${recent.map((o) => o.label).join(' and ')} will keep going in a conversation that changed in the last two minutes.`,
       { modal: true, detail: 'It may still be open in Claude Code, Codex or another window. Two apps writing to one conversation can mix up its history. A copy is safer.' }, 'Keep going in the original');
@@ -834,8 +858,10 @@ async function startFromForm(context, form) {
   const meta = newMeta(plan.name);
   meta.cwd = plan.seats.some((p) => p.cwd === s.cwd) ? s.cwd : plan.seats[0].cwd;
   meta.seats = plan.seats;
-  if (startScreen.panel) startScreen.panel.dispose();
-  await openSession(context, new RoomSession(context, meta, null), { shareSeed: plan.shareSeed });
+  const screen = startScreen.panel;
+  const ok = await openSession(context, new RoomSession(context, meta, null), { shareSeed: plan.shareSeed });
+  if (!ok) throw new Error('The room could not start. Its tab says why; you can change your choices here and try again.');
+  if (screen) screen.dispose();
   return true;
 }
 
@@ -853,7 +879,8 @@ async function openStartScreen(context, { existing = false } = {}) {
       if (m.type === 'ready') {
         const s = settings();
         post({ type: 'init', existing, defaults: { name: `Room ${new Date().toLocaleDateString()}`, folder: s.cwd, folderLabel: displayPath(s.cwd), userName: s.userName }, trusted: vscode.workspace.isTrusted });
-        startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => log(`start screen setup: ${e.message}`));
+        const unknown = (app) => ({ ready: false, text: `Couldn't check ${app}. It may still work.`, fix: null });
+        startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => { log(`start screen setup: ${e.message}`); post({ type: 'setup', trusted: true, claude: unknown('Claude Code'), codex: unknown('Codex') }); });
         startLists().then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
         post({ type: 'setup', ...(await startSetupStatus()) });

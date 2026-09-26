@@ -29,7 +29,7 @@ test('listRooms: newest activity first, skips files that are not rooms, and old 
   const rooms = roomsView.listRooms(dir);
   assert.deepStrictEqual(rooms.map((r) => r.name), ['newer  room', 'older']);
   assert.deepStrictEqual(rooms[0].seats.map((s) => s.label), ['Claude', 'Codex']);
-  assert.deepStrictEqual(rooms[1].seats, [{ label: 'Reader', provider: 'claude' }]);
+  assert.deepStrictEqual(rooms[1].seats, [{ label: 'Reader', provider: 'claude', sessionId: null }]);
   assert.ok(!JSON.stringify(rooms).includes('PRIVATE_TRANSCRIPT'), 'the list carries no transcript');
   assert.deepStrictEqual(roomsView.listRooms(path.join(dir, 'missing')), []);
 });

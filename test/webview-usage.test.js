@@ -95,3 +95,13 @@ test('connector tools show their tool name (and a readable server name), not the
   assert.match(h.ids.pop.textContent, /Tools used mostBash 20×, execute_sql 9×, supabase execute_sql 5×/);
   assert.doesNotMatch(h.ids.pop.textContent, /mcp__/);
 });
+
+test('an open usage popover updates when plan limits arrive, instead of going stale', () => {
+  const h = setup();
+  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
+  assert.match(h.ids.pop.textContent, /Shown after the first reply/);
+  h.receive({ type: 'quota', quota: { primary: { usedPercent: 12, windowDurationMins: 300 } } });
+  assert.equal(h.ids.pop.hidden, false); assert.match(h.ids.pop.textContent, /Codex · 5 hours12%/);
+  h.receive({ type: 'claudeUsage', usage: { session: { pct: 40 }, week: null, models: {} } });
+  assert.match(h.ids.pop.textContent, /Claude · current session40%/);
+});

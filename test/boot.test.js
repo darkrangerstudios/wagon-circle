@@ -119,16 +119,18 @@ for (const phase of ['start', 'new', 'load']) test(`closing during ACP ${phase} 
   }
 });
 
-for (const side of ['codex', 'claude']) test(`Join Existing: ${side} history reaches only the named peer, and Keep private seeds nothing`, async () => {
+for (const side of ['codex', 'claude']) test(`bringing in a ${side} conversation: shared messages reach the other agents, never an extra agent; Keep private seeds nothing`, async () => {
   experimentalAgents = ['gemini']; acpBehavior = {};
-  const opts = side === 'codex' ? { forkFrom: { id: 'source-codex' } } : { claudeFrom: { id: 'source-claude', path: '/synthetic' } };
   const marker = side === 'codex' ? 'CODEX_SEED_PRIVATE' : 'CLAUDE_SEED_PRIVATE';
   const peer = side === 'codex' ? 'claude' : 'codex';
   const opened = [];
   try {
     for (const share of [true, false]) {
-      const s = new RoomSession(context(), newMeta('join consent'), null); opened.push(s);
-      await s.boot({ ...opts, shareSeed: { [side]: share } });
+      const meta = newMeta('join consent');
+      meta.seats = [{ id: 'claude', label: 'Claude', provider: 'claude', cwd: os.tmpdir(), ...(side === 'claude' ? { forkFrom: 'source-claude' } : {}) },
+        { id: 'codex', label: 'Codex', provider: 'codex', cwd: os.tmpdir(), ...(side === 'codex' ? { forkFrom: 'source-codex', typed: false } : {}) }];
+      const s = new RoomSession(context(), meta, null); opened.push(s);
+      await s.boot({ shareSeed: { [side]: share } });
       assert.strictEqual(s.room.payloadFor(peer).text.includes(marker), share);
       assert.ok(!s.room.payloadFor('gemini').text.includes(marker));
       assert.ok(!s.room.payloadFor(side).text.includes(marker));
@@ -175,8 +177,14 @@ test('reopen: a Codex thread this room created that was never written starts fre
     assert.match(await refused(spoke), /thread\/resume failed/, 'history was expected: refuse instead of starting over');
     assert.ok(!fs.existsSync(roomLock.lockPath(spoke.file)), 'a room that failed to start releases its lock');
 
-    const forked = new RoomSession(context(), { ...newMeta('forked'), codexThreadId: 'th-fork', codexTypedThreads: ['th-fork'], forkedFrom: 'th-users-own', claudeSessionId: null }, state([]));
-    assert.match(await refused(forked), /thread\/resume failed/, 'a thread forked from the person\'s own session is never replaced');
+    // A copy that was never written is copied again from the same source; the person's original is never touched.
+    const forked = new RoomSession(context(), { ...newMeta('forked'), codexThreadId: 'th-fork', forkedFrom: 'th-users-own', claudeSessionId: null }, state([]));
+    await forked.boot();
+    assert.match(forked.slots.codex.seat.sessionId, /^th-fork-/); assert.strictEqual(forked.slots.codex.seat.forkFrom, 'th-users-own');
+    assert.ok(forked.room.state.transcript.some((e) => e.from === 'system' && /starts from a new copy of the same conversation/.test(e.text)));
+    forked.dispose();
+    const forkedSpoke = new RoomSession(context(), { ...newMeta('forked, talked'), codexThreadId: 'th-fork2', forkedFrom: 'th-users-own', claudeSessionId: null }, state([{ id: 1, from: 'codex', text: 'an answer', ts: 1 }]));
+    assert.match(await refused(forkedSpoke), /thread\/resume failed/, 'a copy that had answered is never silently replaced');
 
     const continued = new RoomSession(context(), { ...newMeta('continued'), codexThreadId: 'th-external', claudeSessionId: null }, state([]));
     assert.match(await refused(continued), /thread\/resume failed/, 'a continued external thread (not created by this room) is never replaced');
