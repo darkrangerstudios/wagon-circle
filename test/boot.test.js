@@ -229,3 +229,16 @@ test('Start a Room: any agent can start from a copy or the original, and sharing
     assert.ok(!s.room.payloadFor('orig').text.includes('CLAUDE_SEED_PRIVATE') && s.room.payloadFor('app').text.includes('CLAUDE_SEED_PRIVATE'));
   } finally { s.dispose(); }
 });
+
+test('a saved room exposes each seat\'s conversation id to the rooms list (what the Start screen\'s conflict check reads)', async () => {
+  const roomsView = require('../src/roomsView');
+  const ctx = context(), meta = newMeta('holds an original');
+  meta.seats = [{ id: 'claude', label: 'Claude', provider: 'claude', cwd: os.tmpdir(), sessionId: 'cl-orig' }, { id: 'codex', label: 'Codex', provider: 'codex', cwd: os.tmpdir() }];
+  const s = new RoomSession(ctx, meta, null);
+  await s.boot(); s.dispose(); // dispose saves the room file the way a real close does
+  const saved = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+  assert.ok(Array.isArray(saved.meta.participants) && saved.meta.participants.every((p) => !('sessionId' in p)), 'participants is the display copy, without ids');
+  const [room] = roomsView.listRooms(path.dirname(s.file));
+  assert.deepStrictEqual(room.seats.find((x) => x.provider === 'claude').sessionId, 'cl-orig');
+  assert.match(room.seats.find((x) => x.provider === 'codex').sessionId, /^th-new-/);
+});

@@ -21,7 +21,7 @@ function setupLine(p) {
   if (!p) return { ready: false, text: 'Not checked yet.', fix: null };
   if (p.installation === 'missing' || p.issue === 'missing') return { ready: false, text: `${APPS[p.provider]} isn't installed on this computer.`, fix: 'install' };
   if (p.issue === 'not-executable') return { ready: false, text: `${APPS[p.provider]} is installed but can't be started.`, fix: 'install' };
-  if (p.installation !== 'available') return { ready: false, text: `Couldn't check ${APPS[p.provider]}. It may still work.`, fix: 'install' };
+  if (p.installation !== 'available') return { ready: false, unknown: true, text: `Couldn't check ${APPS[p.provider]}. It may still work.`, fix: 'install' };
   if (p.authentication === 'signed-out') return { ready: false, text: `${APPS[p.provider]} ${p.version} is installed, but you're signed out.`, fix: 'signin' };
   if (p.authentication === 'present') return { ready: true, text: `Ready: ${APPS[p.provider]} ${p.version}, signed in.`, fix: null };
   return { ready: true, text: `${APPS[p.provider]} ${p.version} is installed. Sign-in couldn't be confirmed.`, fix: null };

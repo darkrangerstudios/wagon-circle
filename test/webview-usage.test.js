@@ -105,3 +105,18 @@ test('an open usage popover updates when plan limits arrive, instead of going st
   h.receive({ type: 'claudeUsage', usage: { session: { pct: 40 }, week: null, models: {} } });
   assert.match(h.ids.pop.textContent, /Claude · current session40%/);
 });
+
+test('an open "More detail" stays open when usage refreshes, and a streaming turn does not re-render the popover', () => {
+  const h = setup();
+  h.receive({ type: 'localUsage', usage: local });
+  walk(h.ids.quota).find((e) => e.tagName === 'button').fire('click');
+  const details = () => walk(h.ids.pop).filter((e) => e.tagName === 'details');
+  details()[0].open = true;
+  const before = walk(h.ids.pop).length ? h.ids.pop.children[0] : null;
+  h.receive({ type: 'status', name: 'codex', busy: true });
+  assert.strictEqual(h.ids.pop.children[0], before, 'no rebuild while a turn is running');
+  h.receive({ type: 'status', name: 'codex', busy: false, participantUsage: { fresh: 1, cached: 2, cacheWrite: 0, output: 1 } });
+  assert.notStrictEqual(h.ids.pop.children[0], before, 'rebuilt when the turn ended');
+  assert.strictEqual(details()[0].open, true, 'the open section stays open');
+  assert.match(h.ids.pop.textContent, /This room/);
+});

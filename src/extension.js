@@ -798,6 +798,7 @@ function startHtml(webview, extUri) {
 
 const displayPath = (p) => { const home = os.homedir(); return p && home && p.startsWith(home) ? `~${p.slice(home.length)}` : p; };
 
+const setupUnknown = () => { const u = (app) => ({ ready: false, unknown: true, text: `Couldn't check ${app}. It may still work.`, fix: null }); return { type: 'setup', trusted: vscode.workspace.isTrusted, claude: u('Claude Code'), codex: u('Codex') }; };
 async function startSetupStatus() {
   if (!vscode.workspace.isTrusted) return { trusted: false, claude: null, codex: null };
   const s = settings();
@@ -859,7 +860,11 @@ async function startFromForm(context, form) {
   meta.cwd = plan.seats.some((p) => p.cwd === s.cwd) ? s.cwd : plan.seats[0].cwd;
   meta.seats = plan.seats;
   const screen = startScreen.panel;
-  const ok = await openSession(context, new RoomSession(context, meta, null), { shareSeed: plan.shareSeed });
+  // A retry closes the tab of the attempt that failed, so failed tries don't pile up.
+  if (startScreen.failed && startScreen.failed.panel) startScreen.failed.panel.dispose();
+  const session = new RoomSession(context, meta, null);
+  const ok = await openSession(context, session, { shareSeed: plan.shareSeed });
+  startScreen.failed = ok ? null : session;
   if (!ok) throw new Error('The room could not start. Its tab says why; you can change your choices here and try again.');
   if (screen) screen.dispose();
   return true;
@@ -879,11 +884,10 @@ async function openStartScreen(context, { existing = false } = {}) {
       if (m.type === 'ready') {
         const s = settings();
         post({ type: 'init', existing, defaults: { name: `Room ${new Date().toLocaleDateString()}`, folder: s.cwd, folderLabel: displayPath(s.cwd), userName: s.userName }, trusted: vscode.workspace.isTrusted });
-        const unknown = (app) => ({ ready: false, text: `Couldn't check ${app}. It may still work.`, fix: null });
-        startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => { log(`start screen setup: ${e.message}`); post({ type: 'setup', trusted: true, claude: unknown('Claude Code'), codex: unknown('Codex') }); });
+        startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => { log(`start screen setup: ${e.message}`); post(setupUnknown()); });
         startLists().then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
-        post({ type: 'setup', ...(await startSetupStatus()) });
+        try { post({ type: 'setup', ...(await startSetupStatus()) }); } catch (e) { log(`start screen setup: ${e.message}`); post(setupUnknown()); }
       } else if (m.type === 'pickFolder' && Number.isInteger(m.index)) {
         const f = await vscode.window.showOpenDialog({ title: 'Choose the folder this agent works in', canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(settings().cwd), openLabel: 'Use this folder' });
         if (f && f[0]) post({ type: 'folder', index: m.index, folder: f[0].fsPath, folderLabel: displayPath(f[0].fsPath) });

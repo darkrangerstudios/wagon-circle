@@ -57,7 +57,7 @@
     const foot = el('footer');
     const summary = el('p', 'summary', summaryText()); foot.appendChild(summary);
     if (S.error) { const e = el('div', 'error', S.error); e.setAttribute('role', 'alert'); foot.appendChild(e); }
-    const notReady = S.agents.filter((a) => S.setup && S.setup[a.provider] && !S.setup[a.provider].ready).map((a) => a.label);
+    const notReady = S.agents.filter((a) => S.setup && S.setup[a.provider] && !S.setup[a.provider].ready && !S.setup[a.provider].unknown).map((a) => a.label); // "couldn't check" is not "not ready"
     if (notReady.length) foot.appendChild(help(`${notReady.join(' and ')} ${notReady.length > 1 ? 'aren\'t' : 'isn\'t'} ready yet and won't be able to answer until ${notReady.length > 1 ? 'they are' : 'it is'}. You can still start the room.`));
     const go = el('button', 'primary', S.busy ? 'Starting…' : 'Start room'); go.disabled = S.busy;
     go.addEventListener('click', start);
@@ -69,7 +69,11 @@
   function statusLine(a) {
     const box = el('div', 'status');
     const st = S.setup && S.setup[a.provider];
-    if (!S.trusted) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', `Trust this folder in VS Code to check ${APP[a.provider]}.`)); return box; }
+    if (!S.trusted) {
+      box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', `Trust this folder in VS Code to check ${APP[a.provider]}.`));
+      const r = el('button', 'link', 'Check again'); r.title = 'Check again after you trust the folder.'; r.addEventListener('click', () => { S.setup = null; render(); vscode.postMessage({ type: 'recheck' }); }); box.appendChild(r);
+      return box;
+    }
     if (!S.setup) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', `Checking ${APP[a.provider]}…`)); return box; }
     if (!st) { box.appendChild(el('span', 'dot wait')); box.appendChild(el('span', 'muted', 'Couldn\'t check this app.')); return box; }
     box.appendChild(el('span', `dot ${st.ready ? 'ok' : 'bad'}`));
@@ -210,7 +214,7 @@
       S.init = true; S.existing = !!m.existing; S.trusted = m.trusted !== false; S.name = m.defaults.name; S.folder = m.defaults.folder; S.folderLabel = m.defaults.folderLabel;
       S.agents = [agent('claude', 1), agent('codex', 1)];
     } else if (m.type === 'mode') { if (m.existing) for (const a of S.agents) if (a.start === 'fresh') a.start = 'copy'; }
-    else if (m.type === 'setup') S.setup = { claude: m.claude, codex: m.codex };
+    else if (m.type === 'setup') { S.setup = { claude: m.claude, codex: m.codex }; if (typeof m.trusted === 'boolean') S.trusted = m.trusted; }
     else if (m.type === 'lists') S.lists = { conversations: m.conversations || { claude: [], codex: [] }, models: m.models || { claude: [], codex: [] } };
     else if (m.type === 'folder' && S.agents[m.index]) { S.agents[m.index].folder = m.folder; S.agents[m.index].folderLabel = m.folderLabel; }
     else if (m.type === 'busy') S.busy = !!m.on;

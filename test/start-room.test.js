@@ -74,7 +74,7 @@ test('setup lines and conversation rows read as plain English and carry no contr
 });
 
 // The host side of the screen, with VS Code, the CLIs and their histories stubbed.
-function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [] } = {}) {
+function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [], bootFails = null } = {}) {
   const disposable = { dispose() {} };
   const rec = { panels: [], warnings: [], opened: [] };
   const convDir = dir();
@@ -92,7 +92,8 @@ function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms =
           onDidDispose: (fn) => { p.onClose = fn; }, reveal() { p.revealed++; }, dispose() { p.disposed = true; if (p.onClose) p.onClose(); } };
         rec.panels.push(p); return p;
       },
-      withProgress: async () => {},
+      withProgress: async () => { if (bootFails && bootFails.on) throw new Error('synthetic boot failure'); },
+      showErrorMessage: async () => {},
     },
     commands: { registerCommand: (id, fn) => { (rec.cmd ||= {})[id] = fn; return disposable; }, executeCommand: async () => {} },
     EventEmitter: class { constructor() { this.event = () => disposable; } fire() {} },
@@ -229,7 +230,9 @@ test('page: add and remove agents up to six, change a folder, and show the host\
 
 test('host: an original another saved room already uses is refused while the screen is still open', async () => {
   const id = '11111111-2222-4333-8444-555555555555';
-  const { rec } = loadHost({ rooms: [{ meta: { id, name: 'Earlier room', participants: [{ id: 'claude', label: 'Claude', provider: 'claude', sessionId: 'cl-1' }] }, state: { transcript: [] } }] });
+  // The shape a room saves: meta.seats carries each seat's conversation id; meta.participants is a display copy without it.
+  const { rec } = loadHost({ rooms: [{ meta: { id, name: 'Earlier room', seats: [{ id: 'claude', label: 'Claude', provider: 'claude', cwd: os.tmpdir(), sessionId: 'cl-1' }],
+    participants: [{ id: 'claude', label: 'Claude', provider: 'claude', cwd: os.tmpdir() }] }, state: { transcript: [] } }] });
   await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
   await p.recv({ type: 'ready' }); await settle();
   await p.recv({ type: 'start', form: { name: 'r', agents: [{ provider: 'claude', label: 'Claude', start: 'original', conversation: 'cl-1' }] } });
@@ -256,4 +259,30 @@ test('page: an untrusted folder says why it can\'t check, and a Codex conversati
   const t = pg.text();
   assert.ok(t.includes('~/w') && !t.includes('Uses the folder where this conversation started'), 'the folder shown is the one that will be used');
   assert.ok(t.includes('Codex can also read files elsewhere on this computer'), 'Codex\'s read scope is stated plainly');
+});
+
+test('host: a room that fails to start sends a sentence back, keeps the screen, and a retry closes the failed tab', async () => {
+  const bootFails = { on: true };
+  const { rec } = loadHost({ bootFails });
+  await rec.cmd['wagonWheel.newRoom'](); const screen = rec.panels[0];
+  await screen.recv({ type: 'ready' }); await settle();
+  const form = { name: 'r', agents: [{ provider: 'claude', label: 'Claude', start: 'fresh' }] };
+  await screen.recv({ type: 'start', form });
+  assert.match(screen.sent.at(-2).text, /The room could not start/); assert.strictEqual(screen.disposed, false);
+  const failedTab = rec.panels[1];
+  bootFails.on = false;
+  await screen.recv({ type: 'start', form });
+  assert.strictEqual(failedTab.disposed, true, 'the failed attempt\'s tab is closed');
+  assert.strictEqual(screen.disposed, true); assert.strictEqual(rec.panels.length, 3);
+});
+
+test('page: "couldn\'t check" is not called "not ready", and trusting the folder then Check again updates the card', () => {
+  const pg = loadPage();
+  pg.receive({ type: 'init', existing: false, defaults: { name: 'R', folder: '/w', folderLabel: '~/w' }, trusted: false });
+  pg.click('Check again');
+  assert.deepStrictEqual(pg.sent.at(-1), { type: 'recheck' });
+  pg.receive({ type: 'setup', trusted: true, claude: { ready: false, unknown: true, text: 'Couldn\'t check Claude Code. It may still work.', fix: null }, codex: { ready: true, text: 'Ready: Codex 1.0.0, signed in.', fix: null } });
+  const t = pg.text();
+  assert.ok(t.includes('Couldn\'t check Claude Code. It may still work.') && !t.includes('Trust this folder'));
+  assert.ok(!t.includes('won\'t be able to answer'), 'an unknown check does not claim the agent is broken');
 });

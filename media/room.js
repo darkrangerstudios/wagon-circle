@@ -450,7 +450,17 @@
     }
   }
   // An open usage popover re-renders in place when its numbers change (limits, this room, this computer).
-  function refreshUsagePop() { if (!$('pop').hidden && $('pop').dataset.for === 'usage') { closePop(); openUsage(); } }
+  function refreshUsagePop() {
+    const pop = $('pop');
+    if (pop.hidden || pop.dataset.for !== 'usage') return;
+    // Keep what the person had open: which "More detail" sections, and where they had scrolled.
+    const open = walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details').map((d) => d.open);
+    const top = pop.scrollTop;
+    closePop(); openUsage();
+    walk(pop).filter((e) => e.tagName && e.tagName.toLowerCase() === 'details').forEach((d, i) => { if (open[i]) d.open = true; });
+    pop.scrollTop = top;
+  }
+  function walk(node) { const out = []; for (const c of node.children || []) out.push(c, ...walk(c)); return out; }
   function closePop() { $('pop').hidden = true; $('pop').classList.toggle('usagepop', false); }
   function cmd(text) { vscode.postMessage({ type: 'command', text }); }
   function openPop(name) {
@@ -556,7 +566,7 @@
       if (m.busy) since[m.name] = m.since || Date.now(); else { delete act[m.name]; delete since[m.name]; }
       if (m.participantUsage) participantUsage[m.name] = m.participantUsage;
       if (typeof m.participantCost === 'number') participantCost[m.name] = m.participantCost;
-      renderWho(); renderQuota(); refreshUsagePop();
+      renderWho(); renderQuota(); if (!m.busy) refreshUsagePop(); // usage changes when a turn ends, not while it streams
     }
     else if (m.type === 'quota') { quota = m.quota; renderQuota(); refreshUsagePop(); }
     else if (m.type === 'localUsage') { local = m.usage; renderQuota(); refreshUsagePop(); } // a refresh while open re-renders it
