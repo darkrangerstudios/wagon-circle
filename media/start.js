@@ -8,7 +8,7 @@
   const MAX = 6;
   // Each app's own words for its effort control (Claude Code 2.1.282; the Codex extension's English labels).
   const EFFORT = {
-    claude: { title: 'Effort', hint: 'Set how hard the model tries. Higher takes longer and uses more of your plan.', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' } },
+    claude: { title: 'Effort', hint: 'Set how hard the model tries. Higher takes longer and uses more of your plan.', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultracode: 'Ultracode' } },
     codex: { title: 'Reasoning effort', hint: 'How much Codex reasons before answering. Higher takes longer and uses more of your plan; Ultra consumes usage limits faster.', levels: { none: 'None', minimal: 'Minimal', low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra', persistent: 'Persistent' } },
   };
   const S = { init: false, trusted: true, name: '', folder: '', folderLabel: '', agents: [], setup: null, lists: null, busy: false, error: '', existing: false };

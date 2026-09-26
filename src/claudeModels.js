@@ -6,6 +6,8 @@
 const { spawn } = require('child_process');
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Claude Code also lists Ultracode among its effort levels: xhigh plus dynamic workflow orchestration (claudeClient.js).
+const ULTRACODE = 'ultracode';
 // Claude Code's own labels for its Effort control (webview Q95 in 2.1.282).
 const EFFORT_LABELS = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
 const TIER = { mythos: 6, fable: 5, opus: 4, sonnet: 3, haiku: 1 };
@@ -70,4 +72,4 @@ function query(exe, { cwd = require('os').tmpdir(), timeoutMs = 15000, spawnFn =
   });
 }
 
-module.exports = { FALLBACK: tierSort(FALLBACK), EFFORTS, EFFORT_LABELS, fromCli, tierSort, familyOf, query };
+module.exports = { FALLBACK: tierSort(FALLBACK), EFFORTS, ULTRACODE, EFFORT_LABELS, fromCli, tierSort, familyOf, query };

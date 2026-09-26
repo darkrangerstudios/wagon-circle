@@ -3,7 +3,7 @@
   "displayName": "Wagon Wheel",
   "icon": "media/icon.png",
   "description": "One VS Code room for your local Claude Code and Codex sessions. Named participants run as private child processes over stdio: no daemon, no open ports.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "darkrangerstudios",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -278,6 +278,14 @@
             ],
             "order": 1,
             "description": "When agent work becomes a task."
+          },
+          "wagonWheel.agentPostsPerTask": {
+            "type": "number",
+            "default": 3,
+            "minimum": 0,
+            "maximum": 20,
+            "order": 5,
+            "description": "How many times each agent may post on its own per task, when a background job it started (Ultracode) finishes. Each post uses a task turn and goes to you; it never wakes another agent. 0 turns this off."
           },
           "wagonWheel.taskTurns": {
             "type": "number",

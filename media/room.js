@@ -3,7 +3,7 @@
   const vscode = acquireVsCodeApi();
   // The extension host keeps its code until the window reloads, but this script and the stylesheet load fresh.
   // If the page was built by a different version, say so instead of rendering a broken layout.
-  const EXPECT = '0.6.1';
+  const EXPECT = '0.7.0';
   if (document.body.dataset.wc !== EXPECT) {
     document.body.textContent = '';
     const box = document.createElement('div');
@@ -20,7 +20,7 @@
   const participantUsage = {}, participantCost = {};
   let busy = {}, local = null, quota = null, cusage = null, meta = {}, specs = [], controls = null, ideSummary = null;
   let pending = [];                                  // attachments waiting to be sent
-  const drafts = {}, act = {}, since = {};           // in-progress replies per agent
+  const drafts = {}, act = {}, since = {}, jobs = {};           // in-progress replies per agent
   const menu = { items: [], sel: 0, open: false };
   let ticker = null;
   let task = null, taskMode = 'auto', taskDefaults = null, presets = {}, typedAgents = {};
@@ -111,7 +111,7 @@
   }
   // Each app's own words for its effort control and levels (Claude Code 2.1.282; the Codex extension's English labels).
   const EFFORT = {
-    claude: { title: 'Effort', hint: 'Set how hard the model tries', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' } },
+    claude: { title: 'Effort', hint: 'Set how hard the model tries', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultracode: 'Ultracode' } },
     codex: { title: 'Reasoning effort', hint: '', levels: { none: 'None', minimal: 'Minimal', low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra', persistent: 'Persistent' } },
   };
   const effortName = (kind, v) => (EFFORT[kind] && EFFORT[kind].levels[v]) || v;
@@ -161,6 +161,12 @@
     const { row, col, head } = agentShell(entry.from, entry.kind === 'history' ? '' : [answers.length ? `answers ${answers.join(', ')}` : '', entry.model || '', time].filter(Boolean).join(' · '));
     if (entry.ts && entry.kind !== 'history') head.title = fullTime(entry.ts);
     if (entry.kind === 'history') row.classList.add('history');
+    if (entry.kind === 'post') {
+      row.classList.add('post');
+      const j = entry.jobs || [];
+      const h = el('div', 'reqhead', j.length ? `posted on its own · background job ${j.map((x) => x.status || 'finished').join(', ')}` : 'posted on its own');
+      if (j.length) h.title = j.map((x) => x.summary).filter(Boolean).join('\n'); col.appendChild(h);
+    }
     col.appendChild(body(entry.text));
     if (entry.diff) { const d = el('details', 'fold'); d.open = true; d.appendChild(el('summary', null, 'Changes this turn')); d.appendChild(diffCard(entry.diff)); col.appendChild(d); }
     if (entry.steps && entry.steps.length || entry.took) {
@@ -204,8 +210,13 @@
     for (const n of Object.keys(busy)) if (busy[n]) {
       w.appendChild(el('span', `w ${provider(n)}`, `${NAMES[n]} · ${act[n] ? act[n].label : 'starting'} · ${secs(Date.now() - (since[n] || Date.now()))}`));
     }
+    // Background jobs keep running after a reply ends; their agent reports back in the room when they finish.
+    for (const n of Object.keys(jobs)) if (!busy[n] && jobs[n].length) {
+      const j = el('span', `w ${provider(n)} job`, `${NAMES[n]} · ${jobs[n].length} background job${jobs[n].length === 1 ? '' : 's'} running`);
+      j.title = `${jobs[n].map((x) => x.description).join('\n')}\n${NAMES[n]} posts the result here when it finishes. Stop ends it.`; w.appendChild(j);
+    }
     const any = Object.values(busy).some(Boolean), typed = !!(input.value.trim() || pending.length);
-    $('stop').hidden = !any; $('send').hidden = !!any && !typed;
+    $('stop').hidden = !any && !Object.values(jobs).some((x) => x.length); $('send').hidden = !!any && !typed;
     const steering = any && typed && !input.value.trim().startsWith('/');
     $('send').textContent = steering ? '↪' : '↑';
     $('send').title = steering ? `Steer ${Object.keys(busy).filter((n) => busy[n]).map((n) => NAMES[n]).join(' and ')} now (Enter) · ${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter queues it instead` : 'Send (Enter)';
@@ -500,7 +511,7 @@
       if (words.hint) e.appendChild(el('small', 'note', words.hint));
       const seg = el('div', 'seg');
       for (const v of efforts) {
-        const b = el('button', v === c.effort ? 'on' : '', effortName(kind, v)); b.title = v === 'ultra' ? 'Consumes usage limits faster' : `${words.title}: ${effortName(kind, v)}`;
+        const b = el('button', v === c.effort ? 'on' : '', effortName(kind, v)); b.title = v === 'ultra' ? 'Consumes usage limits faster' : v === 'ultracode' ? 'Extra high + dynamic workflow orchestration. Workflow agents can only read, and results are posted here when they finish.' : `${words.title}: ${effortName(kind, v)}`;
         b.addEventListener('click', () => { cmd(`/${name} effort ${v}`); closePop(); }); seg.appendChild(b);
       }
       e.appendChild(seg); pop.appendChild(e);
@@ -589,8 +600,11 @@
       for (const id of Object.keys(participantUsage)) delete participantUsage[id];
       for (const id of Object.keys(participantCost)) delete participantCost[id];
       Object.assign(participantUsage, m.participantUsage || {}); Object.assign(participantCost, m.participantCost || {});
+      for (const id of Object.keys(jobs)) delete jobs[id];
+      for (const [id, c] of Object.entries(controls || {})) if (c && c.jobs && c.jobs.length) jobs[id] = c.jobs;
       renderQuota(); renderChips(); renderWho(); renderTask(); log.scrollTop = log.scrollHeight;
     } else if (m.type === 'message') { setDraft(m.entry.from, null); add(render(m.entry)); }
+    else if (m.type === 'jobs') { jobs[m.name] = m.jobs || []; renderWho(); }
     else if (m.type === 'draft') setDraft(m.name, m.text);
     else if (m.type === 'activity') setActivity(m);
     else if (m.type === 'status') {

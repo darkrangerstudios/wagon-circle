@@ -51,6 +51,7 @@ function label(entry, human, to, LABEL = module.exports.LABEL) {
   if (entry.from === 'human' && entry.kind === 'steer') return `[${human}, to ${entry.steer.map((n) => LABEL[n]).join(' and ')} mid-turn]`;
   if (entry.from === 'human') return `[${human}]`;
   if (entry.from === 'system') return '[Wagon Wheel notice]';
+  if (entry.kind === 'post') return `[${LABEL[entry.from]} — posted on its own to ${human}${(entry.jobs || []).length ? ' after a background job finished' : ''}; relayed by Wagon Wheel, not ${human}. Nobody asked you to act on it]`;
   return `[${LABEL[entry.from]} — relayed by Wagon Wheel, not ${human}]`;
 }
 
@@ -70,8 +71,9 @@ class Room extends EventEmitter {
   // suggestion the human can send (DESIGN.md "Structured assistance"). proseHandoffs: true restores the
   // pre-v0.5 automatic routing; the extension never sets it (kept for the legacy router tests).
   // readHistory(requester, args): shared session history (extension glue over sessionHistory.js); optional.
+  // postCap: most posts one agent may make on its own (see unprompted) per task, or per human message outside a task.
   // labels: display names by participant id (defaults: Claude, Codex, else the id capitalised).
-  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false, readHistory = null, labels = {} }) {
+  constructor({ agents, hopCap = 2, state = null, humanName = 'You', defaultTarget = 'claude', bothMode = 'sequential', labelFor = null, maxTurns = 2, now = Date.now, proseHandoffs = false, readHistory = null, labels = {}, postCap = 3 }) {
     super();
     this.agents = agents; this.hopCap = hopCap; this.human = humanName;
     this.names = Object.keys(agents);
@@ -79,6 +81,7 @@ class Room extends EventEmitter {
     this.labels = { ...LABEL, ...Object.fromEntries(this.names.map((n) => [n, labels[n] || LABEL[n] || n[0].toUpperCase() + n.slice(1)])) };
     this.defaultTarget = defaultTarget; this.bothMode = bothMode; this.labelFor = labelFor;
     this.maxTurns = maxTurns; this.turns = this._each(0); this.turnNoted = {};
+    this.postCap = postCap; this.lastRun = this._each(0);
     this.state = state || { transcript: [], cursors: this._each(0), lastTargets: [...this.names], seq: 0 };
     // A participant added to an existing room starts at the present: the room's past is not replayed into it.
     for (const n of this.names) if (!Number.isInteger(this.state.cursors[n])) this.state.cursors[n] = this.state.transcript.length;
@@ -226,7 +229,7 @@ class Room extends EventEmitter {
       if (!this.turnNoted[name]) { this.turnNoted[name] = true; this.note(`${this.labels[name]} has had its ${this.maxTurns} turns for this message; waiting on ${this.human}.`); }
       return;
     }
-    this.held.delete(name);
+    this.held.delete(name); this.lastRun[name] = run; // background jobs started in this turn belong to this run
     const payload = this.payloadFor(name, fresh);
     for (const e of fresh) markKnown(e, name);
     this._advance(name);
@@ -275,6 +278,53 @@ class Room extends EventEmitter {
       const next = this.pending[name]; this.pending[name] = 0;
       if (next && this._live(next)) this.deliver(name, next);
     }
+  }
+
+  // A turn an agent started on its own: Claude reporting on a background job (Ultracode workflow) that finished after
+  // its reply ended. The post is visible to everyone and addressed to the human; it wakes nobody (other agents read
+  // it with their next delivery, and only request_assistance asks one to act). Each post is a task turn, at most
+  // postCap per agent per task (or per human message outside a task). A paused task holds the post until Resume;
+  // Stop discards it. Returns reply handlers for the client, or null to have the turn stopped.
+  unprompted(name, { jobs = [] } = {}) {
+    if (!this.agents[name] || this.busy[name]) return null;
+    const run = this.lastRun[name] || this.run;
+    if (!this._live(run)) return null; // the job belonged to work the human stopped
+    const L = this.labels[name], t = this.tasks.active(), what = jobs.length ? 'finished a background job' : 'started a reply on its own';
+    const key = t ? t.id : `run${this.run}`;
+    if (!this.state.posts || this.state.posts.key !== key) this.state.posts = { key, counts: {}, noted: {} };
+    const posts = this.state.posts, used = posts.counts[name] || 0;
+    const refuse = (why) => { if (!posts.noted[name]) { posts.noted[name] = true; this.note(`${L} ${what}, but ${why}, so its report wasn't posted. Ask ${L} for the result.`); } this.emit('changed', this.state); return null; };
+    if (used >= this.postCap) return refuse(this.postCap ? `it has already posted ${this.postCap} update${this.postCap === 1 ? '' : 's'} on its own ${t ? `for task ${t.id}` : 'since your last message'}` : 'agents are set not to post on their own');
+    if (t) { this.tasks.checkTime(); if (t.status === 'exhausted' || t.limits.turns - t.used.turns <= 0) return refuse(`task ${t.id} has used its allowance`); }
+    posts.counts[name] = used + 1;
+    if (t) { this.tasks.recordTurn(name); this._taskChanged(); }
+    const ctx = { run, taskId: t ? t.id : null, generation: t ? t.generation : 0 };
+    this.busy[name] = true; this.emit('status', { name, busy: true, since: Date.now() });
+    const steps = [], started = Date.now();
+    const end = () => {
+      const tt = ctx.taskId && this.tasks.get(ctx.taskId);
+      if (tt) this.tasks.addUsage(tt.id, name, this.agents[name].lastTurnUsage || null);
+      if (tt) this._taskChanged(); else this.emit('changed', this.state);
+      this.busy[name] = false; this.emit('status', { name, busy: false }); this.emit('draft', { name, text: null });
+      const next = this.pending[name]; this.pending[name] = 0;
+      if (next && this._live(next)) this.deliver(name, next);
+    };
+    return {
+      onDelta: (partial) => this.emit('draft', { name, text: partial }),
+      onActivity: (a) => { if (a.phase === 'diff') return; if (a.step) steps.push(a.label); this.emit('activity', { name, ...a }); },
+      onTool: (tool, args) => this._onTool(name, tool, args, ctx),
+      resolve: (text) => {
+        if (this._live(run) && String(text || '').trim()) {
+          const model = this.labelFor ? this.labelFor(name) : null;
+          const post = { kind: 'post', to: ['human'], took: Date.now() - started, ...(jobs.length ? { jobs: jobs.map((j) => ({ status: j.status, summary: j.summary })) } : {}), ...(model ? { model } : {}), ...(steps.length ? { steps } : {}) };
+          const cur = this.tasks.active();
+          if (cur && cur.status === 'paused') { (this.state.heldPosts || (this.state.heldPosts = [])).push({ from: name, text, ...post }); this.note(`${L} ${what}. Its report is held until you resume the task.`); }
+          else this._append(name, text, post);
+        }
+        end();
+      },
+      reject: (e) => { if (!e || !e.stopped) this._append('system', `${L}'s report failed: ${e ? e.message : 'unknown error'}`, { kind: 'error' }); end(); }
+    };
   }
 
   // A turn that did not complete: its input (and steers accepted during it) becomes deliverable again, and the
@@ -333,7 +383,9 @@ class Room extends EventEmitter {
   resumeTask() {
     const resumed = this.tasks.resume('human');
     if (!resumed && !this.held.size) return;
-    this.heldNoted = null; if (resumed) this.note(`Task resumed by ${this.human}.`); this._taskChanged();
+    this.heldNoted = null; if (resumed) this.note(`Task resumed by ${this.human}.`);
+    for (const p of (this.state.heldPosts || []).splice(0)) { const { from, text, ...rest } = p; this._append(from, text, rest); }
+    this._taskChanged();
     const held = [...this.held]; this.held.clear();
     for (const n of held) this.deliver(n, this.run);
   }
@@ -368,7 +420,9 @@ class Room extends EventEmitter {
   stopAll() {
     this.emit('stop'); // native session changes obey the same Stop boundary as turns
     this.cancelledThrough = this.state.cancelledThrough = this.run; this.pending = this._each(0); this.held.clear();
+    const held = (this.state.heldPosts || []).splice(0).length;
     if (this.tasks.stop()) this._taskChanged();
+    if (held) this.note(`${held} held report${held === 1 ? '' : 's'} from background jobs discarded.`);
     for (const n of this.names) if (this.busy[n] && this.agents[n] && this.agents[n].interrupt) this.agents[n].interrupt();
     this.note(`Stopped by ${this.human}.`);
   }

@@ -19,15 +19,24 @@ function describeTool(name, input = {}) {
   if (name === 'Read') return `reading ${base(input.file_path)}`;
   if (name === 'Grep') return `searching for "${clip(input.pattern, 40)}"`;
   if (name === 'Glob') return `listing ${clip(input.pattern, 40)}`;
+  if (name === 'Workflow') return 'starting a background workflow';
   return `using ${name}`;
 }
 
+// Ultracode is one of Claude Code's effort levels ("xhigh + dynamic workflow orchestration"): the session runs at
+// xhigh with the Workflow tool, whose agents inherit this process's read-only tools and folder confinement.
+const { ULTRACODE } = require('./claudeModels');
+
 class ClaudeClient {
   // tools: typed room tools ([{name, description, inputSchema}]), answered by the current send()'s onTool.
-  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], tools = [], log = () => {}, onNotice = () => {}, onSession = () => {} }) {
-    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, tools, log, onNotice, onSession });
+  // onUnprompted({ jobs }): Claude started a turn nobody sent, after a background job finished. Return reply
+  // handlers ({ onDelta, onActivity, onTool, resolve, reject }) to take it, or null to stop that turn.
+  // onJobs(jobs): the background jobs running now, [{ id, description }].
+  constructor({ exe, cwd, model, effort = null, fast = false, systemPrompt, sessionId = null, forkFrom = null, addDirs = [], tools = [], log = () => {}, onNotice = () => {}, onSession = () => {}, onUnprompted = () => null, onJobs = () => {} }) {
+    Object.assign(this, { exe, cwd, model, effort, fast, systemPrompt, sessionId, forkFrom, addDirs, tools, log, onNotice, onSession, onUnprompted, onJobs });
     this.typed = tools.length > 0;
     this.proc = null; this.waiter = null; this.totalCostUsd = 0; this.steerQueue = []; this.reqId = 0;
+    this.jobs = []; this.finished = [];
   }
 
   _args() {
@@ -35,13 +44,15 @@ class ClaudeClient {
     // settings files (their allow rules once let the room's Claude run shell commands) and confines file tools to
     // the working directories; --tools limits the built-in set to reading. --allowedTools then lets the read
     // tools and our own room tools run without prompting, and dontAsk refuses everything else.
+    const ultra = this.effort === ULTRACODE, builtIn = ultra ? READ_ONLY_TOOLS.concat('Workflow') : READ_ONLY_TOOLS;
     const a = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--include-partial-messages', '--restricted', '--tools', READ_ONLY_TOOLS.join(','),
-      '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
+      '--include-partial-messages', '--restricted', '--tools', builtIn.join(','),
+      '--permission-mode', 'dontAsk', '--allowedTools', builtIn.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: this.typed ? { [SERVER]: { type: 'sdk', name: SERVER } } : {} }), '--append-system-prompt', this.systemPrompt];
     if (this.model && this.model !== 'default') a.push('--model', this.model); // Default (recommended): the CLI's own choice
-    if (this.effort) a.push('--effort', this.effort);
-    if (this.fast) a.push('--settings', JSON.stringify({ fastMode: true })); // Opus fast mode; billed to usage credits
+    if (this.effort) a.push('--effort', ultra ? 'xhigh' : this.effort);
+    const settings = { ...(this.fast ? { fastMode: true } : {}), ...(ultra ? { ultracode: true } : {}) }; // fast mode: Opus, billed to usage credits
+    if (Object.keys(settings).length) a.push('--settings', JSON.stringify(settings));
     for (const d of this.addDirs) a.push('--add-dir', d); // lets Read open attachments stored outside cwd
     if (this.sessionId) a.push('--resume', this.sessionId);
     else if (this.forkFrom) a.push('--resume', this.forkFrom, '--fork-session');
@@ -57,7 +68,7 @@ class ClaudeClient {
     proc.stderr.on('data', (d) => this.log(`claude stderr: ${String(d).slice(0, 400)}`));
     // Events from a process we already replaced (model/effort switch) must not touch the new one's reply.
     proc.on('error', (e) => { if (this.proc === proc) this._settle(e); });
-    proc.on('exit', (code, sig) => { if (this.proc !== proc) return; this.proc = null; this._settle(new Error(`claude exited (${code ?? sig})`)); });
+    proc.on('exit', (code, sig) => { if (this.proc !== proc) return; this.proc = null; this._dropJobs(); this._settle(new Error(`claude exited (${code ?? sig})`)); });
     readline.createInterface({ input: proc.stdout }).on('line', (line) => { if (this.proc === proc) this._onLine(line); });
     if (this.typed) this._write({ type: 'control_request', request_id: `wc-init-${++this.reqId}`, request: { subtype: 'initialize', sdkMcpServers: [SERVER] } });
   }
@@ -89,7 +100,7 @@ class ClaudeClient {
     this.waiter = null;
     const cancelled = this.cancelling; this.lastTurnUsage = w.usage || null;
     this.cancelling = false; this.steerQueue = []; clearTimeout(this.intTimer); this.intTimer = null;
-    if (this.restartPending) { this.restartPending = false; this.stop(); }
+    this._restartIfIdle();
     if (err && cancelled && !err.stopped) { err = new Error('stopped'); err.stopped = true; }
     if (err) w.reject(err); else w.resolve(text);
   }
@@ -100,6 +111,20 @@ class ClaudeClient {
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.forkFrom = null; this.onSession(this.sessionId); } // the host claims it at once
     if (m.type === 'system' && m.subtype === 'notification' && m.text) this.onNotice(m.text); // e.g. fast mode out of credits
     if (m.type === 'control_request' && m.request && m.request.subtype === 'mcp_message' && m.request.server_name === SERVER) { this._onMcp(m); return; }
+    if (m.type === 'system' && m.subtype === 'background_tasks_changed' && Array.isArray(m.tasks)) {
+      this.jobs = m.tasks.filter((t) => t && typeof t.task_id === 'string').map((t) => ({ id: t.task_id, description: clip(t.description, 120) }));
+      this.onJobs(this.jobs);
+      // A job that was stopped gets no report turn, so a restart held for it happens once nothing follows.
+      if (!this.jobs.length && this.restartPending) { clearTimeout(this.idleTimer); this.idleTimer = setTimeout(() => this._restartIfIdle(), 5000); }
+      return;
+    }
+    if (m.type === 'system' && m.subtype === 'task_notification') {
+      // Finished while Claude was idle: it takes a turn of its own next to report it. Inside a reply, it's part of that reply.
+      if (!this.waiter) this.finished.push({ id: String(m.task_id || ''), status: String(m.status || ''), summary: clip(m.summary, 160) });
+      return;
+    }
+    // A turn nobody sent: Claude answering a finished background job. The host takes it or stops it.
+    if (!this.waiter && (m.type === 'stream_event' || m.type === 'assistant')) this._unprompted();
     const w = this.waiter; if (!w) return;
     const ev = m.type === 'stream_event' ? m.event : null;
     if (ev && ev.type === 'content_block_start' && ev.content_block) {
@@ -133,8 +158,36 @@ class ClaudeClient {
     }
   }
 
+  _unprompted() {
+    const jobs = this.finished.splice(0);
+    let h = null; try { h = this.onUnprompted({ jobs }); } catch (e) { this.log(`unprompted: ${e.message}`); }
+    const noop = () => {};
+    if (!h) {
+      // Refused: the turn is stopped and whatever it wrote is dropped. A send meanwhile waits for it (see send).
+      let done; this.draining = new Promise((r) => { done = r; });
+      this.waiter = { resolve: done, reject: done, onDelta: noop, onActivity: noop, onTool: null, partial: '', blocks: [], thinking: '', unprompted: true, refused: true };
+      this.cancelling = true; this._interrupt(); return;
+    }
+    this.waiter = { resolve: h.resolve, reject: h.reject, onDelta: h.onDelta || noop, onActivity: h.onActivity || noop, onTool: h.onTool || null, partial: '', blocks: [], thinking: '', unprompted: true };
+  }
+
+  // Background jobs keep running when Claude's reply ends; Stop ends them here (Claude Code's own stop_task).
+  stopJobs() {
+    for (const j of this.jobs) this._write({ type: 'control_request', request_id: `wc-stop-${++this.reqId}`, request: { subtype: 'stop_task', task_id: j.id } });
+    this.finished = [];
+    return this.jobs.length;
+  }
+
+  // A restart (model or effort change) kills the process, and with it any background job: it waits for both.
+  _restartIfIdle() {
+    if (!this.restartPending || this.waiter || this.jobs.length) return;
+    this.restartPending = false; this.stop();
+  }
+
   send(text, onDelta = () => {}, onActivity = () => {}, attachments = [], onTool = null) {
+    if (this.waiter && this.waiter.refused) return this.draining.then(() => this.send(text, onDelta, onActivity, attachments, onTool));
     if (this.waiter) return Promise.reject(new Error('Claude is already answering'));
+    this._restartIfIdle();
     this.lastTurnUsage = null;
     if (!this.proc) this._spawn();
     return new Promise((resolve, reject) => {
@@ -149,7 +202,7 @@ class ClaudeClient {
     if (model !== undefined) this.model = model;
     if (effort !== undefined) this.effort = effort;
     if (fast !== undefined) this.fast = fast;
-    if (this.waiter) this.restartPending = true; else this.stop();
+    this.restartPending = true; this._restartIfIdle();
   }
 
   compact() { return this.send('/compact'); }
@@ -178,7 +231,10 @@ class ClaudeClient {
     return true;
   }
 
-  stop() { if (this.proc) { this.proc.stdin.end(); this.proc.kill(); this.proc = null; } }
+  // Background jobs run inside the process: they end with it.
+  _dropJobs() { clearTimeout(this.idleTimer); this.finished = []; if (this.jobs.length) { this.jobs = []; this.onJobs([]); } }
+
+  stop() { this._dropJobs(); if (this.proc) { this.proc.stdin.end(); this.proc.kill(); this.proc = null; } }
 }
 
-module.exports = { ClaudeClient, READ_ONLY_TOOLS, describeTool };
+module.exports = { ClaudeClient, READ_ONLY_TOOLS, ULTRACODE, describeTool };

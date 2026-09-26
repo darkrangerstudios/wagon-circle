@@ -22,6 +22,7 @@ const roomsView = require('./roomsView');
 const roomLock = require('./roomLock');
 const startRoom = require('./startRoom');
 const claudeModels = require('./claudeModels');
+const { ULTRACODE } = claudeModels;
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -45,6 +46,12 @@ let claudeBin = null; // resolved once per window: newest Claude Code CLI on the
 // Claude Code's own model menu, asked of the CLI once per window (no model call); the built-in copy until it answers.
 let claudeCatalog = null, claudeCatalogAsked = null;
 const claudeMenu = () => claudeCatalog || commands.CLAUDE_CATALOG;
+// Claude Code lists Ultracode with its effort levels (/effort ultracode: "xhigh + dynamic workflow orchestration"), for
+// models that offer Extra high. Tested with Claude Code 2.1.283; older CLIs don't get it.
+const ULTRACODE_CLI = '2.1.283';
+const claudeEfforts = (cat, v) => { const e = (cat && cat.efforts) || []; return e.includes('xhigh') && atLeast(v, ULTRACODE_CLI) ? [...e, ULTRACODE] : e; };
+// The Start a Room screen's Claude models: the ones this CLI can run.
+const startClaudeModels = (v) => claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: claudeEfforts(m, v), older: !!m.older }));
 // Weekly limits are per model family ("Fable"); Default (recommended) counts against the model it resolves to.
 const limitName = (m) => { const f = claudeModels.familyOf(m.resolves || m.id); return f ? f.family[0].toUpperCase() + f.family.slice(1) : m.name; };
 // Asked once per window, only of a real CLI on disk; open rooms refresh their pickers when the answer arrives.
@@ -147,6 +154,7 @@ function settings() {
     codexEffort: c.get('codexEffort') || null,
     bothMode: c.get('bothMode') || 'sequential',
     taskMode: ['auto', 'chat', 'work'].includes(c.get('taskMode')) ? c.get('taskMode') : 'auto',
+    agentPosts: Number.isInteger(c.get('agentPostsPerTask')) ? Math.min(20, Math.max(0, c.get('agentPostsPerTask'))) : 3,
     // Three plain numbers; a taskDefaults object saved before v0.5 still applies until they are set.
     taskDefaults: cleanLimits({ ...PRESETS.balanced, ...(c.get('taskDefaults') || {}), ...Object.fromEntries([['turns', 'taskTurns'], ['reserve', 'taskReserve'], ['minutes', 'taskMinutes']].filter(([, key]) => c.isSet(key)).map(([k, key]) => [k, c.get(key)])) }),
     cwd: c.get('cwd') || (ws ? ws.uri.fsPath : home),
@@ -237,7 +245,10 @@ class RoomSession {
     const p = r.seat;
     const c = new ClaudeClient({ exe: this.options.claude.path, cwd: p.cwd, model: p.model, effort: p.effort, fast: !!p.fast && this.claudeFastOk(p.model),
       onNotice: (t) => !this.disposed && this.room && this.room.note(`${p.label}: ${t}`), systemPrompt: this.brief(r, true), tools: this.toolsFor(p.id),
-      onSession: (id) => this.adoptId(r, c, id), sessionId, forkFrom, addDirs: [this.attDir], log });
+      onSession: (id) => this.adoptId(r, c, id), sessionId, forkFrom, addDirs: [this.attDir], log,
+      // A background job (Ultracode) finished after Claude's reply ended: the room decides whether its report is posted.
+      onUnprompted: (info) => (this.disposed || !this.room || r.client !== c ? null : this.room.unprompted(p.id, info)),
+      onJobs: (jobs) => { if (this.disposed || (r.client !== c && jobs.length)) return; r.jobs = jobs; this.post({ type: 'jobs', name: p.id, jobs }); } });
     this.ownedClients.add(c); return c;
   }
 
@@ -359,8 +370,14 @@ class RoomSession {
       working: () => Object.fromEntries([...Object.values(this.slots).map((r) => [r.seat.id, { sessionId: r.seat.provider === 'claude' ? r.client.sessionId : r.seat.sessionId }]), ...this.extras.map((x) => [x.id, { sessionId: x.client.sessionId }])]),
       makeReader: ({ provider, sessionId, file }) => provider === 'acp' ? async () => { throw new Error('history reading is not available for ACP agents yet'); } : provider === 'codex' ? async (args) => { if (!this.codex) throw new Error('No local Codex reader is active'); return codexHistoryReader(this.codex)(args); }
         : async (args) => { const f = file || claudeHistory.fileFor(sessionId); if (!f) throw new Error('that Claude session has no saved file yet'); return claudeHistoryReader(f, claudeHistory.ROOT)(args); } });
-    const labelFor = (id) => { const c = this.controls()[id]; if (!c) return null; const model = c.models.find((x) => x.id === c.model); return [model?.name || c.model, c.effort, c.fast ? '⚡' : ''].filter(Boolean).join(' · '); };
-    this.room = new Room({ agents, state: this.state, humanName: m.humanName, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (id, args) => this.history.read(id, args), labels: Object.fromEntries(m.participants.map((p) => [p.id, p.label])) });
+    // The model tag on each reply: this seat only (controls() builds every seat's menus and checks saved rooms on disk).
+    const labelFor = (id) => {
+      const r = this.slots[id]; if (!r) return null; const p = r.seat;
+      const name = p.provider === 'claude' ? (claudeMenu().find((x) => x.id === (p.model || 'default')) || {}).name
+        : ((r.models || []).find((x) => x.id === p.model) || (p.model ? {} : (r.models || [])[0]) || {}).displayName;
+      return [name || p.model, p.effort, p.fast ? '⚡' : ''].filter(Boolean).join(' · ');
+    };
+    this.room = new Room({ agents, state: this.state, humanName: m.humanName, defaultTarget: m.defaultTarget, bothMode: m.bothMode, labelFor, readHistory: (id, args) => this.history.read(id, args), labels: Object.fromEntries(m.participants.map((p) => [p.id, p.label])), postCap: s.agentPosts });
     for (const note of this.pendingNotes || []) this.room.note(note); this.pendingNotes = null;
     if (!this.room.tasks.state.defaults) { this.room.tasks.setDefaults(s.taskDefaults); this.room.tasks.mode = s.taskMode; }
     for (const x of seeds) this.room.seedHistory(x.items, x.owner, x.readers.filter((id) => agents[id]));
@@ -369,7 +386,11 @@ class RoomSession {
     this.room.on('draft', (d) => this.post({ type: 'draft', ...d }));
     this.room.on('activity', (a) => this.post({ type: 'activity', ...a }));
     this.room.on('status', (st) => { const r = this.slots[st.name]; this.post({ type: 'status', ...st, participantUsage: r?.client.lastTurnUsage || null, participantCost: r?.client.totalCostUsd }); });
-    this.room.on('stop', () => { this.switchEpoch = (this.switchEpoch || 0) + 1; for (const r of Object.values(this.slots)) if (r.switchClient) r.switchClient.stop(); });
+    this.room.on('stop', () => {
+      this.switchEpoch = (this.switchEpoch || 0) + 1; for (const r of Object.values(this.slots)) if (r.switchClient) r.switchClient.stop();
+      // Stop covers background jobs too: they would otherwise keep working and report back later.
+      for (const r of Object.values(this.slots)) { const n = r.client && r.client.stopJobs ? r.client.stopJobs() : 0; if (n) this.room.note(`${r.seat.label}: stopped ${n} background job${n === 1 ? '' : 's'}.`); }
+    });
     this.room.on('changed', () => this.save()); this.room.on('task', () => this.postTask());
     this.scheduler = new Scheduler({ log });
     this.scheduler.add('task-clock', { everyMs: 15000, check: async () => { this.room.tick(); return 'quiet'; } });
@@ -691,7 +712,8 @@ class RoomSession {
         session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
         shared: !!this.history?.describe().share[p.id], readers: this.history ? this.history.readers(p.id) : [], allHistory: !this.history || this.history.allHistory(p.id),
         cli: p.provider === 'claude' && v ? v.join('.') : undefined, model: p.model || models[0]?.id || null, effort: p.effort, fast: !!p.fast, models,
-        efforts: p.provider === 'claude' ? (claudeMenu().find((x) => x.id === (p.model || 'default')) || {}).efforts || commands.CLAUDE_EFFORTS : undefined }];
+        jobs: r.jobs || [],
+        efforts: p.provider === 'claude' ? (() => { const cat = claudeMenu().find((x) => x.id === (p.model || 'default')); return cat ? claudeEfforts(cat, v) : commands.CLAUDE_EFFORTS; })() : undefined }];
     }));
   }
 
@@ -716,18 +738,20 @@ class RoomSession {
           if (blocked) { say(`${p.label}: ${blocked}. Model unchanged.`); return; }
           if (action === 'effort') {
             const now = claudeMenu().find((x) => x.id === (p.model || 'default'));
-            if (now && !(now.efforts || []).includes(arg)) { say(`${now.name} doesn't offer that effort level.`); return; }
+            if (now && !claudeEfforts(now, this.claudeVersion).includes(arg)) { say(`${now.name} doesn't offer that effort level.`); return; }
           }
           if (action === 'model' && p.fast && !this.claudeFastOk(arg)) { p.fast = false; r.client.setOptions({ fast: false }); }
           const opts = { [action]: arg };
           // A model that doesn't offer the current effort level (Haiku has none) starts without one, in the same restart.
-          if (action === 'model' && p.effort && cat && !(cat.efforts || []).includes(p.effort)) { p.effort = null; opts.effort = null; }
+          if (action === 'model' && p.effort && cat && !claudeEfforts(cat, this.claudeVersion).includes(p.effort)) { p.effort = null; opts.effort = null; }
           r.client.setOptions(opts);
         } else if (action === 'model') {
           const model = r.models.find((x) => x.id === arg);
           if (p.effort && model && !(model.supportedReasoningEfforts || []).some((e) => e.reasoningEffort === p.effort)) p.effort = null;
         }
-        p[action] = arg; say(`${p.label} ${action} set to ${arg}. Its conversation and the task's turn count stay the same.`);
+        p[action] = arg;
+        if (arg === ULTRACODE) say(`${p.label} effort set to Ultracode: Extra high, plus background workflows. Their agents can only read, like ${p.label}, and when one finishes ${p.label} posts the result here on its own (at most ${this.room.postCap} per task). Uses your plan faster.`);
+        else say(`${p.label} ${action} set to ${arg}. Its conversation and the task's turn count stay the same.${p.provider === 'claude' && (r.jobs || []).length ? ` It switches once its background job${r.jobs.length === 1 ? '' : 's'} finish.` : ''}`);
       } else if (action === 'fast') {
         const on = arg === 'on', c = this.controls()[p.id], model = c.models.find((x) => x.id === c.model);
         if (on && !(p.provider === 'claude' ? this.claudeFastOk(p.model) : model?.fast)) { say(`Fast mode is not available for ${p.label}'s selected model.`); return; }
@@ -968,7 +992,7 @@ async function startLists(ctx) {
   startScreen.lastLists = null;
   startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, note: typeof m.description === 'string' ? m.description.slice(0, 120) : '', efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
   const v = s.claude.version;
-  startScreen.claudeModels = claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: m.efforts, older: !!m.older }));
+  startScreen.claudeModels = startClaudeModels(v);
   // Remembered so a later resend (Claude Code's menu arriving) never brings back an older list.
   return (startScreen.lastLists = {
     conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) }, // rows carry exists: the folder is still there
@@ -1035,7 +1059,7 @@ async function openStartScreen(context, { existing = false } = {}) {
         startLists(context).then((l) => {
           post({ type: 'lists', ...l });
           const asked = refreshClaudeMenu(); // then Claude Code's own menu, without asking Codex again
-          if (asked) asked.then(() => { const v = settings().claude.version; startScreen.claudeModels = claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: m.efforts, older: !!m.older })); const last = startScreen.lastLists || l; post({ type: 'lists', ...last, models: { ...last.models, claude: startScreen.claudeModels } }); }, () => {});
+          if (asked) asked.then(() => { startScreen.claudeModels = startClaudeModels(settings().claude.version); const last = startScreen.lastLists || l; post({ type: 'lists', ...last, models: { ...last.models, claude: startScreen.claudeModels } }); }, () => {});
         }, (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
         try { post({ type: 'setup', ...(await startSetupStatus()) }); } catch (e) { log(`start screen setup: ${e.message}`); post(setupUnknown()); }
