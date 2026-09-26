@@ -29,7 +29,7 @@ test('listRooms: newest activity first, skips files that are not rooms, and old 
   const rooms = roomsView.listRooms(dir);
   assert.deepStrictEqual(rooms.map((r) => r.name), ['newer  room', 'older']);
   assert.deepStrictEqual(rooms[0].seats.map((s) => s.label), ['Claude', 'Codex']);
-  assert.deepStrictEqual(rooms[1].seats, [{ label: 'Reader', provider: 'claude', sessionId: null }]);
+  assert.deepStrictEqual(rooms[1].seats, [{ label: 'Reader', provider: 'claude', sessionId: null, made: [] }]);
   assert.ok(!JSON.stringify(rooms).includes('PRIVATE_TRANSCRIPT'), 'the list carries no transcript');
   assert.deepStrictEqual(roomsView.listRooms(path.join(dir, 'missing')), []);
 });
@@ -285,5 +285,5 @@ test('the rooms list keeps experimental agents for display, with conversation id
   writeRoom(d, 3, { name: 'with gemini', seats: [{ id: 'claude', label: 'Claude', provider: 'claude', sessionId: 'cl-1' }],
     participants: [{ id: 'claude', label: 'Claude', provider: 'claude' }, { id: 'gemini', label: 'Gemini', provider: 'acp', sessionId: 'forged' }] });
   const [room] = roomsView.listRooms(d);
-  assert.deepStrictEqual(room.seats, [{ label: 'Claude', provider: 'claude', sessionId: 'cl-1' }, { label: 'Gemini', provider: 'acp', sessionId: null }]);
+  assert.deepStrictEqual(room.seats, [{ label: 'Claude', provider: 'claude', sessionId: 'cl-1', made: [] }, { label: 'Gemini', provider: 'acp', sessionId: null, made: [] }]);
 });

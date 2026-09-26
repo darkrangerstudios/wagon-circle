@@ -4,7 +4,7 @@
 
 > One room for your local coding sessions to work together.
 
-**Prototype 0.6.0.** Site: https://darkrangerstudios.github.io/wagon-wheel/
+**Prototype 0.6.1.** Site: https://darkrangerstudios.github.io/wagon-wheel/
 
 One VS Code room where you and named local Claude Code or Codex sessions talk in a single timeline. Multiple participants can use the same provider.
 
@@ -50,12 +50,12 @@ The custom room roster supports multiple local Claude Code/Codex sessions. Routi
 ## Install
 You need VS Code 1.90 or later and, for each kind of seat you want, that provider's CLI installed and signed in with your own account: [Claude Code](https://code.claude.com/docs/en/setup) and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli). Wagon Wheel never installs or signs in anything for you.
 
-1. Download `wagon-wheel-0.6.0.vsix` from the [latest release](https://github.com/darkrangerstudios/wagon-wheel/releases/latest).
+1. Download `wagon-wheel-0.6.1.vsix` from the [latest release](https://github.com/darkrangerstudios/wagon-wheel/releases/latest).
 2. Install it, either from the Extensions view (**⋯ → Install from VSIX…**) or from a terminal:
    ```
-   code --install-extension wagon-wheel-0.6.0.vsix
+   code --install-extension wagon-wheel-0.6.1.vsix
    ```
-3. Click the wheel icon in the Activity Bar and choose **Start a Room**. The wheel button in the editor title bar, **Wagon Wheel** in the status bar and **Wagon Wheel: Start a Room** in the Command Palette open the same screen. It shows whether each app is ready, lets you bring in conversations you already have, and explains every choice in a line of plain English. Settings can hide the editor and status bar buttons.
+3. Click the wheel icon in the Activity Bar and choose **Start a Room**. The wheel button in the editor title bar, **Wagon Wheel** in the status bar and **Wagon Wheel: Start a Room** in the Command Palette open the same screen. It shows whether each app is ready, lets you bring in conversations you already have, and explains every choice in a line of plain English. The lists show your own conversations only: conversations Wagon Wheel's rooms created (Claude sessions it ran, Codex threads whose session file names Wagon Wheel as their creator) are left out, while an original of yours that a room kept going in stays listed. Settings can hide the editor and status bar buttons.
 
 The side panel also lists your saved rooms by their last message. A room open in another VS Code window is marked there and won't open twice. Codex saves a conversation only after its first reply, so if you close a room before a Codex agent ever answered, reopening starts it fresh and says so. An agent that did answer, or that was brought in from one of your own conversations, is never silently replaced. **Wagon Wheel: Check My Setup** checks the apps any time.
 

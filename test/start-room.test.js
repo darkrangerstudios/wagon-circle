@@ -74,7 +74,7 @@ test('setup lines and conversation rows read as plain English and carry no contr
 });
 
 // The host side of the screen, with VS Code, the CLIs and their histories stubbed.
-function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [], bootFails = null } = {}) {
+function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms = [], bootFails = null, claudeSessions = null, codexThreads = null } = {}) {
   const disposable = { dispose() {} };
   const rec = { panels: [], warnings: [], opened: [] };
   const convDir = dir();
@@ -102,11 +102,11 @@ function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms =
     env: { openExternal: (u) => rec.opened.push(u) }, version: '1.104.0',
   };
   class FakeCodex { async start() {} async listModels() { return [{ id: 'gpt-x', displayName: 'GPT X', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }]; }
-    async listThreads() { return [{ id: 'th-1', name: 'Codex chat', cwd: convDir, updatedAt: 100 }]; } stop() {} on() {} }
+    async listThreads() { return codexThreads ? codexThreads(convDir) : [{ id: 'th-1', name: 'Codex chat', cwd: convDir, updatedAt: 100 }]; } stop() {} on() {} }
   const now = Date.now();
   const fakes = {
     [require.resolve('../src/codexClient')]: { CodexClient: FakeCodex, FORBIDDEN: new Set() },
-    [require.resolve('../src/claudeHistory')]: { ROOT: os.tmpdir(), listSessions: () => lists.claude || [{ id: 'cl-1', path: '/x', cwd: convDir, mtime: recentMs ? now - recentMs : now - 3600e3, title: 'Old chat', preview: 'hi' }], recentMessages: () => [], fileFor: () => fileFor },
+    [require.resolve('../src/claudeHistory')]: { ROOT: os.tmpdir(), listSessions: () => (claudeSessions ? claudeSessions(convDir) : null) || lists.claude || [{ id: 'cl-1', path: '/x', cwd: convDir, mtime: recentMs ? now - recentMs : now - 3600e3, title: 'Old chat', preview: 'hi' }], recentMessages: () => [], fileFor: () => fileFor },
     [require.resolve('../src/claudeBinary')]: { findClaude: () => ({ path: 'claude', version: [2, 1, 282] }), atLeast: () => true },
     [require.resolve('../src/setup')]: { ...require('../src/setup'), checkSetup: async ({ executables }) => ({ executionHost: 'this computer', providers: Object.keys(executables).map((p) => ({ provider: p, installation: 'available', version: '1.0.0', authentication: p === 'codex' ? 'signed-out' : 'present' })) }) },
   };
@@ -285,4 +285,75 @@ test('page: "couldn\'t check" is not called "not ready", and trusting the folder
   const t = pg.text();
   assert.ok(t.includes('Couldn\'t check Claude Code. It may still work.') && !t.includes('Trust this folder'));
   assert.ok(!t.includes('won\'t be able to answer'), 'an unknown check does not claim the agent is broken');
+});
+
+test('Wagon Wheel\'s own room conversations are recognised; a person\'s original that a room kept going in is not', () => {
+  const made = startRoom.roomMade([{ seats: [
+    { provider: 'codex', sessionId: 'th-new', made: ['th-new'] },          // a thread the room started
+    { provider: 'codex', sessionId: 'th-copy', made: ['th-copy'] },        // a copy the room is working on
+    { provider: 'codex', sessionId: 'th-person', made: [] }] }]);          // the person's original, kept going in
+  assert.ok(startRoom.isRoomConversation('codex', { id: 'th-new' }, made));
+  assert.ok(startRoom.isRoomConversation('codex', { id: 'th-copy' }, made));
+  assert.ok(!startRoom.isRoomConversation('codex', { id: 'th-person', name: 'Plan the trip' }, made));
+  for (const name of ['Wagon Wheel: Review · Codex', 'Wagon Circle: Test Room', 'Campfire: old room']) assert.ok(startRoom.isRoomConversation('codex', { id: 'x', name }), name);
+  assert.ok(!startRoom.isRoomConversation('codex', { id: 'x', name: 'Find Wagon Circle handoff' }), 'a person\'s thread that mentions the name is kept');
+  assert.ok(!startRoom.isRoomConversation('codex', { id: 'x', name: null, preview: 'Wagon Wheel: in the preview only' }));
+  assert.ok(startRoom.isRoomConversation('claude', { id: 'c', mode: 'dontAsk' }));
+  for (const mode of ['auto', 'default', 'plan', 'bypassPermissions', null]) assert.ok(!startRoom.isRoomConversation('claude', { id: 'c', mode }), String(mode));
+});
+
+const rollout = (d, originator) => { const f = path.join(d, `rollout-${originator.replace(/\W/g, '')}-${Math.random().toString(36).slice(2)}.jsonl`); fs.writeFileSync(f, `${JSON.stringify({ type: 'session_meta', payload: { originator, cli_version: '0.153.1' } })}\n`); return f; };
+
+test('codexOriginator reads the app that created a thread from its session file, and is null when it can\'t', () => {
+  const d = dir();
+  assert.strictEqual(startRoom.codexOriginator(rollout(d, 'wagon-wheel')), 'wagon-wheel');
+  assert.strictEqual(startRoom.codexOriginator(rollout(d, 'Codex Desktop')), 'Codex Desktop');
+  const bad = path.join(d, 'bad.jsonl'); fs.writeFileSync(bad, 'not json\n');
+  assert.strictEqual(startRoom.codexOriginator(bad), null);
+  assert.strictEqual(startRoom.codexOriginator(path.join(d, 'missing.jsonl')), null);
+  assert.strictEqual(startRoom.codexOriginator(undefined), null);
+  assert.ok(startRoom.isRoomConversation('codex', { id: 'x', originator: 'wagon-circle' }), 'earlier product names count');
+  assert.ok(!startRoom.isRoomConversation('codex', { id: 'x', originator: 'codex_vscode' }));
+});
+
+test('host: the start screen lists leave out room conversations and keep the person\'s own', async () => {
+  const id = '22222222-3333-4444-8555-666666666666';
+  const { rec, convDir } = loadHost({
+    lists: { claude: null },
+    claudeSessions: (cwd) => [
+      { id: 'cl-mine', path: '/x', cwd, mtime: 1, title: 'My chat', preview: 'hi', mode: 'auto' },
+      { id: 'cl-room', path: '/y', cwd, mtime: 2, title: null, preview: '[Dean] @claude review', mode: 'dontAsk' }],
+    codexThreads: (cwd) => [
+      { id: 'th-unnamed-room', name: null, preview: 'Count from 1 to 300', cwd, updatedAt: 0, path: rollout(cwd, 'wagon-wheel') },
+      { id: 'th-old-product', name: null, preview: 'old room', cwd, updatedAt: 0, path: rollout(cwd, 'wagon-circle') },
+      { id: 'th-mine', name: 'Plan the trip', cwd, updatedAt: 1, path: rollout(cwd, 'Codex Desktop') },
+      { id: 'th-named', name: 'Wagon Wheel: Review · Codex', cwd, updatedAt: 2 },
+      { id: 'th-made', name: null, preview: 'room thread without a name', cwd, updatedAt: 3 },
+      { id: 'th-kept', name: 'My original', cwd, updatedAt: 4 }],
+    rooms: [{ meta: { id, name: 'Old room', seats: [
+      { id: 'codex', label: 'Codex', provider: 'codex', cwd: os.tmpdir(), sessionId: 'th-made', typedThreads: ['th-made'] },
+      { id: 'codex-2', label: 'Codex 2', provider: 'codex', cwd: os.tmpdir(), sessionId: 'th-kept' }] }, state: { transcript: [] } }],
+  });
+  void convDir;
+  await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
+  await p.recv({ type: 'ready' }); await settle();
+  const lists = p.sent.find((m) => m.type === 'lists');
+  assert.deepStrictEqual(lists.conversations.claude.map((c) => c.title), ['My chat']);
+  assert.deepStrictEqual(lists.conversations.codex.map((c) => c.title), ['Plan the trip', 'My original']);
+});
+
+test('Claude history records each session\'s first permission mode, which is how room sessions are recognised', () => {
+  const home = dir(), oldHome = process.env.HOME;
+  const proj = path.join(home, '.claude', 'projects', '-work'); fs.mkdirSync(proj, { recursive: true });
+  const line = (mode, text) => JSON.stringify({ type: 'user', cwd: '/work', permissionMode: mode, message: { role: 'user', content: text } });
+  fs.writeFileSync(path.join(proj, 'mine.jsonl'), `${line('auto', 'Plan the trip')}\n${line('dontAsk', 'later a room kept going in it')}\n`);
+  fs.writeFileSync(path.join(proj, 'room.jsonl'), `${line('dontAsk', '[Dean] @claude review this')}\n`);
+  process.env.HOME = home;
+  try {
+    delete require.cache[require.resolve('../src/claudeHistory')];
+    const sessions = require('../src/claudeHistory').listSessions(10);
+    const byId = Object.fromEntries(sessions.map((x) => [x.id, x.mode]));
+    assert.deepStrictEqual(byId, { mine: 'auto', room: 'dontAsk' });
+    assert.deepStrictEqual(sessions.filter((x) => !startRoom.isRoomConversation('claude', x)).map((x) => x.id), ['mine']);
+  } finally { process.env.HOME = oldHome; delete require.cache[require.resolve('../src/claudeHistory')]; }
 });

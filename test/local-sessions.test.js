@@ -274,7 +274,7 @@ test('fork switches only the selected seat, preserves the source and does not re
   const s = fixture(t).create(); await s.boot();
   s.room.postFromHuman('@app SYNTHETIC_OLD_ROOM_CONTEXT'); await settle(s);
   await s.runCommand('/history share app db on');
-  const sibling = structuredClone(s.meta.seats[1]), old = codexClients[0], source = s.controls().db.session;
+  const sibling = structuredClone(s.meta.seats[1]), old = codexClients[0], source = 'th-users-own'; // one of the person's own threads
   threadChoices = [{ id: source, cwd: sibling.cwd, name: 'Sibling source' }];
   picks.push((items) => items.find((item) => item.id === source));
   await s.switchSession('app', 'fork');
@@ -495,7 +495,7 @@ test('the Continue warning says when the session changed in the last two minutes
 
 test('Switch to one of your conversations: a copy behaves as Fork, the original as Continue (with its warning), cancel changes nothing', async (t) => {
   const s = fixture(t).create(); await s.boot();
-  const source = s.controls().db.session, cwd = s.meta.seats[1].cwd;
+  const source = 'th-users-own', cwd = s.meta.seats[1].cwd; // one of the person's own threads
   threadChoices = [{ id: source, cwd, name: 'Sibling source' }];
   // Copy.
   picks.push((items) => items.find((item) => item.id === source), (items) => { assert.deepEqual(items.map((i) => i.label), ['Work on a copy (recommended)', 'Keep going in the original']); return items[0]; });
@@ -509,11 +509,12 @@ test('Switch to one of your conversations: a copy behaves as Fork, the original 
   picks.push((items) => items.find((item) => item.id === source), () => undefined);
   await s.switchSession('app', 'switch');
   assert.equal(codexClients.length, before, 'nothing started');
-  // Original: goes through Continue, which warns first and refuses a conversation another agent owns.
+  // Original: goes through Continue, which warns first, then keeps going in that conversation itself.
   picks.push((items) => items.find((item) => item.id === source), (items) => items[1]);
-  await assert.rejects(s.switchSession('app', 'switch'), /already in use/);
+  await s.switchSession('app', 'switch');
   assert.equal(warnings.length, 1);
-  void replacement;
+  replacement = codexClients.at(-1);
+  assert.ok(replacement.calls.some(([action, id]) => action === 'continue' && id === source));
 });
 
 test('keeping going in a person\'s original Codex conversation never renames it; copies and new threads are named', async (t) => {
@@ -525,4 +526,17 @@ test('keeping going in a person\'s original Codex conversation never renames it;
   const replacement = codexClients.at(-1);
   assert.ok(replacement.calls.some(([a, id]) => a === 'continue' && id === 'th-users-own'));
   assert.ok(!replacement.calls.some(([a]) => a === 'name'), 'the original keeps its own name');
+});
+
+test('the Switch list leaves out Wagon Wheel\'s own room conversations', async (t) => {
+  const s = fixture(t).create(); await s.boot();
+  const cwd = s.meta.seats[0].cwd, sibling = s.controls().db.session;
+  const made = path.join(cwd, 'made-by-room.jsonl'); fs.writeFileSync(made, `${JSON.stringify({ type: 'session_meta', payload: { originator: 'wagon-wheel' } })}\n`);
+  threadChoices = [{ id: 'th-mine', cwd, name: 'Plan the trip' }, { id: 'th-named', cwd, name: 'Wagon Wheel: Other room · Codex' }, { id: sibling, cwd, name: null },
+    { id: 'th-unnamed', cwd, name: null, path: made }];
+  s.save(); // the room's own threads are recorded in its saved file
+  let offered = null;
+  picks.push((items) => { offered = items.map((i) => i.id); return undefined; });
+  await s.switchSession('app', 'switch');
+  assert.deepStrictEqual(offered, ['th-mine']);
 });

@@ -488,9 +488,10 @@ class RoomSession {
     try {
       let pick = null;
       if (action !== 'new') {
+        const made = startRoom.roomMade(roomsView.listRooms(path.dirname(this.file))); // hide Wagon Wheel's own room conversations
         const items = p.provider === 'claude'
-          ? claudeHistory.listSessions(40).filter((x) => x.cwd === p.cwd && x.id !== p.sessionId).map((x) => ({ label: x.title || x.preview, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
-          : (await r.client.listThreads(null, 40)).filter((t) => t.id !== p.sessionId).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
+          ? claudeHistory.listSessions(80).filter((x) => x.cwd === p.cwd && x.id !== p.sessionId && !startRoom.isRoomConversation('claude', x, made)).map((x) => ({ label: x.title || x.preview, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
+          : (await r.client.listThreads(null, 80)).filter((t) => t.id !== p.sessionId && !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made)).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
         if (!live()) return;
         if (!items.length) { room.note(`No other ${p.provider === 'claude' ? `Claude conversations from ${L}'s folder` : 'Codex conversations'} were found for ${L}.`); return; }
         pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'switch' ? 'switch to one of your conversations' : action === 'fork' ? 'work on a copy of a conversation' : 'keep going in a conversation'}`, placeHolder: 'Your recent conversations, newest first', matchOnDetail: true });
@@ -809,18 +810,19 @@ async function startSetupStatus() {
 }
 
 // Codex models and threads come from a short-lived private Codex process; Claude conversations from its local files.
-async function startLists() {
+async function startLists(ctx) {
   const s = settings(), home = os.homedir();
   let codexThreads = [], codexModels = [];
   if (vscode.workspace.isTrusted) {
     const probe = new CodexClient({ exe: s.codexExe, cwd: s.cwd, log });
-    try { await probe.start(); codexModels = await probe.listModels(); codexThreads = await probe.listThreads(null, 40); } catch (e) { log(`start screen codex: ${e.message}`); } finally { probe.stop(); }
+    try { await probe.start(); codexModels = await probe.listModels(); codexThreads = await probe.listThreads(null, 80); } catch (e) { log(`start screen codex: ${e.message}`); } finally { probe.stop(); }
   }
   let claudeSessions = [];
-  try { claudeSessions = claudeHistory.listSessions(40); } catch (e) { log(`start screen claude: ${e.message}`); }
+  try { claudeSessions = claudeHistory.listSessions(80); } catch (e) { log(`start screen claude: ${e.message}`); }
+  const made = startRoom.roomMade(roomsView.listRooms(path.join(ctx.globalStorageUri.fsPath, 'rooms')));
   startScreen.lists = {
-    claude: claudeSessions.map((x) => ({ id: x.id, cwd: x.cwd, when: x.mtime, title: x.title || x.preview })),
-    codex: codexThreads.map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
+    claude: claudeSessions.filter((x) => !startRoom.isRoomConversation('claude', x, made)).slice(0, 40).map((x) => ({ id: x.id, cwd: x.cwd, when: x.mtime, title: x.title || x.preview })),
+    codex: codexThreads.filter((t) => !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made)).slice(0, 40).map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
   };
   startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
   const v = s.claude.version;
@@ -885,11 +887,11 @@ async function openStartScreen(context, { existing = false } = {}) {
         const s = settings();
         post({ type: 'init', existing, defaults: { name: `Room ${new Date().toLocaleDateString()}`, folder: s.cwd, folderLabel: displayPath(s.cwd), userName: s.userName }, trusted: vscode.workspace.isTrusted });
         startSetupStatus().then((st) => post({ type: 'setup', ...st }), (e) => { log(`start screen setup: ${e.message}`); post(setupUnknown()); });
-        startLists().then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
+        startLists(context).then((l) => post({ type: 'lists', ...l }), (e) => { log(`start screen lists: ${e.message}`); post({ type: 'lists', conversations: { claude: [], codex: [] }, models: { claude: [], codex: [] } }); });
       } else if (m.type === 'recheck') {
         try { post({ type: 'setup', ...(await startSetupStatus()) }); } catch (e) { log(`start screen setup: ${e.message}`); post(setupUnknown()); }
         // Trusting the folder unlocks the Codex lists, so reload them too.
-        startLists().then((l) => post({ type: 'lists', ...l }), (e) => log(`start screen lists: ${e.message}`));
+        startLists(context).then((l) => post({ type: 'lists', ...l }), (e) => log(`start screen lists: ${e.message}`));
       } else if (m.type === 'pickFolder' && Number.isInteger(m.index)) {
         const f = await vscode.window.showOpenDialog({ title: 'Choose the folder this agent works in', canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: vscode.Uri.file(settings().cwd), openLabel: 'Use this folder' });
         if (f && f[0]) post({ type: 'folder', index: m.index, folder: f[0].fsPath, folderLabel: displayPath(f[0].fsPath) });

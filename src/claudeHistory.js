@@ -53,7 +53,9 @@ function listSessions(limit = 25) {
     if (!first || !cwd) continue; // empty or tool-only session
     const titled = [...head, ...tail].filter((r) => r.customTitle || r.aiTitle);
     const t = titled.reverse().find((r) => r.customTitle) || titled.find((r) => r.aiTitle);
-    sessions.push({ id: path.basename(fp, '.jsonl'), path: fp, cwd, mtime, title: t ? (t.customTitle || t.aiTitle) : null, preview: textOf(first).slice(0, 100) });
+    // mode: the permission mode of the first message. Wagon Wheel runs Claude as dontAsk, so its own rooms' sessions
+    // (fresh or copies) carry it; a person's session keeps its own mode even if a room later keeps going in it.
+    sessions.push({ id: path.basename(fp, '.jsonl'), path: fp, cwd, mtime, title: t ? (t.customTitle || t.aiTitle) : null, preview: textOf(first).slice(0, 100), mode: typeof first.permissionMode === 'string' ? first.permissionMode : null });
   }
   return sessions;
 }

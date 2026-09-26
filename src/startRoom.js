@@ -93,4 +93,35 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
   return { name, seats: normalizeParticipants({ seats }, settings), shareSeed, originals: picked };
 }
 
-module.exports = { buildPlan, setupLine, conversationRow, slug, isDir, MAX_AGENTS, NAMES };
+// Wagon Wheel's own room conversations don't belong in "your conversations". Claude: sessions Wagon Wheel ran (the
+// dontAsk mode it always uses). Codex: threads whose session file says Wagon Wheel created them (originator, from the
+// name it gives Codex on connect, including the product's earlier names), threads it named, and any thread a saved
+// room records as its own. A person's original that a room kept going in stays listed: its file names their app.
+const ROOM_NAME = /^(Wagon Wheel|Wagon Circle|Campfire): /;
+const ROOM_ORIGINATORS = new Set(['wagon-wheel', 'wagon-circle', 'campfire']);
+
+// The app that created a Codex thread, from the first line (session_meta) of its session file. null when unreadable.
+function codexOriginator(file, fsx = fs) {
+  if (typeof file !== 'string' || !file) return null;
+  let fd;
+  try {
+    fd = fsx.openSync(file, 'r');
+    const buf = Buffer.alloc(262144), n = fsx.readSync(fd, buf, 0, buf.length, 0);
+    const first = buf.subarray(0, n).toString('utf8').split('\n')[0];
+    const r = JSON.parse(first);
+    const o = r && r.payload && r.payload.originator;
+    return typeof o === 'string' ? o : null;
+  } catch { return null; } finally { if (fd !== undefined) try { fsx.closeSync(fd); } catch { /* closed */ } }
+}
+function roomMade(rooms) {
+  const out = new Set();
+  for (const r of rooms || []) for (const s of r.seats || []) for (const id of s.made || []) out.add(`${s.provider}:${id}`);
+  return out;
+}
+function isRoomConversation(provider, c, made = new Set()) {
+  if (made.has(`${provider}:${c.id}`)) return true;
+  if (provider === 'claude') return c.mode === 'dontAsk';
+  return ROOM_ORIGINATORS.has(c.originator) || (typeof c.name === 'string' && ROOM_NAME.test(c.name));
+}
+
+module.exports = { buildPlan, setupLine, conversationRow, slug, isDir, roomMade, isRoomConversation, codexOriginator, MAX_AGENTS, NAMES };
