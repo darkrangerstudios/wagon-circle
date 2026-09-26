@@ -102,7 +102,7 @@ function loadHost({ lists = {}, recentMs = null, answer, fileFor = null, rooms =
     Uri: { joinPath: (b, ...p) => ({ fsPath: path.join(b.fsPath, ...p) }), file: (p) => ({ fsPath: p }), parse: (u) => u },
     env: { openExternal: (u) => rec.opened.push(u) }, version: '1.104.0',
   };
-  class FakeCodex { async start() {} async listModels() { return [{ id: 'gpt-x', displayName: 'GPT X', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }]; }
+  class FakeCodex { async start() {} async listModels() { return [{ id: 'gpt-x', displayName: 'GPT X', description: 'Frontier coding model', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }]; }
     async listThreads() { return codexThreads ? codexThreads(convDir) : [{ id: 'th-1', name: 'Codex chat', cwd: convDir, updatedAt: 100 }]; } stop() {} on() {} }
   const now = Date.now();
   const fakes = {
@@ -139,7 +139,7 @@ test('host: every launcher opens one Start a Room screen with status, models and
   assert.strictEqual(st.claude.ready, true); assert.strictEqual(st.codex.fix, 'signin');
   assert.deepStrictEqual(lists.conversations.claude.map((c) => c.title), ['Old chat']);
   assert.deepStrictEqual(lists.conversations.codex.map((c) => c.title), ['Codex chat']);
-  assert.deepStrictEqual(lists.models.codex, [{ id: 'gpt-x', name: 'GPT X', efforts: ['low', 'high'] }]);
+  assert.deepStrictEqual(lists.models.codex, [{ id: 'gpt-x', name: 'GPT X', note: 'Frontier coding model', efforts: ['low', 'high'] }], 'Codex\'s own names and descriptions');
   assert.ok(!JSON.stringify(lists).includes('"path"'), 'no file paths of conversation logs go to the page');
   await rec.cmd['wagonWheel.joinExisting']();
   assert.strictEqual(rec.panels.length, 1, 'one screen at a time'); assert.strictEqual(p.revealed, 1);
@@ -357,4 +357,73 @@ test('Claude history records each session\'s first permission mode, which is how
     assert.deepStrictEqual(byId, { mine: 'auto', room: 'dontAsk' });
     assert.deepStrictEqual(sessions.filter((x) => !startRoom.isRoomConversation('claude', x)).map((x) => x.id), ['mine']);
   } finally { process.env.HOME = oldHome; delete require.cache[require.resolve('../src/claudeHistory')]; }
+});
+
+test('Claude\'s native model list: tier order with Default first, older models grouped, and validation uses it', () => {
+  const claudeModels = require('../src/claudeModels');
+  const native = [
+    { value: 'default', resolvedModel: 'claude-fable-5-1', displayName: 'Default (recommended)', description: 'Fable 5.1', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5', description: 'Best for everyday, complex tasks', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFastMode: true },
+    { value: 'claude-fable-5-1', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1', description: 'Most capable for your hardest and longest-running tasks', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { value: 'sonnet', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet 5', description: 'Efficient for routine tasks' },
+    { value: 'haiku', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', description: 'Fastest for quick answers' },
+    { value: 'claude-opus-4-8', resolvedModel: 'claude-opus-4-8', displayName: 'Opus 4.8', description: 'Best for everyday, complex tasks', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFastMode: true },
+    { value: 'claude-fable-5', resolvedModel: 'claude-fable-5', displayName: 'Fable 5', description: 'Most capable…' },
+  ];
+  const list = claudeModels.fromCli(native);
+  assert.deepStrictEqual(list.map((m) => [m.name, !!m.older]), [['Default (recommended)', false], ['Fable 5.1', false], ['Opus 5.5', false], ['Sonnet 5', false], ['Haiku 4.5', false], ['Fable 5', true], ['Opus 4.8', true]]);
+  assert.strictEqual(list[2].fast, true); assert.deepStrictEqual(list[1].efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepStrictEqual(claudeModels.FALLBACK.map((m) => m.name), ['Default (recommended)', 'Fable 5.1', 'Opus 5.5', 'Sonnet 5', 'Haiku 4.5']);
+  assert.strictEqual(claudeModels.fromCli([]), null);
+  const cwd = dir();
+  const plan = startRoom.buildPlan({ name: 'r', agents: [A('claude', { model: 'claude-opus-4-8', effort: 'xhigh' })] }, { defaultCwd: cwd, claudeModels: list });
+  assert.strictEqual(plan.seats[0].model, 'claude-opus-4-8'); assert.strictEqual(plan.seats[0].effort, 'xhigh');
+  assert.throws(() => startRoom.buildPlan({ name: 'r', agents: [A('claude', { model: 'claude-haiku-4-5-20251001', effort: 'high' })] }, { defaultCwd: cwd, claudeModels: list }), /thinking effort isn't available/, 'Haiku has no effort levels');
+});
+
+test('the Claude CLI is asked for its model menu with an initialize request and no model call', async () => {
+  const claudeModels = require('../src/claudeModels');
+  const { EventEmitter } = require('events'), { PassThrough } = require('stream');
+  let args = null, written = '';
+  const spawnFn = (exe, a) => {
+    args = a; const p = new EventEmitter(); p.stdout = new PassThrough(); p.kill = () => {};
+    p.stdin = { write: (line) => { written += line; const req = JSON.parse(line);
+      setImmediate(() => p.stdout.write(JSON.stringify({ type: 'control_response', response: { request_id: req.request_id, response: { models: [{ value: 'haiku', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', description: 'Fastest for quick answers' }] } } }) + '\n')); } };
+    return p;
+  };
+  const list = await claudeModels.query('/fake/claude', { spawnFn });
+  assert.deepStrictEqual(list.map((m) => m.name), ['Haiku 4.5']);
+  assert.match(written, /"subtype":"initialize"/); assert.doesNotMatch(written, /"type":"user"/, 'no message is sent, so no model runs');
+  assert.ok(args.includes('--restricted') && args.includes('dontAsk'));
+  assert.strictEqual(await claudeModels.query('/fake/claude', { spawnFn: () => { throw new Error('ENOENT'); } }), null);
+});
+
+test('"Default (recommended)" starts Claude without --model, so Claude Code picks its own default; xhigh is passed through', () => {
+  const { ClaudeClient } = require('../src/claudeClient');
+  const make = (model, effort) => new ClaudeClient({ exe: 'claude', cwd: os.tmpdir(), model, effort, systemPrompt: 'x', tools: [], addDirs: [] })._args();
+  assert.ok(!make('default', null).includes('--model'));
+  const a = make('claude-fable-5-1', 'xhigh');
+  assert.deepStrictEqual(a.slice(a.indexOf('--model'), a.indexOf('--model') + 2), ['--model', 'claude-fable-5-1']);
+  assert.deepStrictEqual(a.slice(a.indexOf('--effort'), a.indexOf('--effort') + 2), ['--effort', 'xhigh']);
+});
+
+test('coding sessions only: the Codex app\'s plain chats (projectless, or in its dated chat workspace) are left out', async () => {
+  const codexHome = dir(), oldHome = process.env.CODEX_HOME;
+  fs.writeFileSync(path.join(codexHome, '.codex-global-state.json'), JSON.stringify({ 'projectless-thread-ids': ['th-chat'], 'thread-project-assignments': {} }));
+  process.env.CODEX_HOME = codexHome;
+  try {
+    const ids = startRoom.codexChatIds();
+    assert.deepStrictEqual([...ids], ['th-chat']);
+    const home = '/Users/alex';
+    assert.ok(startRoom.isChatConversation('codex', { id: 'th-chat', cwd: '/w' }, ids, home));
+    assert.ok(startRoom.isChatConversation('codex', { id: 'x', cwd: '/Users/alex/Documents/Codex/2026-07-13/plan-a-trip' }, ids, home));
+    assert.ok(!startRoom.isChatConversation('codex', { id: 'x', cwd: '/Users/alex/Documents/Codex/my-repo' }, ids, home), 'a real project folder that happens to live there stays');
+    assert.ok(!startRoom.isChatConversation('codex', { id: 'x', cwd: '/Users/alex/code/app' }, ids, home));
+    assert.ok(!startRoom.isChatConversation('claude', { id: 'th-chat' }, ids, home), 'Claude Code sessions are all coding sessions');
+    assert.deepStrictEqual([...startRoom.codexChatIds({ codexHome: path.join(codexHome, 'missing') })], [], 'no state file: nothing is treated as a chat');
+    const { rec } = loadHost({ codexThreads: (cwd) => [{ id: 'th-chat', name: 'Plan a trip', cwd, updatedAt: 2 }, { id: 'th-code', name: 'Fix the parser', cwd, updatedAt: 1 }] });
+    await rec.cmd['wagonWheel.newRoom'](); const p = rec.panels[0];
+    await p.recv({ type: 'ready' }); await settle();
+    assert.deepStrictEqual(p.sent.find((m) => m.type === 'lists').conversations.codex.map((c) => c.title), ['Fix the parser']);
+  } finally { if (oldHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldHome; }
 });

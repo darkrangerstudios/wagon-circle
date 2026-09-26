@@ -2,15 +2,12 @@
 // Slash commands the room understands, grouped by platform. The room runs them itself on each agent's
 // real controls; the CLIs' interactive slash commands don't exist in headless mode.
 
-// Picker catalogue. minCli: the Claude Code version that can run it. fast: supports fast mode.
-const CLAUDE_CATALOG = [
-  { id: 'claude-opus-5-5', name: 'Opus 5.5', minCli: '2.1.280', fast: true, note: 'Most capable' },
-  { id: 'claude-sonnet-5', name: 'Sonnet 5', minCli: '2.1.0', note: 'Fast and capable' },
-  { id: 'claude-fable-5-1', name: 'Fable 5.1', minCli: '2.1.251', note: 'Has its own weekly limit' },
-  { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', minCli: '2.1.0', note: 'Quickest, cheapest' }
-];
+// Picker catalogue: Claude Code's own model menu when the CLI reports it (claudeModels.query), otherwise the same
+// native text built in. Tier order, Default (recommended) first. minCli: the Claude Code version that can run it.
+const claudeModels = require('./claudeModels');
+const CLAUDE_CATALOG = claudeModels.FALLBACK;
 const CLAUDE_MODELS = [...CLAUDE_CATALOG.map((m) => m.id), 'sonnet', 'opus', 'haiku'];
-const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'max'];
+const CLAUDE_EFFORTS = claudeModels.EFFORTS;
 
 // New rooms pass { participants: [{id,label,provider}], controls: { [id]: {models,model,efforts} } }.
 // The legacy {codexModels, codexModel} form remains supported.
@@ -29,7 +26,7 @@ function specs(ctx = {}) {
     { group: 'Room', cmd: '/history all', desc: 'Include a shared source\'s earlier history (on) or only what is said from now on (off): /history all <h1|claude|codex> on|off' },
     { group: 'Room', cmd: '/history share', args: ['claude on', 'claude off', 'codex on', 'codex off'], desc: 'Let the other agent read an agent\'s conversation (it can\'t change it)' },
     { group: 'Claude', cmd: '/claude model', args: CLAUDE_MODELS, allowAnyArg: true, desc: 'Switch Claude model (restarts on the same session)' },
-    { group: 'Claude', cmd: '/claude effort', args: CLAUDE_EFFORTS, desc: 'Claude thinking effort' },
+    { group: 'Claude', cmd: '/claude effort', args: CLAUDE_EFFORTS, desc: 'Claude effort: how hard the model tries' },
     { group: 'Claude', cmd: '/claude fast', args: ['on', 'off'], desc: 'Opus fast mode, ~2.5x faster; billed to usage credits' },
     { group: 'Claude', cmd: '/claude compact', desc: 'Summarize Claude\'s context to free space' },
     { group: 'Codex', cmd: '/codex model', args: models.map((m) => m.id), desc: 'Switch Codex model (applies from the next turn)' },

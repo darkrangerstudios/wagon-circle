@@ -21,6 +21,7 @@ const feedback = require('./feedback');
 const roomsView = require('./roomsView');
 const roomLock = require('./roomLock');
 const startRoom = require('./startRoom');
+const claudeModels = require('./claudeModels');
 
 // Token use across every local session on this computer (all rooms share one scanner; rescans read only new bytes).
 const localUsage = { scanner: null, last: null, running: null };
@@ -41,6 +42,18 @@ const { findClaude, atLeast } = require('./claudeBinary');
 
 const HANDOFF_RULE = 4; // version of the room's hand-off rules; older saved rooms get one notice when it changes
 let claudeBin = null; // resolved once per window: newest Claude Code CLI on the machine
+// Claude Code's own model menu, asked of the CLI once per window (no model call); the built-in copy until it answers.
+let claudeCatalog = null, claudeCatalogAsked = null;
+const claudeMenu = () => claudeCatalog || commands.CLAUDE_CATALOG;
+// Asked once per window, only of a real CLI on disk; open rooms refresh their pickers when the answer arrives.
+function refreshClaudeMenu() {
+  if (claudeCatalogAsked || !claudeBin || !path.isAbsolute(String(claudeBin.path)) || !fs.existsSync(claudeBin.path)) return claudeCatalogAsked;
+  claudeCatalogAsked = claudeModels.query(claudeBin.path).then((l) => {
+    if (l && l.length) { claudeCatalog = l; for (const x of sessions) if (x.room && !x.disposed) x.postMeta(); }
+    return claudeCatalog;
+  }, () => null);
+  return claudeCatalogAsked;
+}
 const sessions = new Set();
 const sessionClaims = new SessionClaims(); // only writers owned by this extension-host process
 const roomClaims = new Map(); // one writer per saved room in this extension host
@@ -497,7 +510,7 @@ class RoomSession {
         const made = startRoom.roomMade(roomsView.listRooms(path.dirname(this.file))); // hide Wagon Wheel's own room conversations
         const items = p.provider === 'claude'
           ? claudeHistory.listSessions(80).filter((x) => x.cwd === p.cwd && x.id !== p.sessionId && !startRoom.isRoomConversation('claude', x, made)).map((x) => ({ label: x.title || x.preview, id: x.id, mtime: x.mtime, name: x.title || x.preview }))
-          : (await r.client.listThreads(null, 80)).filter((t) => t.id !== p.sessionId && !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made)).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
+          : (await r.client.listThreads(null, 80)).filter((t) => t.id !== p.sessionId && !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made) && !startRoom.isChatConversation('codex', t, startRoom.codexChatIds())).map((t) => ({ label: t.name || (t.preview || '').slice(0, 80) || t.id, detail: t.cwd, id: t.id, mtime: t.updatedAt ? t.updatedAt * 1000 : null, name: t.name || t.preview }));
         if (!live()) return;
         if (!items.length) { room.note(`No other ${p.provider === 'claude' ? `Claude conversations from ${L}'s folder` : 'Codex conversations'} were found for ${L}.`); return; }
         pick = await vscode.window.showQuickPick(items, { title: `${L}: ${action === 'switch' ? 'switch to one of your conversations' : action === 'fork' ? 'work on a copy of a conversation' : 'keep going in a conversation'}`, placeHolder: 'Your recent conversations, newest first', matchOnDetail: true });
@@ -554,7 +567,7 @@ class RoomSession {
   }
 
   claudeFastOk(model) {
-    const cat = commands.CLAUDE_CATALOG.find((x) => x.id === model);
+    const cat = claudeMenu().find((x) => x.id === (model || 'default'));
     return !!(cat && cat.fast && atLeast(this.claudeVersion, '2.1.205'));
   }
 
@@ -620,14 +633,14 @@ class RoomSession {
     return Object.fromEntries(Object.values(this.slots).map((r) => {
       const p = r.seat;
       const models = p.provider === 'claude'
-        ? commands.CLAUDE_CATALOG.map((x) => ({ ...x, available: atLeast(v, x.minCli), blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
-        : r.models.map((x) => ({ id: x.id, name: x.displayName, efforts: (x.supportedReasoningEfforts || []).map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
+        ? claudeMenu().map((x) => ({ ...x, available: x.minCli ? atLeast(v, x.minCli) : true, blocked: claudeUsage.blockFor(this.claudeUsage, x.name), fastOk: !!x.fast && atLeast(v, '2.1.205') }))
+        : r.models.map((x) => ({ id: x.id, name: x.displayName, note: typeof x.description === 'string' ? x.description.slice(0, 120) : '', efforts: (x.supportedReasoningEfforts || []).map((e) => e.reasoningEffort), defaultEffort: x.defaultReasoningEffort, fast: (x.serviceTiers || []).find((t) => t.id === 'priority') || null }));
       return [p.id, { provider: p.provider, label: p.label, cwd: p.cwd, source: this.sourceOf(p),
         own: (p.provider === 'claude' ? r.client?.sessionId || p.sessionId : p.sessionId) || null, // this agent's own conversation id; a Claude copy has none until its first reply
         session: r.client?.sessionId || p.sessionId || p.forkFrom, typed: !!p.typed,
         shared: !!this.history?.describe().share[p.id], readers: this.history ? this.history.readers(p.id) : [], allHistory: !this.history || this.history.allHistory(p.id),
         cli: p.provider === 'claude' && v ? v.join('.') : undefined, model: p.model || models[0]?.id || null, effort: p.effort, fast: !!p.fast, models,
-        efforts: p.provider === 'claude' ? commands.CLAUDE_EFFORTS : undefined }];
+        efforts: p.provider === 'claude' ? (claudeMenu().find((x) => x.id === (p.model || 'default')) || {}).efforts || commands.CLAUDE_EFFORTS : undefined }];
     }));
   }
 
@@ -647,7 +660,7 @@ class RoomSession {
       if (action === 'session') { await this.switchSession(p.id, arg); return; }
       if (action === 'model' || action === 'effort') {
         if (p.provider === 'claude') {
-          const cat = commands.CLAUDE_CATALOG.find((x) => x.id === arg);
+          const cat = claudeMenu().find((x) => x.id === arg);
           const blocked = action === 'model' && cat && claudeUsage.blockFor(this.claudeUsage, cat.name);
           if (blocked) { say(`${p.label}: ${blocked}. Model unchanged.`); return; }
           if (action === 'model' && p.fast && !this.claudeFastOk(arg)) { p.fast = false; r.client.setOptions({ fast: false }); }
@@ -842,6 +855,7 @@ async function openSession(context, session, opts) {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Wagon Wheel: starting local sessions…' }, () => session.boot(opts));
     session.postInit();
     session.fillSourceTitles().catch((e) => log(`source titles: ${e.message}`));
+    refreshClaudeMenu();
     return true;
   } catch (e) {
     log(`boot failed: ${e.stack || e.message}`);
@@ -853,7 +867,7 @@ async function openSession(context, session, opts) {
 // ---------- Start a Room: one plain-English setup screen (media/start.js) ----------
 // Replaces the old chain of quick picks. The page shows setup status, models and recent conversations; this host
 // keeps the lists it sent and validates the finished form (startRoom.buildPlan) before any provider process starts.
-const startScreen = { panel: null, lists: { claude: [], codex: [] }, codexModels: [] };
+const startScreen = { panel: null, lists: { claude: [], codex: [] }, codexModels: [], claudeModels: null };
 
 function startHtml(webview, extUri) {
   const nonce = crypto.randomBytes(16).toString('base64');
@@ -888,15 +902,18 @@ async function startLists(ctx) {
   let claudeSessions = [];
   try { claudeSessions = claudeHistory.listSessions(80); } catch (e) { log(`start screen claude: ${e.message}`); }
   const made = startRoom.roomMade(roomsView.listRooms(path.join(ctx.globalStorageUri.fsPath, 'rooms')));
+  const chats = startRoom.codexChatIds(); // the Codex app's plain chats are not coding sessions
   startScreen.lists = {
     claude: claudeSessions.filter((x) => !startRoom.isRoomConversation('claude', x, made)).slice(0, 40).map((x) => ({ id: x.id, cwd: x.cwd, when: x.mtime, title: x.title || x.preview })),
-    codex: codexThreads.filter((t) => !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made)).slice(0, 40).map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
+    codex: codexThreads.filter((t) => !startRoom.isRoomConversation('codex', { ...t, originator: startRoom.codexOriginator(t.path) }, made) && !startRoom.isChatConversation('codex', t, chats)).slice(0, 40).map((t) => ({ id: t.id, cwd: t.cwd, when: t.updatedAt ? t.updatedAt * 1000 : null, title: t.name || t.preview })),
   };
-  startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
+  startScreen.codexModels = codexModels.map((m) => ({ id: m.id, name: m.displayName || m.id, note: typeof m.description === 'string' ? m.description.slice(0, 120) : '', efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort) }));
   const v = s.claude.version;
+  await refreshClaudeMenu(); // Claude Code's own menu when the CLI answers
+  startScreen.claudeModels = claudeMenu().filter((m) => !m.minCli || atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: m.efforts, older: !!m.older }));
   return {
     conversations: { claude: startScreen.lists.claude.map((c) => startRoom.conversationRow(c, home)), codex: startScreen.lists.codex.map((c) => startRoom.conversationRow(c, home)) }, // rows carry exists: the folder is still there
-    models: { claude: commands.CLAUDE_CATALOG.filter((m) => atLeast(v, m.minCli)).map((m) => ({ id: m.id, name: m.name, note: m.note, efforts: commands.CLAUDE_EFFORTS })), codex: startScreen.codexModels },
+    models: { claude: startScreen.claudeModels, codex: startScreen.codexModels },
   };
 }
 
@@ -911,7 +928,7 @@ async function lastWritten(o, fallback) {
 
 async function startFromForm(context, form) {
   const s = settings();
-  const plan = startRoom.buildPlan(form, { lists: startScreen.lists, codexModels: startScreen.codexModels, defaultCwd: s.cwd, settings: s });
+  const plan = startRoom.buildPlan(form, { lists: startScreen.lists, codexModels: startScreen.codexModels, claudeModels: startScreen.claudeModels, defaultCwd: s.cwd, settings: s });
   // Keeping going in an original: refuse one another room already uses (open in this window, or saved), before the
   // screen closes, so the person can still change the choice.
   const saved = roomsView.listRooms(path.join(context.globalStorageUri.fsPath, 'rooms'));

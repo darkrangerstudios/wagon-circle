@@ -6,6 +6,11 @@
   const NAME = { claude: 'Claude', codex: 'Codex' };
   const APP = { claude: 'Claude Code', codex: 'Codex' };
   const MAX = 6;
+  // Each app's own words for its effort control (Claude Code 2.1.282; the Codex extension's English labels).
+  const EFFORT = {
+    claude: { title: 'Effort', hint: 'Set how hard the model tries. Higher takes longer and uses more of your plan.', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' } },
+    codex: { title: 'Reasoning effort', hint: 'How much Codex reasons before answering. Higher takes longer and uses more of your plan; Ultra consumes usage limits faster.', levels: { none: 'None', minimal: 'Minimal', low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra', persistent: 'Persistent' } },
+  };
   const S = { init: false, trusted: true, name: '', folder: '', folderLabel: '', agents: [], setup: null, lists: null, busy: false, error: '', existing: false };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -104,14 +109,20 @@
 
     // Model and thinking effort.
     const mrow = el('div', 'row');
-    const ms = el('select'); ms.setAttribute('aria-label', 'Model'); ms.title = 'Which model this agent uses. "Your default" uses whatever the app is set to.';
-    ms.appendChild(new Option('Model: your default', ''));
-    for (const m of models(a.provider)) ms.appendChild(new Option(m.note ? `${m.name} (${m.note})` : m.name, m.id));
+    // Each app's own model menu and words: Claude Code lists Default (recommended) first; Codex calls its default "Default".
+    const ms = el('select'); ms.setAttribute('aria-label', 'Model'); ms.title = `Which model this agent uses, as ${APP[a.provider]} lists them.`;
+    const list = models(a.provider), hasDefault = list.some((m) => m.id === 'default');
+    if (!hasDefault) ms.appendChild(new Option(a.provider === 'codex' ? 'Model: Default' : 'Model: Default (recommended)', ''));
+    const label = (m) => (m.note ? `${m.name} · ${m.note}` : m.name);
+    for (const m of list.filter((x) => !x.older)) ms.appendChild(new Option(label(m), m.id === 'default' ? '' : m.id));
+    const olderModels = list.filter((x) => x.older);
+    if (olderModels.length) { const g = el('optgroup'); g.label = 'Older models'; for (const m of olderModels) g.appendChild(new Option(label(m), m.id)); ms.appendChild(g); }
     ms.value = a.model;
     ms.addEventListener('change', () => { a.model = ms.value; const ok = efforts(a); if (a.effort && !ok.includes(a.effort)) a.effort = ''; render(); });
-    const es = el('select'); es.setAttribute('aria-label', 'Thinking'); es.title = 'More thinking is slower and uses more of your plan, but handles harder problems.';
-    es.appendChild(new Option('Thinking: default', ''));
-    for (const e of efforts(a)) es.appendChild(new Option(`Thinking: ${e}`, e));
+    const words = EFFORT[a.provider];
+    const es = el('select'); es.setAttribute('aria-label', words.title); es.title = words.hint;
+    es.appendChild(new Option(`${words.title}: Default`, ''));
+    for (const e of efforts(a)) es.appendChild(new Option(`${words.title}: ${words.levels[e] || e}`, e));
     es.value = a.effort; es.addEventListener('change', () => { a.effort = es.value; });
     mrow.appendChild(ms); mrow.appendChild(es); c.appendChild(mrow);
     if (!S.lists) c.appendChild(help('Loading models…'));
@@ -144,7 +155,7 @@
   function efforts(a) {
     const ms = models(a.provider);
     if (!a.model && a.provider === 'codex') return [...new Set(ms.flatMap((x) => x.efforts || []))]; // Codex's own default model isn't named
-    const m = ms.find((x) => x.id === a.model) || ms[0];
+    const m = ms.find((x) => x.id === (a.model || 'default')) || ms[0];
     return (m && m.efforts) || [];
   }
 

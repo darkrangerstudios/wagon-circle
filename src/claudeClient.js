@@ -39,7 +39,7 @@ class ClaudeClient {
       '--include-partial-messages', '--restricted', '--tools', READ_ONLY_TOOLS.join(','),
       '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS.concat(this.tools.map((t) => `mcp__${SERVER}__${t.name}`)).join(','),
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: this.typed ? { [SERVER]: { type: 'sdk', name: SERVER } } : {} }), '--append-system-prompt', this.systemPrompt];
-    if (this.model) a.push('--model', this.model);
+    if (this.model && this.model !== 'default') a.push('--model', this.model); // Default (recommended): the CLI's own choice
     if (this.effort) a.push('--effort', this.effort);
     if (this.fast) a.push('--settings', JSON.stringify({ fastMode: true })); // Opus fast mode; billed to usage credits
     for (const d of this.addDirs) a.push('--add-dir', d); // lets Read open attachments stored outside cwd

@@ -105,9 +105,16 @@
   }
   function modelTag(name) {
     if (!controls) return '';
-    const c = controls[name]; const m = c && (c.models || []).find((x) => x.id === c.model);
+    const c = controls[name]; const m = c && (c.models || []).find((x) => x.id === (c.model || (c.provider === 'claude' ? 'default' : c.model)));
+    if (m && m.id === 'default') return 'Default';
     return m ? (m.name || m.id) : (c && c.model) || '';
   }
+  // Each app's own words for its effort control and levels (Claude Code 2.1.282; the Codex extension's English labels).
+  const EFFORT = {
+    claude: { title: 'Effort', hint: 'Set how hard the model tries', levels: { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' } },
+    codex: { title: 'Reasoning effort', hint: '', levels: { none: 'None', minimal: 'Minimal', low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max', ultra: 'Ultra', persistent: 'Persistent' } },
+  };
+  const effortName = (kind, v) => (EFFORT[kind] && EFFORT[kind].levels[v]) || v;
   // Every message says when: today as "9:36 AM", then "Yesterday 9:36 PM", "Sep 22, 9:36 PM"; full date on hover.
   function stamp(ts) {
     if (!ts) return '';
@@ -212,7 +219,7 @@
       const btn = el('button', `chip vendor ${provider(name)}`); btn.id = `vc-${name}`;
       btn.appendChild(el('span', 'glyph', GLYPH[name]));
       btn.appendChild(el('span', 'seatlabel', NAMES[name]));
-      if (v) btn.appendChild(el('span', 'seatmodel', `${modelTag(name) || 'default'} · ${v.effort || 'auto'}`));
+      if (v) btn.appendChild(el('span', 'seatmodel', `${modelTag(name) || 'Default'} · ${v.effort ? effortName(provider(name), v.effort) : 'Default'}`));
       if (v && v.fast) btn.appendChild(el('span', 'bolt', '⚡'));
       btn.title = `${NAMES[name]} (@${name}): click for its settings: model, thinking, and which conversation it's on${p.cwd ? '\n' + p.cwd : ''}`;
       btn.setAttribute('aria-label', `${NAMES[name]} controls`);
@@ -473,27 +480,35 @@
     pop.appendChild(el('small', 'note seatcontext', `@${name}${c.cwd ? ' · ' + c.cwd : ''}`));
     if (!['claude', 'codex'].includes(kind)) { pop.appendChild(el('small', 'note', 'Experimental agent: local process, provider-managed permissions. Model, effort and history controls are not available here.')); return; }
     const models = el('div'); models.appendChild(el('div', 'lbl', 'Model'));
+    const current = c.model || (kind === 'claude' ? 'default' : null);
+    const older = el('details', 'older'); older.appendChild(el('summary', null, 'Older models'));
     for (const m of c.models || []) {
-      const b = el('button', `opt${m.id === c.model ? ' on' : ''}`); const l = el('span', null, m.name || m.id);
+      const b = el('button', `opt${m.id === current ? ' on' : ''}`); const l = el('span', null, m.name || m.id);
       const why = m.available === false ? `needs Claude Code ${m.minCli}+` : m.blocked || m.note;
       if (why) l.appendChild(el('small', null, `  ${why}`));
       b.appendChild(l); b.disabled = m.available === false || !!m.blocked;
       if (m.blocked) b.title = m.blocked;
-      b.addEventListener('click', () => { cmd(`/${name} model ${m.id}`); closePop(); }); models.appendChild(b);
+      b.addEventListener('click', () => { cmd(`/${name} model ${m.id}`); closePop(); }); (m.older ? older : models).appendChild(b);
     }
+    if (older.children.length > 1) { if ((c.models || []).some((m) => m.older && m.id === current)) older.open = true; models.appendChild(older); }
     pop.appendChild(models);
-    const cur = (c.models || []).find((m) => m.id === c.model) || {};
+    const cur = (c.models || []).find((m) => m.id === current) || {};
     const efforts = kind === 'claude' ? (c.efforts || []) : (cur.efforts || []);
     if (efforts.length) {
-      const e = el('div'); e.appendChild(el('div', 'lbl', `Thinking${kind === 'codex' && cur.defaultEffort ? ` · default ${cur.defaultEffort}` : ''}`));
+      const words = EFFORT[kind] || EFFORT.claude;
+      const e = el('div'); e.appendChild(el('div', 'lbl', `${words.title}${kind === 'codex' && cur.defaultEffort ? ` · default ${effortName(kind, cur.defaultEffort)}` : ''}`));
+      if (words.hint) e.appendChild(el('small', 'note', words.hint));
       const seg = el('div', 'seg');
-      for (const v of efforts) { const b = el('button', v === c.effort ? 'on' : '', v); b.addEventListener('click', () => { cmd(`/${name} effort ${v}`); closePop(); }); seg.appendChild(b); }
+      for (const v of efforts) {
+        const b = el('button', v === c.effort ? 'on' : '', effortName(kind, v)); b.title = v === 'ultra' ? 'Consumes usage limits faster' : `${words.title}: ${effortName(kind, v)}`;
+        b.addEventListener('click', () => { cmd(`/${name} effort ${v}`); closePop(); }); seg.appendChild(b);
+      }
       e.appendChild(seg); pop.appendChild(e);
     }
     const fastOk = kind === 'claude' ? !!cur.fastOk : !!cur.fast;
     const row = el('div', 'fastrow'); const txt = el('div');
-    txt.appendChild(el('span', null, '⚡ Fast mode'));
-    txt.appendChild(el('small', null, kind === 'claude' ? (fastOk ? 'Up to 2.5x faster Opus · billed to usage credits' : 'Opus 5.5 only, on Claude Code 2.1.205+') : (fastOk ? `${cur.fast.description} · priority tier` : 'Not offered for this model')));
+    txt.appendChild(el('span', null, kind === 'codex' ? '⚡ Fast' : '⚡ Fast mode')); // each app's own name for it
+    txt.appendChild(el('small', null, kind === 'claude' ? (fastOk ? 'Up to 2.5x faster Opus · billed to usage credits' : 'Only on models that offer it (Opus)') : (fastOk ? `${cur.fast.description || 'Faster speed, more usage'}` : 'Not offered for this model')));
     const sw = el('button', `switch${c.fast ? ' on' : ''}`); sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!c.fast)); sw.setAttribute('aria-label', 'Fast mode');
     sw.disabled = !fastOk && !c.fast;
     sw.addEventListener('click', () => { cmd(`/${name} fast ${c.fast ? 'off' : 'on'}`); closePop(); });

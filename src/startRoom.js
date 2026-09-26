@@ -48,7 +48,7 @@ const isDir = (p) => { try { return path.isAbsolute(p) && fs.statSync(p).isDirec
 // form: { name, agents: [{ provider, label, model, effort, start, conversation, folder, share }] }
 // lists: { claude: [{ id, cwd, when }], codex: [...] } exactly as the host sent them; codexModels: [{ id, efforts }].
 // Returns { name, seats, shareSeed, originals } or throws an Error whose message the screen shows as is.
-function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = {} } = {}) {
+function buildPlan(form, { lists = {}, codexModels = [], claudeModels = null, defaultCwd, settings = {} } = {}) {
   const fail = (m) => { throw new Error(m); };
   if (!form || typeof form !== 'object' || !Array.isArray(form.agents)) fail('Something went wrong reading the form. Close this tab and try again.');
   const name = typeof form.name === 'string' && form.name.trim() ? form.name.trim().replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 80) : '';
@@ -76,10 +76,11 @@ function buildPlan(form, { lists = {}, codexModels = [], defaultCwd, settings = 
       else if (conv.cwd && isDir(conv.cwd)) cwd = conv.cwd;
     }
     if (!isDir(cwd)) fail(`${label}: its folder no longer exists. Choose another folder.`);
-    const models = a.provider === 'claude' ? CLAUDE_MODELS : codexModels.map((m) => m.id);
+    const claudeList = Array.isArray(claudeModels) && claudeModels.length ? claudeModels : null;
+    const models = a.provider === 'claude' ? (claudeList ? claudeList.map((m) => m.id) : CLAUDE_MODELS) : codexModels.map((m) => m.id);
     const model = a.model == null || a.model === '' ? null : models.includes(a.model) ? a.model : fail(`${label}: that model isn't available.`);
     // No model chosen means Codex's own default, which the host can't name: accept any effort a listed model offers.
-    const efforts = a.provider === 'claude' ? CLAUDE_EFFORTS : model ? (codexModels.find((m) => m.id === model).efforts || []) : [...new Set(codexModels.flatMap((m) => m.efforts || []))];
+    const efforts = a.provider === 'claude' ? ((claudeList && (claudeList.find((m) => m.id === (model || 'default')) || {}).efforts) || CLAUDE_EFFORTS) : model ? (codexModels.find((m) => m.id === model).efforts || []) : [...new Set(codexModels.flatMap((m) => m.efforts || []))];
     const effort = a.effort == null || a.effort === '' ? null : efforts.includes(a.effort) ? a.effort : fail(`${label}: that thinking effort isn't available for this model.`);
     const id = slug(label, a.provider, taken);
     const seat = { id, label, provider: a.provider, cwd, model, effort };
@@ -126,4 +127,19 @@ function isRoomConversation(provider, c, made = new Set()) {
   return ROOM_ORIGINATORS.has(c.originator) || (typeof c.name === 'string' && ROOM_NAME.test(c.name));
 }
 
-module.exports = { buildPlan, setupLine, conversationRow, slug, isDir, roomMade, isRoomConversation, codexOriginator, MAX_AGENTS, NAMES };
+// Coding sessions only: the Codex app also keeps plain chats. It records them as "projectless" in its own state file
+// and gives each a dated workspace under ~/Documents/Codex. Read-only; an unreadable file just means no ids.
+function codexChatIds({ codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), fsx = fs } = {}) {
+  try {
+    const st = JSON.parse(fsx.readFileSync(path.join(codexHome, '.codex-global-state.json'), 'utf8'));
+    return new Set(Array.isArray(st['projectless-thread-ids']) ? st['projectless-thread-ids'].filter((x) => typeof x === 'string') : []);
+  } catch { return new Set(); }
+}
+function isChatConversation(provider, c, chatIds = new Set(), home = os.homedir()) {
+  if (provider !== 'codex') return false; // every Claude Code session is a coding session; claude.ai chats are not on disk
+  if (chatIds.has(c.id)) return true;
+  const chatRoot = path.join(home, 'Documents', 'Codex') + path.sep;
+  return typeof c.cwd === 'string' && c.cwd.startsWith(chatRoot) && /^\d{4}-\d{2}-\d{2}(\/|$)/.test(c.cwd.slice(chatRoot.length));
+}
+
+module.exports = { buildPlan, setupLine, conversationRow, slug, isDir, roomMade, isRoomConversation, codexOriginator, codexChatIds, isChatConversation, MAX_AGENTS, NAMES };

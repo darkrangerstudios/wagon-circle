@@ -6,7 +6,7 @@ const { walk, setup } = require('./fixtures/webview-dom');
 test('same-provider controls route model, session and history to the named seat', () => {
   const h = setup(); assert.equal(h.ids.participants.children.length, 3);
   h.click(h.ids.participants, 'Checker controls'); assert.match(h.ids.pop.textContent, /Codex on this computer/); assert.match(h.ids.pop.textContent, /\/fixture\/review/);
-  h.click(h.ids.pop, 'high'); assert.deepEqual(h.sent.at(-1), { type: 'command', text: '/codex-2 effort high' });
+  h.click(h.ids.pop, 'High'); assert.deepEqual(h.sent.at(-1), { type: 'command', text: '/codex-2 effort high' }); // Codex's own label, the CLI's own value
   h.click(h.ids.participants, 'Checker controls'); h.click(h.ids.pop, 'Switch to one of your conversations…'); assert.deepEqual(h.sent.at(-1), { type: 'session', vendor: 'codex-2', action: 'switch' });
   h.click(h.ids.participants, 'Checker controls'); h.click(h.ids.pop, 'Share Checker history with Research'); assert.deepEqual(h.sent.at(-1), { type: 'historyShare', source: 'codex-2', reader: 'claude', on: true });
   h.receive({ type: 'status', name: 'codex-2', busy: true }); h.click(h.ids.participants, 'Checker controls');
@@ -60,4 +60,27 @@ test('the agent menu says which conversation it is on and offers safe ways to ta
   t = h.ids.pop.textContent;
   assert.match(t, /A fresh conversation started in this room\./); assert.doesNotMatch(t, /open your original/);
   assert.match(t, /id: conversation th-fresh/);
+});
+
+test('model and effort controls use each app\'s own words, tier order and an Older models group', () => {
+  const h = setup();
+  const claudeModels = [
+    { id: 'default', name: 'Default (recommended)', note: 'Fable 5.1', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'claude-fable-5-1', name: 'Fable 5.1', note: 'Most capable for your hardest and longest-running tasks' },
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', note: 'Best for everyday, complex tasks', fast: true, fastOk: true },
+    { id: 'claude-opus-5', name: 'Opus 5', note: 'Best for everyday, complex tasks', older: true }];
+  h.controls.claude = { ...h.controls.claude, provider: 'claude', model: null, effort: 'xhigh', models: claudeModels, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  h.controls.codex = { ...h.controls.codex, provider: 'codex', model: 'gpt-x', effort: 'low', models: [{ id: 'gpt-x', name: 'GPT-X', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'medium' }] };
+  h.receive({ type: 'meta', meta: h.meta, controls: h.controls });
+  assert.match(h.ids.participants.textContent, /ResearchDefault · Extra high/, 'Claude\'s chip: its default model and Claude Code\'s word for xhigh');
+  assert.match(h.ids.participants.textContent, /BuilderGPT-X · Light/, 'Codex calls low "Light"');
+  h.click(h.ids.participants, 'Research controls');
+  let t = h.ids.pop.textContent;
+  assert.ok(t.indexOf('Default (recommended)') < t.indexOf('Fable 5.1') && t.indexOf('Fable 5.1') < t.indexOf('Opus 5.5'), 'tier order, Default first');
+  assert.match(t, /Older models/); assert.match(t, /EffortSet how hard the model triesLowMediumHighExtra highMax/);
+  assert.ok(walk(h.ids.pop).some((e) => e.tagName === 'button' && /opt on/.test(e.className) && /Default \(recommended\)/.test(e.textContent)), 'no model chosen means Default is selected');
+  h.click(h.ids.participants, 'Builder controls');
+  t = h.ids.pop.textContent;
+  assert.match(t, /Reasoning effort · default Medium/); assert.match(t, /LightMediumHighExtra HighMaxUltra/); assert.match(t, /⚡ Fast/);
+  assert.strictEqual(walk(h.ids.pop).find((e) => e.tagName === 'button' && e.textContent === 'Ultra').title, 'Consumes usage limits faster');
 });
